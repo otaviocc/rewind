@@ -17,10 +17,12 @@ use rewind::domain::scan::{top_level_is_null, top_level_str};
 const DRIFT: &str = "44444444-4444-4444-8444-444444444444.jsonl";
 const FRAGMENTED: &str = "33333333-3333-4333-8333-333333333333.jsonl";
 
-const EVERY_RECORD_TYPE: [&str; 20] = [
+const EVERY_RECORD_TYPE: [&str; 24] = [
     "agent-color",
     "agent-name",
     "ai-title",
+    "artifact-autoreact-ledger",
+    "artifact-comment-monitor",
     "assistant",
     "atis-latch",
     "attachment",
@@ -29,6 +31,8 @@ const EVERY_RECORD_TYPE: [&str; 20] = [
     "custom-title",
     "file-history-delta",
     "file-history-snapshot",
+    "fork-context-ref",
+    "frame-link",
     "last-prompt",
     "mode",
     "permission-mode",

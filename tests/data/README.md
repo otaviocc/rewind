@@ -74,12 +74,24 @@ precedence even though an `ai-title` is appended after it, and the *second* `ai-
 over the first on recency. Delete the `custom-title` record and the answer must become
 `ai-title second, wins on recency`.
 
-After the state records, six more latches close the file, **observed** against a real store on
-2026-09-17: two `queue-operation` (`enqueue` and `remove`, the latter carrying `reason`) plus a
-bare `dequeue` with neither `content` nor `reason`, a `pr-link`, and two `file-history-delta` —
-one with a null `backup.backupFileName` and a relative `trackingPath`, one with both populated.
-Both deltas key off `messageId`, point `snapshotMessageId` at the `file-history-snapshot`
-above them, and carry **no `sessionId`**, like their `-snapshot` sibling.
+After the state records, ten more latches close the file, all **observed** against a real
+store on 2026-09-17: two `queue-operation` (`enqueue` and `remove`, the latter carrying
+`reason`) plus a bare `dequeue` with neither `content` nor `reason`, a `pr-link`, two
+`frame-link`, an `artifact-comment-monitor`, an `artifact-autoreact-ledger`, and two
+`file-history-delta` — one with a null `backup.backupFileName` and a relative `trackingPath`,
+one with both populated. Both deltas key off `messageId`, point `snapshotMessageId` at the
+`file-history-snapshot` above them, and carry **no `sessionId`**, like their `-snapshot`
+sibling.
+
+The `frame-link` pair is the same optional-field split the `queue-operation` trio proves: the
+first carries `path`, `frameUrl` and `title`, the second carries only `artifactCount`,
+`sessionId` and `timestamp`. A reader that requires the full shape rejects the bare one.
+
+The two `artifact-*` latches key their `artifacts` map by artifact uuid rather than listing,
+so the interesting field names sit one level down — `state` and `writtenAtMs` for the monitor,
+`savedAt` and `stampHighWater` for the ledger. The ledger's `turnTimestamps` and `threads` are
+`[]` here because they were `[]` in **every** real sample: their *element* shape is
+**unobserved**, so do not read an empty array as proof the elements are scalars.
 
 `custom-title.json` says something different from the `custom-title` record on purpose: the
 record outranks the file, and the values differ so you can see which one was used.
@@ -97,8 +109,15 @@ which real sessions accumulate.
 | File | |
 | --- | --- |
 | `agent-a1b2c3d4e5f607182` | meta + transcript, `toolUseId` joining it to a real `tool_use` block in the parent |
-| `agent-b2c3d4e5f60718293` | meta + transcript, but **no `toolUseId`** — a forked skill, so nothing in the parent points at it. Carries the `forked-skill.json` + `.marker.json` sidecars |
+| `agent-b2c3d4e5f60718293` | meta + transcript, but **no `toolUseId`** — a forked skill, so nothing in the parent points at it. Carries the `forked-skill.json` + `.marker.json` sidecars, and a `fork-context-ref` |
 | `agent-c3d4e5f607182934a` | **meta with no transcript**, `stoppedByUser`. Eager meta loading has to survive this |
+
+`fork-context-ref` is fixtured as the **first line** of `agent-b2c3d4e5f60718293.jsonl`, which
+is where a real store puts it — **observed** on 2026-09-17, and observed *only* inside
+`subagents/`, never in a main transcript. It names the fork point the way nothing else does:
+`agentId` (bare hex), `parentSessionId`, `parentLastUuid` pointing at a `uuid` in the parent
+transcript, and `contextLength`. Putting it in the baseline latch tail instead would fixture a
+record in a position the store never produces.
 
 Sidechain records set `isSidechain: true`, add `agentId` (the bare hex, no `agent-` prefix),
 and carry the *parent* session's `sessionId`.
