@@ -211,8 +211,9 @@ megabytes of personal history.
 a member of it. Every path inside it is under `/Users/fixture`, which exists nowhere, so the
 tree reads with no setup and every project reads as gone. `common::fixture_tree` is what
 makes a *present* working copy and a deterministic ordering testable: it copies the tree to a
-tempdir, rewrites `/Users/fixture` to the tempdir root, creates the working copies that are
-meant to exist, and stamps mtimes derived from the timestamps in the data. Git preserves
+tempdir, rewrites `/Users/fixture` to the tempdir root, re-encodes the project directory names
+so the copy is a store that could exist, creates the working copies that are meant to exist,
+and stamps mtimes derived from the timestamps in the data. Git preserves
 neither mtimes nor the deliberately truncated line's bytes, so use the helper rather than
 statting the checkout, and see `tests/data/README.md` before changing a fixture.
 

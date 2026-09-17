@@ -19,8 +19,16 @@ as `<claude_dir>/../.claude.json` and nothing else.
 Every path inside the fixtures is under `/Users/fixture`, which exists on no machine, so
 `cargo run -- --claude-dir tests/data/claude` works with no setup and every project reads as
 gone. `tests::common::fixture_tree` is what makes a *present* working copy testable: it
-copies the tree to a tempdir, rewrites `/Users/fixture` to the tempdir root, creates the
-working copies that are meant to exist, and stamps deterministic mtimes.
+copies the tree to a tempdir, rewrites `/Users/fixture` to the tempdir root, **re-encodes the
+project directory names** to match, creates the working copies that are meant to exist, and
+stamps deterministic mtimes.
+
+The re-encoding is not cosmetic. Rewriting only the file *contents* leaves a store that could
+not exist: `.claude.json` would name `<tempdir>/Developer/holodeck` while the directory beside
+it still encodes `/Users/fixture/Developer/holodeck`, so no key ever matches and every project
+resolves by the `cwd` fallback. The copy renames `-Users-fixture-…` to `encode(<tempdir>)-…`,
+which is the same substitution the contents get. A directory name is therefore only stable in
+the checkout — take it from `FixtureTree::project_dir` in anything built by the helper.
 
 ## Two rules that are easy to break
 

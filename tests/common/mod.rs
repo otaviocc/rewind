@@ -15,6 +15,7 @@ const NOWHERE: &str = "/nonexistent-rewind-test";
 const NOWHERE_ON_WINDOWS: &str = r"C:\nonexistent-rewind-test";
 
 const FIXTURE_HOME: &str = "/Users/fixture";
+const FIXTURE_HOME_ENCODED: &str = "-Users-fixture";
 
 const WORKING_COPIES_THAT_EXIST: [&str; 6] = [
     "Developer/holodeck",
@@ -65,6 +66,10 @@ impl FixtureTree {
     pub fn working_copy(&self, relative: &str) -> PathBuf {
         join_all(self.home(), relative)
     }
+
+    pub fn project_dir(&self, relative: &str) -> String {
+        format!("{}-{}", encode(&self.home().to_string_lossy()), encode(relative))
+    }
 }
 
 pub fn fixture_tree() -> FixtureTree {
@@ -72,12 +77,36 @@ pub fn fixture_tree() -> FixtureTree {
     let root = home.path().to_path_buf();
 
     copy_into(&fixture_root(), &root, &root);
+    reencode_project_directories(&root);
     for relative in WORKING_COPIES_THAT_EXIST {
         fs::create_dir_all(join_all(&root, relative)).expect("a working copy directory");
     }
     stamp(&root);
 
     FixtureTree { home }
+}
+
+fn encode(path: &str) -> String {
+    path.chars().map(|character| if matches!(character, '/' | '.' | ' ') { '-' } else { character }).collect()
+}
+
+fn reencode_project_directories(home: &Path) {
+    let projects = home.join("claude").join("projects");
+    let prefix = encode(&home.to_string_lossy());
+    let entries: Vec<PathBuf> = fs::read_dir(&projects)
+        .expect("a readable projects directory")
+        .map(|entry| entry.expect("a readable entry").path())
+        .collect();
+    for path in entries {
+        if !path.is_dir() {
+            continue;
+        }
+        let name = path.file_name().expect("a named directory").to_string_lossy().into_owned();
+        let Some(tail) = name.strip_prefix(FIXTURE_HOME_ENCODED) else {
+            continue;
+        };
+        fs::rename(&path, projects.join(format!("{prefix}{tail}"))).expect("a renamed project directory");
+    }
 }
 
 fn join_all(base: &Path, relative: &str) -> PathBuf {

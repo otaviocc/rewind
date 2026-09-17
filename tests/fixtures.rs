@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use common::{fixture_root, fixture_tree, fixtures, rewind};
+use common::{FixtureTree, fixture_root, fixture_tree, fixtures, rewind};
 
 const HOLODECK: &str = "-Users-fixture-Developer-holodeck";
 const BASELINE: &str = "11111111-1111-4111-8111-111111111111";
@@ -197,13 +197,34 @@ fn the_fixture_tree_helper_is_deterministic_and_rewrites_the_home() {
     assert!(first.working_copy("Developer/holodeck").is_dir(), "the present working copy is missing");
     assert!(!first.working_copy("Developer/nomad").exists(), "nomad must stay absent");
 
-    assert_eq!(mtimes(&first.claude_dir()), mtimes(&second.claude_dir()), "mtimes are not deterministic");
+    assert_eq!(mtimes(&first), mtimes(&second), "mtimes are not deterministic");
 }
 
-fn mtimes(root: &Path) -> BTreeMap<String, i64> {
+#[test]
+fn the_project_directory_names_are_re_encoded_from_the_rewritten_home() {
+    let tree = fixture_tree();
+    let holodeck = tree.claude_dir().join("projects").join(tree.project_dir("Developer/holodeck"));
+
+    assert!(holodeck.is_dir(), "the project directory was not re-encoded to the tempdir home");
+    assert!(
+        !tree.claude_dir().join("projects").join("-Users-fixture-Developer-holodeck").exists(),
+        "a directory encoding /Users/fixture cannot coexist with a map that names the tempdir"
+    );
+}
+
+fn mtimes(tree: &FixtureTree) -> BTreeMap<String, i64> {
+    let root = tree.claude_dir();
     let mut found = BTreeMap::new();
-    walk(root, root, &mut found);
-    found
+    walk(&root, &root, &mut found);
+    found.into_iter().map(|(path, stamp)| (path.replace(&encoded_home(tree), "-HOME"), stamp)).collect()
+}
+
+fn encoded_home(tree: &FixtureTree) -> String {
+    tree.home()
+        .to_string_lossy()
+        .chars()
+        .map(|character| if matches!(character, '/' | '.' | ' ') { '-' } else { character })
+        .collect()
 }
 
 fn walk(path: &Path, root: &Path, found: &mut BTreeMap<String, i64>) {
