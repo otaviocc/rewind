@@ -3,3 +3,4 @@
 pub mod lines;
 pub mod project;
 pub mod scan;
+pub mod session;

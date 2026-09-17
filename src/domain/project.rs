@@ -141,7 +141,7 @@ fn disambiguate(candidates: &[PathBuf], cwd: Option<&str>, directory: &str) -> (
         .map_or_else(|| (PathBuf::from(directory), Resolution::Unresolved), |first| (first.clone(), Resolution::Unresolved))
 }
 
-fn transcripts(dir: &Path) -> Vec<PathBuf> {
+pub(crate) fn transcripts(dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };

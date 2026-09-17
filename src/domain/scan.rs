@@ -2,7 +2,7 @@
 
 const WHITESPACE: &[u8] = b" \t\n\r";
 
-enum Raw<'a> {
+pub(crate) enum Raw<'a> {
     Str(&'a [u8]),
     Other(&'a [u8]),
 }
@@ -18,42 +18,98 @@ pub fn top_level_is_null(line: &[u8], key: &str) -> bool {
     matches!(top_level_raw(line, key), Some(Raw::Other(b"null")))
 }
 
+pub fn top_level_true(line: &[u8], key: &str) -> bool {
+    matches!(top_level_raw(line, key), Some(Raw::Other(b"true")))
+}
+
+pub fn top_level_present(line: &[u8], key: &str) -> bool {
+    top_level_raw(line, key).is_some()
+}
+
+pub fn top_level_object<'a>(line: &'a [u8], key: &str) -> Option<&'a [u8]> {
+    as_object(&top_level_raw(line, key)?)
+}
+
+pub(crate) fn as_str<'a>(value: &Raw<'a>) -> Option<&'a str> {
+    match value {
+        Raw::Str(bytes) => core::str::from_utf8(bytes).ok(),
+        Raw::Other(_) => None,
+    }
+}
+
+pub(crate) fn as_object<'a>(value: &Raw<'a>) -> Option<&'a [u8]> {
+    match value {
+        Raw::Other(span) if span.first() == Some(&b'{') => Some(span),
+        _ => None,
+    }
+}
+
+pub(crate) fn is_true(value: &Raw<'_>) -> bool {
+    matches!(value, Raw::Other(bytes) if *bytes == b"true")
+}
+
 fn top_level_raw<'a>(line: &'a [u8], key: &str) -> Option<Raw<'a>> {
+    entries(line).find_map(|(name, value)| (name == key.as_bytes()).then_some(value))
+}
+
+pub(crate) fn entries(line: &[u8]) -> Entries<'_> {
     let mut rest = line;
     skip_whitespace(&mut rest);
-
-    let (&opening, after) = rest.split_first()?;
-    if opening != b'{' {
-        return None;
+    let opened = matches!(rest.first(), Some(b'{'));
+    if opened {
+        rest = rest.split_first().map_or(rest, |(_, tail)| tail);
     }
-    rest = after;
+    Entries { rest, done: !opened }
+}
 
-    loop {
-        skip_whitespace(&mut rest);
-        let (&byte, after) = rest.split_first()?;
-        match byte {
-            b',' => {
-                rest = after;
-                continue;
+pub(crate) struct Entries<'a> {
+    rest: &'a [u8],
+    done: bool,
+}
+
+impl<'a> Iterator for Entries<'a> {
+    type Item = (&'a [u8], Raw<'a>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        let Some(pair) = self.step() else {
+            self.done = true;
+            return None;
+        };
+        Some(pair)
+    }
+}
+
+impl<'a> Entries<'a> {
+    fn step(&mut self) -> Option<(&'a [u8], Raw<'a>)> {
+        loop {
+            skip_whitespace(&mut self.rest);
+            let (&byte, after) = self.rest.split_first()?;
+            match byte {
+                b',' => {
+                    self.rest = after;
+                    continue;
+                }
+                b'"' => self.rest = after,
+                _ => return None,
             }
-            b'"' => rest = after,
-            _ => return None,
+            break;
         }
 
-        let name = read_string(&mut rest)?;
+        let name = read_string(&mut self.rest)?;
 
-        skip_whitespace(&mut rest);
-        let (&colon, after) = rest.split_first()?;
+        skip_whitespace(&mut self.rest);
+        let (&colon, after) = self.rest.split_first()?;
         if colon != b':' {
             return None;
         }
-        rest = after;
-        skip_whitespace(&mut rest);
+        self.rest = after;
+        skip_whitespace(&mut self.rest);
 
-        let value = read_value(&mut rest)?;
-        if name == key.as_bytes() {
-            return Some(value);
-        }
+        let value = read_value(&mut self.rest)?;
+        Some((name, value))
     }
 }
 
@@ -284,5 +340,34 @@ mod tests {
     fn a_duplicate_key_reads_as_the_first_occurrence() {
         let line = br#"{"type":"user","type":"assistant"}"#;
         assert_eq!(top_level_str(line, "type"), Some("user"));
+    }
+
+    #[test]
+    fn a_true_value_is_true_and_a_false_value_is_not() {
+        let line = br#"{"isSidechain":true,"isMeta":false}"#;
+        assert!(top_level_true(line, "isSidechain"));
+        assert!(!top_level_true(line, "isMeta"));
+        assert!(!top_level_true(line, "missing"));
+    }
+
+    #[test]
+    fn presence_does_not_care_about_the_value() {
+        let line = br#"{"toolUseResult":null,"other":"x"}"#;
+        assert!(top_level_present(line, "toolUseResult"));
+        assert!(!top_level_present(line, "missing"));
+    }
+
+    #[test]
+    fn a_nested_object_is_returned_whole_for_a_second_scan() {
+        let line = br#"{"message":{"id":"msg_1","content":"hi"},"type":"assistant"}"#;
+        let message = top_level_object(line, "message").expect("a nested object");
+        assert_eq!(top_level_str(message, "id"), Some("msg_1"));
+        assert_eq!(top_level_str(message, "content"), Some("hi"));
+    }
+
+    #[test]
+    fn a_nested_array_is_not_returned_as_an_object() {
+        let line = br#"{"content":[{"type":"text"}],"type":"user"}"#;
+        assert_eq!(top_level_object(line, "content"), None);
     }
 }

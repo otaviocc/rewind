@@ -146,6 +146,15 @@ That count is exact. If it changes, either the fixture or the diagnostics accoun
 `55555555-…` through `99999999-…` are one exchange each, carrying only enough to be named,
 counted, and to supply the `cwd` their project directory needs.
 
+`55555555-….jsonl` also carries a `continued-in` latch, `{"continuedIn":"<sessionId>"}`. No
+real sample of this record has been seen yet, so the field name is a guess, consistent with
+the naming of its siblings (`customTitle`, `aiTitle`, `agentName`); confirm before relying on
+it. Its target session id is deliberately not a file in this tree — following the chain to a
+successor that is not loaded is exactly the case #7 has to survive.
+
+`99999999-….jsonl` carries no title latch at all — not even `last-prompt` — so it is the one
+session in the tree whose title can only come from the first human message.
+
 ## The other files
 
 - **`history.jsonl`** — one uniform shape, `timestamp` in epoch milliseconds. One line names
