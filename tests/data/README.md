@@ -49,7 +49,7 @@ mirroring the ratio in a real map.
 
 | Directory | Real path | What it is for |
 | --- | --- | --- |
-| `-Users-fixture-Developer-holodeck` | `/Users/fixture/Developer/holodeck` | the four interesting sessions |
+| `-Users-fixture-Developer-holodeck` | `/Users/fixture/Developer/holodeck` | the five interesting sessions |
 | `-Users-fixture-Developer-warp-core` | three colliding keys | **ambiguity.** `warp-core`, `warp.core` and `warp core` all encode to this one name. Only the `cwd` on a transcript record says which owns it |
 | `-Users-fixture--tricorder` | `/Users/fixture/.tricorder` | a leading dot in the path |
 | `-Users-fixture-Music-Red-Alert---Live-(2019)` | `/Users/fixture/Music/Red Alert - Live (2019)` | ` - ` collapsing to `---`, and parentheses surviving verbatim |
@@ -147,6 +147,17 @@ This is the **diagnostics** fixture, and it carries exactly three defects:
 3. the final line, cut mid-JSON with no trailing newline
 
 That count is exact. If it changes, either the fixture or the diagnostics accounting moved.
+
+### `aaaaaaaa-….jsonl` — a severed cycle
+
+Two records whose `parentUuid`s point at each other — the user record's parent is the
+assistant record's `uuid`, and the assistant record's parent is the user record's `uuid` — and
+**neither** carries `parentUuid: null`. Nothing in this file anchors it to a real root, which
+is the point: this is **reconstructed**, not observed, because a cycle cannot occur by
+accident in a real store, only by corruption, so there is nothing to confirm it against.
+Thread assembly has to detect that neither record is reachable from any root, sever one of
+them into a new `Detached` root, and report exactly one diagnostic — not loop forever chasing
+`parentUuid` in a circle.
 
 ### The rest
 

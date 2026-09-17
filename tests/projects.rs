@@ -69,7 +69,7 @@ fn a_single_matching_key_resolves_straight_from_the_map() {
 
     assert_eq!(holodeck.path, tree.working_copy("Developer/holodeck"));
     assert_eq!(holodeck.resolution, Resolution::Mapped);
-    assert_eq!(holodeck.sessions, 4);
+    assert_eq!(holodeck.sessions, 5);
     assert!(holodeck.present);
 }
 

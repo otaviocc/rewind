@@ -14,6 +14,8 @@ pub enum Defect {
     Unparseable { line: u64, message: String },
     UnknownRecord { line: u64, kind: String },
     UnknownBlock { line: u64 },
+    OrphanedParent { line: u64, uuid: String },
+    SeveredCycle { line: u64, uuid: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
