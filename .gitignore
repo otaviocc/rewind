@@ -1,1 +1,7 @@
 /target
+
+# A `.DS_Store` in `projects/` is a real entry that project discovery has to skip, so the
+# fixture tree carries one deliberately. Most developers ignore `.DS_Store` globally, and a
+# repository `.gitignore` outranks `core.excludesFile`, so this negation is what keeps the
+# fixture from being dropped on someone else's machine.
+!tests/data/claude/projects/.DS_Store
