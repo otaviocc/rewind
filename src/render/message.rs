@@ -6,7 +6,8 @@ use serde_json::Value;
 
 use crate::domain::block::{Block, Content, ImageSource};
 use crate::domain::thread::{Conversation, NodeKind};
-use crate::render::line::{RenderedLine, StyledSpan, truncate, wrap};
+use crate::render::line::{RenderedLine, StyledSpan, truncate};
+use crate::render::prose;
 use unicode_width::UnicodeWidthStr;
 
 const GUTTER: &str = "▎";
@@ -70,7 +71,7 @@ fn header(label: &str, detail: Option<&str>, width: usize) -> RenderedLine {
 
 fn content(content: &Content, width: usize, lines: &mut Vec<RenderedLine>) {
     match content {
-        Content::Text(text) => lines.extend(wrap(text, body_style(), width)),
+        Content::Text(text) => lines.extend(markdown(text, width)),
         Content::Blocks(blocks_of) => blocks(blocks_of, width, lines),
     }
 }
@@ -78,13 +79,17 @@ fn content(content: &Content, width: usize, lines: &mut Vec<RenderedLine>) {
 fn blocks(blocks: &[Block], width: usize, lines: &mut Vec<RenderedLine>) {
     for block in blocks {
         match block {
-            Block::Text { text } => lines.extend(wrap(text, body_style(), width)),
+            Block::Text { text } => lines.extend(markdown(text, width)),
             Block::Thinking { thinking } => lines.push(one(&thinking_summary(thinking), dim_style(), width)),
             Block::ToolUse { name, input, .. } => lines.push(one(&tool_summary(name, input), body_style(), width)),
             Block::Image { source } => lines.push(one(&image_summary(source), dim_style(), width)),
             Block::ToolResult { .. } | Block::Other => {}
         }
     }
+}
+
+fn markdown(text: &str, width: usize) -> Vec<RenderedLine> {
+    prose::render(&crate::markdown::parse(text), width)
 }
 
 fn one(text: &str, style: Style, width: usize) -> RenderedLine {

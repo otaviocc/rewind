@@ -22,4 +22,4 @@ The grid scanner walks one cell row at a time into a reused buffer.
 ▸ Read  {"file_path":"/Users/fixture/Developer/holodeck/src/engine/grid.rs"}
 
 ▎claude  claude-opus-5
-Two hundred and twelve lines, and no `serde_json` anywhere in it.
+Two hundred and twelve lines, and no serde_json anywhere in it.

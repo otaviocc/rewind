@@ -25,5 +25,5 @@ buffer.
 
 ▎claude  claude-opus-5
 Two hundred and twelve lines,
-and no `serde_json` anywhere in
+and no serde_json anywhere in
 it.
