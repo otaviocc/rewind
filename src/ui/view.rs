@@ -7,6 +7,7 @@ use ratatui::widgets::Widget;
 use ratatui::{Frame, symbols};
 use unicode_width::UnicodeWidthStr;
 
+use crate::render::line::RenderedLine;
 use crate::ui::age;
 use crate::ui::app::{App, Column, Loadable, Mode};
 use crate::ui::columns::{self, Columns};
@@ -99,33 +100,20 @@ fn progress(area: Rect, buf: &mut Buffer, app: &App) {
     let last = match app.focused() {
         Column::Projects => matches!(app.projects(), Loadable::Ready(projects) if !projects.is_empty()),
         Column::Sessions => matches!(app.sessions(), Loadable::Ready(sessions) if !sessions.is_empty()),
-        Column::Conversation => false,
+        Column::Conversation => !app.lines().is_empty(),
     };
     if !last {
         return;
     }
-    let denominator = pane_last(app, app.focused()).max(1);
-    let filled = u16::try_from(pane.selected.saturating_mul(usize::from(area.width)).checked_div(denominator).unwrap_or(0))
+    let denominator = app.last(app.focused()).max(1);
+    let position = if app.focused() == Column::Conversation { pane.top } else { pane.selected };
+    let filled = u16::try_from(position.saturating_mul(usize::from(area.width)).checked_div(denominator).unwrap_or(0))
         .unwrap_or(u16::MAX)
         .min(area.width);
     for x in area.x..area.x.saturating_add(filled) {
         if let Some(cell) = buf.cell_mut((x, area.y)) {
             cell.set_fg(scroll_progress_color());
         }
-    }
-}
-
-const fn pane_last(app: &App, column: Column) -> usize {
-    match column {
-        Column::Projects => match app.projects() {
-            Loadable::Ready(projects) => projects.len().saturating_sub(1),
-            _ => 0,
-        },
-        Column::Sessions => match app.sessions() {
-            Loadable::Ready(sessions) => sessions.len().saturating_sub(1),
-            _ => 0,
-        },
-        Column::Conversation => 0,
     }
 }
 
@@ -189,7 +177,7 @@ fn column(area: Rect, buf: &mut Buffer, app: &App, which: Column, focused: bool)
     match which {
         Column::Projects => projects_rows(inner, buf, app, focused),
         Column::Sessions => sessions_rows(inner, buf, app, focused),
-        Column::Conversation => {}
+        Column::Conversation => conversation_rows(inner, buf, app),
     }
 }
 
@@ -249,6 +237,29 @@ fn sessions_rows(area: Rect, buf: &mut Buffer, app: &App, focused: bool) {
         let age = session.last_activity.map_or_else(|| "-".to_owned(), |at| age::relative(app.ctx.now, at));
         let info = format!("{age} {}", session.messages);
         text_and_info(Rect { y, height: 1, ..area }, buf, &session.title, &info);
+    }
+}
+
+fn conversation_rows(area: Rect, buf: &mut Buffer, app: &App) {
+    let lines = app.lines();
+    let top = app.pane(Column::Conversation).top;
+    let last = lines.len().min(top.saturating_add(usize::from(area.height)));
+
+    for (row_index, index) in (top..last).enumerate() {
+        let Some(line) = lines.get(index) else { continue };
+        let y = area.y.saturating_add(u16::try_from(row_index).unwrap_or(u16::MAX));
+        painted(Rect { y, height: 1, ..area }, buf, line);
+    }
+}
+
+fn painted(area: Rect, buf: &mut Buffer, line: &RenderedLine) {
+    let mut x = area.x;
+    for span in &line.spans {
+        if x >= area.right() {
+            return;
+        }
+        row(area, buf, x, &span.text, span.style);
+        x = x.saturating_add(u16::try_from(span.width()).unwrap_or(area.width));
     }
 }
 
@@ -427,6 +438,49 @@ mod tests {
         let buffer = frame(&app, Size::new(120, 10));
         let tinted = (0..120).filter(|&x| buffer[(x, 1)].fg == scroll_progress_color()).count();
         assert!(tinted > 0);
+    }
+
+    fn with_conversation(app: &mut App, text: &str) {
+        use std::fs;
+
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().expect("a temporary directory");
+        let path = dir.path().join("session.jsonl");
+        let line = format!(
+            r#"{{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:00Z","origin":{{"kind":"human"}},"message":{{"role":"user","content":"{text}"}}}}"#
+        );
+        fs::write(&path, line + "\n").expect("a written transcript");
+        let conversation = crate::domain::thread::build(&path).expect("a built conversation");
+        let generation = app.conversation_generation();
+        app.set_conversation(generation, Ok(Box::new(conversation)));
+        app.reflow();
+    }
+
+    #[test]
+    fn the_conversation_column_paints_the_loaded_transcript() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("a", true)]));
+        app.set_sessions(app.generation(), vec![session("s1", "a session")]);
+        with_conversation(&mut app, "read the grid scanner back to me");
+
+        let buffer = frame(&app, Size::new(120, 24));
+        assert!(text_row(&buffer, 3).contains("▎you"), "{}", text_row(&buffer, 3));
+        assert!(text_row(&buffer, 4).contains("read the grid scanner"), "{}", text_row(&buffer, 4));
+    }
+
+    #[test]
+    fn scrolling_the_conversation_moves_the_first_painted_line() {
+        let mut app = app(Size::new(60, 12));
+        app.set_projects(app.generation(), Ok(vec![project("a", true)]));
+        app.set_sessions(app.generation(), vec![session("s1", "a session")]);
+        app.apply(Action::ToggleFocusMode);
+        with_conversation(&mut app, &"prose ".repeat(200));
+
+        let before = text_row(&frame(&app, Size::new(60, 12)), 3);
+        app.apply(Action::Move(Motion::HalfPage(1)));
+        let after = text_row(&frame(&app, Size::new(60, 12)), 3);
+        assert_ne!(before, after, "the pane did not scroll");
     }
 
     #[test]

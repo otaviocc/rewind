@@ -9,11 +9,18 @@ Stripping the escapes loses the layout: ratatui positions the cursor and paints
 runs, and never emits the spaces in between, so a stripped capture is a wall of
 run-together words. Only replaying the cursor moves recovers the frame — which
 also means a frame assembled from several partial repaints comes out right.
+
+A double-width glyph owns two cells but prints as one. The second cell holds a
+sentinel that is dropped when the row is joined, so a CJK or emoji line comes
+out the width the terminal actually gives it rather than twice that, and no
+stale character from an earlier repaint shows through the gap.
 """
 import re, sys, unicodedata
 
 rows, cols = int(sys.argv[1]), int(sys.argv[2])
 data = open(sys.argv[3], 'rb').read().decode('utf-8', 'replace')
+CONTINUATION = object()
+CONTINUATION = object()
 grid = [[' '] * cols for _ in range(rows)]
 r = c = 0
 i = 0
@@ -48,7 +55,10 @@ while i < len(data):
         if 0 <= r < rows and 0 <= c < cols:
             grid[r][c] = ch
         # East-Asian wide characters occupy two cells.
-        c += 2 if unicodedata.east_asian_width(ch) in ('W', 'F') else 1
+        wide = unicodedata.east_asian_width(ch) in ('W', 'F')
+        if wide and 0 <= r < rows and 0 <= c + 1 < cols:
+            grid[r][c + 1] = CONTINUATION
+        c += 2 if wide else 1
     i += 1
 for line in grid:
-    print(''.join(line).rstrip())
+    print(''.join(cell for cell in line if cell is not CONTINUATION).rstrip())

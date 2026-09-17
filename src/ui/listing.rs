@@ -16,6 +16,16 @@ pub fn step(selected: usize, delta: isize, last: usize) -> usize {
     selected.saturating_add_signed(delta).min(last)
 }
 
+pub fn scroll_target(motion: Motion, top: usize, last: usize, height: usize) -> usize {
+    let height_isize = isize::try_from(height.max(1)).unwrap_or(isize::MAX);
+    match motion {
+        Motion::Line(delta) => scrolled(top, delta, last, height),
+        Motion::HalfPage(delta) => scrolled(top, delta.saturating_mul((height_isize / 2).max(1)), last, height),
+        Motion::Top => 0,
+        Motion::Bottom => scrolled(top, isize::MAX, last, height),
+    }
+}
+
 pub fn scrolled(top: usize, delta: isize, last: usize, height: usize) -> usize {
     let ceiling = last.saturating_sub(height.max(1).saturating_sub(1));
     top.saturating_add_signed(delta).min(ceiling)

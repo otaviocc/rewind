@@ -7,10 +7,13 @@ use ratatui::layout::Size;
 use crate::ctx::Ctx;
 use crate::domain::project::{Project, ProjectError};
 use crate::domain::session::Session;
+use crate::domain::thread::{Conversation, ThreadError};
+use crate::render::line::RenderedLine;
+use crate::render::message;
 use crate::ui::input::{Action, Motion};
-use crate::ui::{Options, listing};
+use crate::ui::{Options, columns, listing};
 
-pub(crate) const CHROME_ROWS: u16 = 5;
+pub const CHROME_ROWS: u16 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Column {
@@ -33,6 +36,28 @@ pub struct Pane {
 }
 
 #[derive(Debug, Clone)]
+pub struct Rendered {
+    conversation: Conversation,
+    lines: Vec<RenderedLine>,
+    wrapped_at: u16,
+}
+
+impl Rendered {
+    fn new(conversation: Conversation, width: u16) -> Self {
+        let lines = message::transcript(&conversation, usize::from(width));
+        Self { conversation, lines, wrapped_at: width }
+    }
+
+    pub fn lines(&self) -> &[RenderedLine] {
+        &self.lines
+    }
+
+    pub const fn conversation(&self) -> &Conversation {
+        &self.conversation
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum Loadable<T> {
     Loading,
     Ready(T),
@@ -45,6 +70,7 @@ pub struct App {
     claude_dir: PathBuf,
     projects: Loadable<Vec<Project>>,
     sessions: Loadable<Vec<Session>>,
+    conversation: Loadable<Rendered>,
     projects_pane: Pane,
     sessions_pane: Pane,
     conversation_pane: Pane,
@@ -53,9 +79,11 @@ pub struct App {
     mode: Mode,
     area: Size,
     generation: u64,
+    conversation_generation: u64,
     pending_project: Option<String>,
     pending_session: Option<String>,
     pending_session_load: Option<(PathBuf, u64)>,
+    pending_conversation_load: Option<(PathBuf, u64)>,
 }
 
 impl App {
@@ -66,6 +94,7 @@ impl App {
             claude_dir: options.claude_dir.clone(),
             projects: Loadable::Loading,
             sessions: Loadable::Loading,
+            conversation: Loadable::Loading,
             projects_pane: Pane::default(),
             sessions_pane: Pane::default(),
             conversation_pane: Pane::default(),
@@ -74,9 +103,11 @@ impl App {
             mode: Mode::Browse,
             area,
             generation: 0,
+            conversation_generation: 0,
             pending_project: options.project.clone(),
             pending_session: options.session.clone(),
             pending_session_load: None,
+            pending_conversation_load: None,
         }
     }
 
@@ -94,6 +125,21 @@ impl App {
 
     pub const fn sessions(&self) -> &Loadable<Vec<Session>> {
         &self.sessions
+    }
+
+    pub const fn conversation(&self) -> &Loadable<Rendered> {
+        &self.conversation
+    }
+
+    pub const fn conversation_generation(&self) -> u64 {
+        self.conversation_generation
+    }
+
+    pub fn lines(&self) -> &[RenderedLine] {
+        match &self.conversation {
+            Loadable::Ready(rendered) => rendered.lines(),
+            Loadable::Loading | Loadable::Failed(_) => &[],
+        }
     }
 
     pub const fn focused(&self) -> Column {
@@ -130,6 +176,32 @@ impl App {
         self.pending_session_load.take()
     }
 
+    pub const fn take_conversation_load(&mut self) -> Option<(PathBuf, u64)> {
+        self.pending_conversation_load.take()
+    }
+
+    pub fn set_conversation(&mut self, generation: u64, result: Result<Box<Conversation>, ThreadError>) {
+        if generation != self.conversation_generation {
+            return;
+        }
+        let width = columns::conversation_width(self.area, self.mode);
+        self.conversation = match result {
+            Ok(conversation) => Loadable::Ready(Rendered::new(*conversation, width)),
+            Err(error) => Loadable::Failed(error.to_string()),
+        };
+    }
+
+    pub fn reflow(&mut self) {
+        let width = columns::conversation_width(self.area, self.mode);
+        let Loadable::Ready(rendered) = &mut self.conversation else { return };
+        if rendered.wrapped_at == width {
+            return;
+        }
+        *rendered = Rendered::new(rendered.conversation.clone(), width);
+        let last = rendered.lines.len().saturating_sub(1);
+        self.conversation_pane.top = self.conversation_pane.top.min(last);
+    }
+
     pub fn set_projects(&mut self, generation: u64, result: Result<Vec<Project>, ProjectError>) {
         if generation != self.generation {
             return;
@@ -158,6 +230,7 @@ impl App {
             self.sessions_pane.selected = index;
         }
         self.sessions = Loadable::Ready(sessions);
+        self.request_conversation_for_selection();
     }
 
     pub fn apply(&mut self, action: Action) {
@@ -208,6 +281,10 @@ impl App {
 
     fn move_selection(&mut self, motion: Motion) {
         let column = self.focused;
+        if column == Column::Conversation {
+            self.scroll_conversation(motion);
+            return;
+        }
         let last = self.last(column);
         let height = self.pane_height();
         let pane = self.pane_mut(column);
@@ -215,9 +292,17 @@ impl App {
         pane.selected = listing::target(motion, pane.selected, last, height);
         pane.top = listing::revealed(pane.top, pane.selected, height);
 
-        if column == Column::Projects {
-            self.request_sessions_for_selection();
+        match column {
+            Column::Projects => self.request_sessions_for_selection(),
+            Column::Sessions => self.request_conversation_for_selection(),
+            Column::Conversation => {}
         }
+    }
+
+    fn scroll_conversation(&mut self, motion: Motion) {
+        let last = self.last(Column::Conversation);
+        let height = columns::conversation_height(self.area);
+        self.conversation_pane.top = listing::scroll_target(motion, self.conversation_pane.top, last, height);
     }
 
     fn request_sessions_for_selection(&mut self) {
@@ -231,6 +316,15 @@ impl App {
             self.pending_session_load = None;
             self.sessions = Loadable::Ready(Vec::new());
         }
+        self.request_conversation_for_selection();
+    }
+
+    fn request_conversation_for_selection(&mut self) {
+        self.conversation_generation = self.conversation_generation.saturating_add(1);
+        self.conversation = Loadable::Loading;
+        self.conversation_pane = Pane::default();
+        self.pending_conversation_load =
+            self.selected_session().map(|session| (session.path.clone(), self.conversation_generation));
     }
 
     const fn pane_mut(&mut self, column: Column) -> &mut Pane {
@@ -241,7 +335,7 @@ impl App {
         }
     }
 
-    const fn last(&self, column: Column) -> usize {
+    pub fn last(&self, column: Column) -> usize {
         match column {
             Column::Projects => match &self.projects {
                 Loadable::Ready(projects) => projects.len().saturating_sub(1),
@@ -251,7 +345,7 @@ impl App {
                 Loadable::Ready(sessions) => sessions.len().saturating_sub(1),
                 _ => 0,
             },
-            Column::Conversation => 0,
+            Column::Conversation => self.lines().len().saturating_sub(1),
         }
     }
 
@@ -410,6 +504,142 @@ mod tests {
         let mut app = app(Size::new(120, 30));
         app.set_projects(app.generation(), Ok(Vec::new()));
         assert!(matches!(app.sessions(), Loadable::Ready(sessions) if sessions.is_empty()));
+    }
+
+    fn conversation(text: &str) -> Conversation {
+        use std::fs;
+
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().expect("a temporary directory");
+        let path = dir.path().join("session.jsonl");
+        let line = format!(
+            r#"{{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:00Z","origin":{{"kind":"human"}},"message":{{"role":"user","content":"{text}"}}}}"#
+        );
+        fs::write(&path, line + "\n").expect("a written transcript");
+        crate::domain::thread::build(&path).expect("a built conversation")
+    }
+
+    fn loaded(app: &mut App, text: &str) {
+        let generation = app.conversation_generation();
+        app.set_conversation(generation, Ok(Box::new(conversation(text))));
+    }
+
+    #[test]
+    fn selecting_a_session_arms_a_conversation_load_on_its_own_generation() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("a")]));
+        let (_dir, _generation) = app.take_session_load().expect("a session load was requested");
+        let sessions_generation = app.generation();
+        app.set_sessions(sessions_generation, vec![session("s1"), session("s2")]);
+
+        let (path, generation) = app.take_conversation_load().expect("a conversation load was requested");
+        assert!(path.ends_with("s1.jsonl"));
+        assert_eq!(generation, app.conversation_generation());
+
+        app.apply(Action::Focus { forward: true });
+        app.apply(Action::Move(Motion::Line(1)));
+        let (path, generation) = app.take_conversation_load().expect("moving in Sessions arms another load");
+        assert!(path.ends_with("s2.jsonl"));
+        assert_eq!(generation, app.conversation_generation());
+    }
+
+    #[test]
+    fn a_conversation_load_never_invalidates_an_in_flight_session_list() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("a")]));
+        let sessions_generation = app.generation();
+        app.set_sessions(sessions_generation, vec![session("s1"), session("s2")]);
+        app.apply(Action::Focus { forward: true });
+        app.apply(Action::Move(Motion::Line(1)));
+
+        assert_eq!(app.generation(), sessions_generation, "the sessions lane must not move with the conversation lane");
+        assert!(matches!(app.sessions(), Loadable::Ready(sessions) if sessions.len() == 2));
+    }
+
+    #[test]
+    fn a_stale_conversation_result_is_dropped() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("a")]));
+        app.set_sessions(app.generation(), vec![session("s1"), session("s2")]);
+        let stale = app.conversation_generation();
+        app.apply(Action::Focus { forward: true });
+        app.apply(Action::Move(Motion::Line(1)));
+
+        app.set_conversation(stale, Ok(Box::new(conversation("stale"))));
+        assert!(matches!(app.conversation(), Loadable::Loading), "the stale result must not land");
+    }
+
+    #[test]
+    fn the_conversation_column_scrolls_by_line_rather_than_selecting() {
+        let mut app = app(Size::new(120, 10));
+        app.set_projects(app.generation(), Ok(vec![project("a")]));
+        app.set_sessions(app.generation(), vec![session("s1")]);
+        loaded(&mut app, "one two three four five six seven eight nine ten");
+        app.apply(Action::Focus { forward: true });
+        app.apply(Action::Focus { forward: true });
+        assert_eq!(app.focused(), Column::Conversation);
+
+        app.apply(Action::Move(Motion::Line(1)));
+        assert_eq!(app.pane(Column::Conversation).selected, 0, "the conversation has no cursor");
+        assert_eq!(app.pane(Column::Conversation).top, 0, "a short transcript does not scroll");
+
+        app.apply(Action::Move(Motion::Bottom));
+        assert_eq!(app.pane(Column::Conversation).top, 0);
+    }
+
+    #[test]
+    fn a_transcript_taller_than_the_pane_scrolls_and_stops_at_the_last_line() {
+        let mut app = app(Size::new(60, 10));
+        app.set_projects(app.generation(), Ok(vec![project("a")]));
+        app.set_sessions(app.generation(), vec![session("s1")]);
+        loaded(&mut app, &"prose ".repeat(200));
+        app.apply(Action::ToggleFocusMode);
+
+        let last = app.last(Column::Conversation);
+        let height = columns::conversation_height(app.area());
+        assert!(last >= height, "the fixture must overflow the pane");
+
+        app.apply(Action::Move(Motion::Bottom));
+        let bottom = app.pane(Column::Conversation).top;
+        assert_eq!(bottom, last.saturating_sub(height.saturating_sub(1)), "the last line lands on the last row");
+
+        app.apply(Action::Move(Motion::Line(1)));
+        assert_eq!(app.pane(Column::Conversation).top, bottom, "there is nothing below the last line");
+
+        app.apply(Action::Move(Motion::Top));
+        assert_eq!(app.pane(Column::Conversation).top, 0);
+    }
+
+    #[test]
+    fn a_resize_rewraps_the_transcript_and_a_redundant_reflow_does_nothing() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("a")]));
+        app.set_sessions(app.generation(), vec![session("s1")]);
+        loaded(&mut app, &"prose ".repeat(60));
+        let wide = app.lines().len();
+
+        app.apply(Action::Resize(Size::new(40, 30)));
+        app.reflow();
+        let narrow = app.lines().len();
+        assert!(narrow > wide, "{narrow} lines at 40 columns is not more than {wide} at 120");
+
+        app.reflow();
+        assert_eq!(app.lines().len(), narrow, "reflowing at an unchanged width must not re-wrap");
+    }
+
+    #[test]
+    fn entering_focus_mode_rewraps_for_the_full_width() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("a")]));
+        app.set_sessions(app.generation(), vec![session("s1")]);
+        loaded(&mut app, &"prose ".repeat(60));
+        app.reflow();
+        let columnar = app.lines().len();
+
+        app.apply(Action::ToggleFocusMode);
+        app.reflow();
+        assert!(app.lines().len() < columnar, "focus mode is wider, so it should need fewer lines");
     }
 
     #[test]

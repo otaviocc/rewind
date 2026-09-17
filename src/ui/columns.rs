@@ -1,8 +1,13 @@
 //! Fractional column widths, with a minimum, and the narrow-terminal collapse.
 
+use ratatui::layout::Size;
+
+use crate::ui::app::{CHROME_ROWS, Mode};
+
 pub const NARROW: u16 = 100;
 const MIN_WIDTH: u16 = 12;
 const SHARES: [u16; 3] = [1, 1, 2];
+const LABEL_ROW: u16 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Columns {
@@ -23,6 +28,19 @@ pub fn layout(width: u16) -> Columns {
     let sessions = widths.get(1).copied().unwrap_or(0);
     let conversation = widths.get(2).copied().unwrap_or(0);
     Columns::Three { projects, sessions, conversation }
+}
+
+pub fn conversation_width(area: Size, mode: Mode) -> u16 {
+    if mode == Mode::Focus {
+        return area.width;
+    }
+    match layout(area.width) {
+        Columns::Three { conversation, .. } | Columns::Two { conversation, .. } => conversation,
+    }
+}
+
+pub fn conversation_height(area: Size) -> usize {
+    usize::from(area.height.saturating_sub(CHROME_ROWS).saturating_sub(LABEL_ROW)).max(1)
 }
 
 fn split(width: u16, shares: &[u16]) -> Vec<u16> {
