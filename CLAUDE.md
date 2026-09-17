@@ -287,10 +287,23 @@ rather than leaving it in a commit message. Never close an issue without a closi
 ## Smoke-testing the TUI
 
 ratatui paints runs and repaints only changed cells, so grepping stripped escape sequences
-lies about what is on screen. Drive it through a pty at a fixed size:
+lies about what is on screen. Drive it through a pty at a fixed size, with a `q` piped in to
+end the run — without it the session hangs — and `sleep 0.8` first to give the TUI time to
+paint before the quit key lands:
 
 ```
-script -q /dev/null sh -c 'stty rows 24 cols 80; ./target/debug/rewind --claude-dir tests/data/claude'
+# BSD/macOS script(1): [file [command ...]]
+{ sleep 0.8; printf 'q'; } | script -q /dev/null sh -c 'stty rows 24 cols 80; ./target/debug/rewind --claude-dir tests/data/claude' > frame.bin
+# util-linux script(1) needs -c instead
+{ sleep 0.8; printf 'q'; } | script -q -c 'stty rows 24 cols 80; ./target/debug/rewind --claude-dir tests/data/claude' /dev/null > frame.bin
 ```
 
-and reconstruct a frame from the capture with `tools/replay-frame.py`.
+and reconstruct a frame from the capture with `tools/replay-frame.py <rows> <cols> <capture>`:
+
+```
+python3 tools/replay-frame.py 24 80 frame.bin
+```
+
+Repaints touch changed cells only, so when checking the capture for a change, grep for a
+fragment (`Holodeck`), never a phrase — a phrase can straddle a repaint boundary and never
+appear as one run.
