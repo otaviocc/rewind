@@ -35,6 +35,9 @@ rustix = { version = "1", default-features = false, features = ["std", "process"
 
 [dev-dependencies]
 assert_cmd = "2"
+# Setting a directory mtime needs this: `std::fs::File::set_times` cannot open a directory
+# on Windows, and the fixture harness stamps deterministic mtimes on both files and dirs.
+filetime = "0.2"
 insta = "1"
 predicates = "3"
 tempfile = "3"
