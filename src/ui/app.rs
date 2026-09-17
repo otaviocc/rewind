@@ -1,6 +1,7 @@
 //! The shell's state, and the reducer that is the only way to change it.
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use ratatui::layout::Size;
 
@@ -14,6 +15,7 @@ use crate::ui::input::{Action, Motion};
 use crate::ui::{Options, columns, listing};
 
 pub const CHROME_ROWS: u16 = 5;
+pub const DEBOUNCE: Duration = Duration::from_millis(120);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Column {
@@ -84,6 +86,7 @@ pub struct App {
     pending_session: Option<String>,
     pending_session_load: Option<(PathBuf, u64)>,
     pending_conversation_load: Option<(PathBuf, u64)>,
+    conversation_due: Option<Instant>,
 }
 
 impl App {
@@ -108,6 +111,7 @@ impl App {
             pending_session: options.session.clone(),
             pending_session_load: None,
             pending_conversation_load: None,
+            conversation_due: None,
         }
     }
 
@@ -176,7 +180,15 @@ impl App {
         self.pending_session_load.take()
     }
 
-    pub const fn take_conversation_load(&mut self) -> Option<(PathBuf, u64)> {
+    pub const fn conversation_due(&self) -> Option<Instant> {
+        self.conversation_due
+    }
+
+    pub fn take_conversation_load(&mut self, now: Instant) -> Option<(PathBuf, u64)> {
+        if self.conversation_due.is_none_or(|due| now < due) {
+            return None;
+        }
+        self.conversation_due = None;
         self.pending_conversation_load.take()
     }
 
@@ -325,6 +337,8 @@ impl App {
         self.conversation_pane = Pane::default();
         self.pending_conversation_load =
             self.selected_session().map(|session| (session.path.clone(), self.conversation_generation));
+        self.conversation_due =
+            self.pending_conversation_load.as_ref().map(|_| Instant::now().checked_add(DEBOUNCE).unwrap_or_else(Instant::now));
     }
 
     const fn pane_mut(&mut self, column: Column) -> &mut Pane {
@@ -506,6 +520,10 @@ mod tests {
         assert!(matches!(app.sessions(), Loadable::Ready(sessions) if sessions.is_empty()));
     }
 
+    fn elapsed() -> Instant {
+        Instant::now().checked_add(DEBOUNCE).unwrap_or_else(Instant::now)
+    }
+
     fn conversation(text: &str) -> Conversation {
         use std::fs;
 
@@ -533,13 +551,13 @@ mod tests {
         let sessions_generation = app.generation();
         app.set_sessions(sessions_generation, vec![session("s1"), session("s2")]);
 
-        let (path, generation) = app.take_conversation_load().expect("a conversation load was requested");
+        let (path, generation) = app.take_conversation_load(elapsed()).expect("a conversation load was requested");
         assert!(path.ends_with("s1.jsonl"));
         assert_eq!(generation, app.conversation_generation());
 
         app.apply(Action::Focus { forward: true });
         app.apply(Action::Move(Motion::Line(1)));
-        let (path, generation) = app.take_conversation_load().expect("moving in Sessions arms another load");
+        let (path, generation) = app.take_conversation_load(elapsed()).expect("moving in Sessions arms another load");
         assert!(path.ends_with("s2.jsonl"));
         assert_eq!(generation, app.conversation_generation());
     }
@@ -568,6 +586,58 @@ mod tests {
 
         app.set_conversation(stale, Ok(Box::new(conversation("stale"))));
         assert!(matches!(app.conversation(), Loadable::Loading), "the stale result must not land");
+    }
+
+    #[test]
+    fn a_conversation_load_waits_out_the_debounce_before_it_fires() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("a")]));
+        app.set_sessions(app.generation(), vec![session("s1")]);
+
+        let armed = app.conversation_due().expect("the debounce was armed");
+        assert!(app.take_conversation_load(Instant::now()).is_none(), "it fired before the deadline");
+        assert!(app.take_conversation_load(armed).is_some(), "it never fired at the deadline");
+        assert!(app.conversation_due().is_none(), "the deadline must be cleared, or it re-fires every frame");
+        assert!(app.take_conversation_load(elapsed()).is_none(), "one arming is one load");
+    }
+
+    #[test]
+    fn walking_through_the_session_list_arms_once_per_stop_and_loads_only_the_last() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("a")]));
+        app.set_sessions(app.generation(), vec![session("s1"), session("s2"), session("s3")]);
+        app.apply(Action::Focus { forward: true });
+
+        app.apply(Action::Move(Motion::Line(1)));
+        app.apply(Action::Move(Motion::Line(1)));
+
+        let (path, _) = app.take_conversation_load(elapsed()).expect("the last stop loads");
+        assert!(path.ends_with("s3.jsonl"), "{path:?}");
+        assert!(app.take_conversation_load(elapsed()).is_none(), "the stops passed through queued nothing");
+    }
+
+    #[test]
+    fn the_pane_clears_when_the_debounce_is_armed_rather_than_when_it_fires() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("a")]));
+        app.set_sessions(app.generation(), vec![session("s1"), session("s2")]);
+        loaded(&mut app, "the previous session");
+        assert!(!app.lines().is_empty());
+
+        app.apply(Action::Focus { forward: true });
+        app.apply(Action::Move(Motion::Line(1)));
+
+        assert!(matches!(app.conversation(), Loadable::Loading), "the old transcript is still on screen");
+        assert!(app.lines().is_empty());
+        assert_eq!(app.pane(Column::Conversation).top, 0, "the reading position did not reset");
+    }
+
+    #[test]
+    fn nothing_selected_arms_no_deadline_so_the_loop_blocks_rather_than_spinning() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(Vec::new()));
+        assert!(app.conversation_due().is_none());
+        assert!(app.take_conversation_load(elapsed()).is_none());
     }
 
     #[test]

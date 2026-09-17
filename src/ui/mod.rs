@@ -9,7 +9,8 @@ pub mod view;
 
 use std::io;
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
 use ratatui::DefaultTerminal;
@@ -83,8 +84,11 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App, tx: &Sender<Wake>, 
         app.reflow();
         terminal.draw(|frame| view::draw(frame, app)).context("cannot draw")?;
 
-        let Ok(wake) = rx.recv() else { return Ok(()) };
-        handle(app, wake)?;
+        match next(app, rx) {
+            Ok(wake) => handle(app, wake)?,
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return Ok(()),
+        }
         while let Ok(wake) = rx.try_recv() {
             handle(app, wake)?;
         }
@@ -95,10 +99,17 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App, tx: &Sender<Wake>, 
         if let Some((dir, generation)) = app.take_session_load() {
             spawn_sessions_load(tx, dir, generation);
         }
-        if let Some((path, generation)) = app.take_conversation_load() {
+        if let Some((path, generation)) = app.take_conversation_load(Instant::now()) {
             spawn_conversation_load(tx, path, generation);
         }
     }
+}
+
+fn next(app: &App, rx: &Receiver<Wake>) -> Result<Wake, RecvTimeoutError> {
+    let Some(due) = app.conversation_due() else {
+        return rx.recv().map_err(|_| RecvTimeoutError::Disconnected);
+    };
+    rx.recv_timeout(due.saturating_duration_since(Instant::now()))
 }
 
 fn handle(app: &mut App, wake: Wake) -> Result<()> {
