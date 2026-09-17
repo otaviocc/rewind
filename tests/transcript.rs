@@ -18,6 +18,7 @@ const HOLODECK: &str = "-Users-fixture-Developer-holodeck";
 const BASELINE: &str = "11111111-1111-4111-8111-111111111111";
 const WIDE: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const IMAGES: &str = "33333333-3333-4333-8333-333333333333";
+const MARKDOWN: &str = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 
 fn session_path(session: &str) -> PathBuf {
     fixtures().join("projects").join(HOLODECK).join(format!("{session}.jsonl"))
@@ -54,6 +55,26 @@ fn the_baseline_session_rewraps_for_a_narrow_column() {
 #[test]
 fn a_session_of_wide_glyphs_renders_and_wraps_by_display_width() {
     insta::assert_snapshot!("wide-glyphs-40", rendered(WIDE, 40));
+}
+
+#[test]
+fn a_markdown_session_renders_every_element_at_a_readable_column() {
+    insta::assert_snapshot!("markdown-80", rendered(MARKDOWN, 80));
+}
+
+#[test]
+fn a_markdown_session_renders_every_element_at_a_wide_column() {
+    insta::assert_snapshot!("markdown-200", rendered(MARKDOWN, 200));
+}
+
+#[test]
+fn every_line_of_a_markdown_session_fits_the_column_it_was_wrapped_for() {
+    let path = session_path(MARKDOWN);
+    for width in [12, 20, 32, 40, 80, 120, 200] {
+        for line in widths(&path, width) {
+            assert!(line <= width, "a line of {line} columns was wrapped for {width}");
+        }
+    }
 }
 
 #[test]

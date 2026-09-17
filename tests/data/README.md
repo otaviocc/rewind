@@ -49,7 +49,7 @@ mirroring the ratio in a real map.
 
 | Directory | Real path | What it is for |
 | --- | --- | --- |
-| `-Users-fixture-Developer-holodeck` | `/Users/fixture/Developer/holodeck` | the six interesting sessions |
+| `-Users-fixture-Developer-holodeck` | `/Users/fixture/Developer/holodeck` | the seven interesting sessions |
 | `-Users-fixture-Developer-warp-core` | three colliding keys | **ambiguity.** `warp-core`, `warp.core` and `warp core` all encode to this one name. Only the `cwd` on a transcript record says which owns it |
 | `-Users-fixture--tricorder` | `/Users/fixture/.tricorder` | a leading dot in the path |
 | `-Users-fixture-Music-Red-Alert---Live-(2019)` | `/Users/fixture/Music/Red Alert - Live (2019)` | ` - ` collapsing to `---`, and parentheses surviving verbatim |
@@ -184,6 +184,33 @@ other inline image sits under a `toolUseResult` record, which the renderer skips
 so without this one the image path is never exercised at all. The payload is 400 base64
 characters — deliberately under the reader's redaction floor, so it is the *unredacted* case,
 and `33333333-….jsonl` remains the redacted one.
+
+### `cccccccc-….jsonl` — Markdown
+
+Prose with every element the renderer has a case for: headings, emphasis, strong,
+strikethrough, inline code, a link, a table with all three alignments, a list nested three
+deep with an ordered list at the bottom of it, a task list with one item ticked and one not,
+a block quote long enough to wrap, a rule, and three fenced code blocks.
+
+The three fences are the point, and they are deliberately different:
+
+| Fence | |
+| --- | --- |
+| ```` ```rust ```` | a language **syntect's own defaults** carry |
+| ```` ```swift ```` | a language only the **bundled pack** in `syntaxes/` carries, so it proves `build.rs` ran |
+| ```` ```lcars ```` | a language **nothing** knows, which must fall back to plain text rather than fail |
+
+Nothing here is reconstructed, and nothing here is new *schema* — every record shape is one
+`11111111-….jsonl` already carries. What is new is only the bytes inside a `text` block. That
+is the same kind of fixture `bbbbbbbb-….jsonl` is: prose rendered as flat text passes every
+other file in this tree and loses everything in this one.
+
+The **human turn also carries Markdown** — a bold run, a bullet list and an inline code span.
+That is not decoration: both roles' prose goes through the Markdown renderer, and this is the
+only fixture that says so.
+
+The `ai-title` latch is the only latch in the file; the title machinery is proved by
+`11111111-….jsonl` and there is nothing to add to it here.
 
 ### `aaaaaaaa-….jsonl` — a severed cycle
 

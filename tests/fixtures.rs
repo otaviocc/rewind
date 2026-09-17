@@ -111,6 +111,9 @@ fn every_nasty_case_is_still_present() {
         (r#""type":"file-history-delta""#, "a file-history-delta latch"),
         (r#""reason":"absorbed_mid_turn""#, "a queue-operation removal reason"),
         (r#""continuedInSessionId""#, "the observed continued-in field name"),
+        ("```rust", "a fenced code block in assistant prose"),
+        ("| :-------- | :--: | ----: |", "a Markdown table with alignments"),
+        ("- [x] recalibrate the grid", "a task list"),
     ] {
         assert!(corpus.contains(needle), "the fixtures lost {what}");
     }
