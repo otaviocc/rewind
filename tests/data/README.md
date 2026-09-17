@@ -74,6 +74,13 @@ precedence even though an `ai-title` is appended after it, and the *second* `ai-
 over the first on recency. Delete the `custom-title` record and the answer must become
 `ai-title second, wins on recency`.
 
+After the state records, six more latches close the file, **observed** against a real store on
+2026-09-17: two `queue-operation` (`enqueue` and `remove`, the latter carrying `reason`) plus a
+bare `dequeue` with neither `content` nor `reason`, a `pr-link`, and two `file-history-delta` —
+one with a null `backup.backupFileName` and a relative `trackingPath`, one with both populated.
+Both deltas key off `messageId`, point `snapshotMessageId` at the `file-history-snapshot`
+above them, and carry **no `sessionId`**, like their `-snapshot` sibling.
+
 `custom-title.json` says something different from the `custom-title` record on purpose: the
 record outranks the file, and the values differ so you can see which one was used.
 
@@ -146,11 +153,12 @@ That count is exact. If it changes, either the fixture or the diagnostics accoun
 `55555555-…` through `99999999-…` are one exchange each, carrying only enough to be named,
 counted, and to supply the `cwd` their project directory needs.
 
-`55555555-….jsonl` also carries a `continued-in` latch, `{"continuedIn":"<sessionId>"}`. No
-real sample of this record has been seen yet, so the field name is a guess, consistent with
-the naming of its siblings (`customTitle`, `aiTitle`, `agentName`); confirm before relying on
-it. Its target session id is deliberately not a file in this tree — following the chain to a
-successor that is not loaded is exactly the case #7 has to survive.
+`55555555-….jsonl` also carries a `continued-in` latch. It was fixtured as a guess,
+`{"continuedIn":"<sessionId>"}`, consistent with the naming of its siblings (`customTitle`,
+`aiTitle`, `agentName`) — but a real sample observed on 2026-09-17 says the field is
+`continuedInSessionId`, not `continuedIn`, and the fixture and the scanner both moved to
+match. Its target session id is deliberately not a file in this tree — following the chain to
+a successor that is not loaded is exactly the case #7 has to survive.
 
 `99999999-….jsonl` carries no title latch at all — not even `last-prompt` — so it is the one
 session in the tree whose title can only come from the first human message.

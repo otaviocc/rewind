@@ -17,7 +17,7 @@ use rewind::domain::scan::{top_level_is_null, top_level_str};
 const DRIFT: &str = "44444444-4444-4444-8444-444444444444.jsonl";
 const FRAGMENTED: &str = "33333333-3333-4333-8333-333333333333.jsonl";
 
-const EVERY_RECORD_TYPE: [&str; 17] = [
+const EVERY_RECORD_TYPE: [&str; 20] = [
     "agent-color",
     "agent-name",
     "ai-title",
@@ -27,10 +27,13 @@ const EVERY_RECORD_TYPE: [&str; 17] = [
     "continued-in",
     "cost-state",
     "custom-title",
+    "file-history-delta",
     "file-history-snapshot",
     "last-prompt",
     "mode",
     "permission-mode",
+    "pr-link",
+    "queue-operation",
     "summary",
     "system",
     "telemetry-latch",
@@ -106,6 +109,17 @@ fn a_latch_record_carries_a_session_id_and_no_envelope() {
     assert!(top_level_str(latch, "sessionId").is_some());
     assert!(top_level_str(latch, "uuid").is_none());
     assert!(!top_level_is_null(latch, "parentUuid"));
+}
+
+#[test]
+fn a_file_history_delta_carries_a_message_id_and_no_session_id() {
+    let lines = every_line();
+    let delta = lines
+        .iter()
+        .find(|line| top_level_str(line, "type") == Some("file-history-delta"))
+        .expect("the baseline session has a file-history-delta latch");
+    assert!(top_level_str(delta, "messageId").is_some());
+    assert!(top_level_str(delta, "sessionId").is_none());
 }
 
 #[test]

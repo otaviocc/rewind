@@ -100,7 +100,7 @@ fn scan_line(line: &[u8]) -> Fields<'_> {
             b"aiTitle" => fields.ai_title = scan::as_str(&value),
             b"agentName" => fields.agent_name = scan::as_str(&value),
             b"lastPrompt" => fields.last_prompt = scan::as_str(&value),
-            b"continuedIn" => fields.continued_in = scan::as_str(&value),
+            b"continuedInSessionId" => fields.continued_in = scan::as_str(&value),
             _ => {}
         }
     }
@@ -349,7 +349,7 @@ mod tests {
             id,
             &[
                 r#"{"parentUuid":null,"isSidechain":false,"message":{"role":"user","content":"hi"},"type":"user","origin":{"kind":"human"},"uuid":"u1","timestamp":"2026-01-01T00:00:00Z","sessionId":"s6"}"#,
-                r#"{"type":"continued-in","continuedIn":"successor","sessionId":"s6"}"#,
+                r#"{"type":"continued-in","continuedInSessionId":"successor","sessionId":"s6"}"#,
             ],
         );
 

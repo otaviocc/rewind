@@ -106,6 +106,11 @@ fn every_nasty_case_is_still_present() {
         (r#""name":"Grep""#, "the legacy tool name Grep"),
         (r#""name":"Glob""#, "the legacy tool name Glob"),
         (r#""name":"TodoWrite""#, "the legacy tool name TodoWrite"),
+        (r#""type":"queue-operation""#, "a queue-operation latch"),
+        (r#""type":"pr-link""#, "a pr-link latch"),
+        (r#""type":"file-history-delta""#, "a file-history-delta latch"),
+        (r#""reason":"absorbed_mid_turn""#, "a queue-operation removal reason"),
+        (r#""continuedInSessionId""#, "the observed continued-in field name"),
     ] {
         assert!(corpus.contains(needle), "the fixtures lost {what}");
     }
