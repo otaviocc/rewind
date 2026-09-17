@@ -1,5 +1,8 @@
 //! The binary and the fixture tree, in an environment that cannot leak local configuration.
 
+// Each integration binary compiles this module on its own and uses only part of it.
+#![allow(dead_code)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
