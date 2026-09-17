@@ -49,7 +49,7 @@ mirroring the ratio in a real map.
 
 | Directory | Real path | What it is for |
 | --- | --- | --- |
-| `-Users-fixture-Developer-holodeck` | `/Users/fixture/Developer/holodeck` | the five interesting sessions |
+| `-Users-fixture-Developer-holodeck` | `/Users/fixture/Developer/holodeck` | the six interesting sessions |
 | `-Users-fixture-Developer-warp-core` | three colliding keys | **ambiguity.** `warp-core`, `warp.core` and `warp core` all encode to this one name. Only the `cwd` on a transcript record says which owns it |
 | `-Users-fixture--tricorder` | `/Users/fixture/.tricorder` | a leading dot in the path |
 | `-Users-fixture-Music-Red-Alert---Live-(2019)` | `/Users/fixture/Music/Red Alert - Live (2019)` | ` - ` collapsing to `---`, and parentheses surviving verbatim |
@@ -147,6 +147,24 @@ This is the **diagnostics** fixture, and it carries exactly three defects:
 3. the final line, cut mid-JSON with no trailing newline
 
 That count is exact. If it changes, either the fixture or the diagnostics accounting moved.
+
+### `bbbbbbbb-….jsonl` — wide glyphs
+
+The only file in the tree with a character wider than one column, and the only one with an
+emoji. Japanese prose in both a human turn and an assistant turn, long enough to wrap several
+times; a `🖖`, a `🛸` and a `🔧`; and a `👩‍🚀` — a ZWJ sequence, so the width of a *grapheme*
+and the width of its component code points disagree. A path with a Japanese filename inside a
+`tool_use` input, so the tool-call summary is measured in display columns too.
+
+Nothing here is reconstructed — every shape is one the other fixtures already carry. What is
+new is only the bytes: rendering measured in `char` counts or `len()` rather than display
+width passes every other fixture in this tree and fails this one.
+
+Its human turn also carries the tree's only `image` block **inside a human message**. Every
+other inline image sits under a `toolUseResult` record, which the renderer skips as plumbing,
+so without this one the image path is never exercised at all. The payload is 400 base64
+characters — deliberately under the reader's redaction floor, so it is the *unredacted* case,
+and `33333333-….jsonl` remains the redacted one.
 
 ### `aaaaaaaa-….jsonl` — a severed cycle
 

@@ -173,6 +173,15 @@ pub struct UserRecord {
     pub tool_denial_kind: Option<String>,
 }
 
+impl UserRecord {
+    pub fn is_human_turn(&self) -> bool {
+        if self.tool_use_result.is_some() || self.is_meta {
+            return false;
+        }
+        self.origin.as_ref().is_none_or(|origin| origin.kind == "human")
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssistantRecord {

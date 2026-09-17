@@ -1,0 +1,25 @@
+---
+source: tests/transcript.rs
+expression: "rendered(BASELINE, 80)"
+---
+▎you
+read the grid scanner back to me
+
+▎claude  claude-opus-5
+thinking · 1 line
+The grid scanner walks one cell row at a time into a reused buffer.
+
+▎claude  claude-opus-5
+▸ Bash  {"command":"wc -l src/engine/grid.rs","description":"Count the scanner …
+
+▎claude  claude-opus-5
+▸ Agent  {"description":"Trace the grid scanner","prompt":"Find every caller of…
+
+▎claude  claude-opus-5
+▸ Bash  {"command":"cargo build -v 2>&1","description":"Verbose build"}
+
+▎claude  claude-opus-5
+▸ Read  {"file_path":"/Users/fixture/Developer/holodeck/src/engine/grid.rs"}
+
+▎claude  claude-opus-5
+Two hundred and twelve lines, and no `serde_json` anywhere in it.

@@ -243,6 +243,35 @@ mod tests {
 
     use super::*;
 
+    const HUMAN: &str = r#"{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"s1","isSidechain":false,"message":{"role":"user","content":"hi"},"origin":{"kind":"human"}}"#;
+    const NO_ORIGIN: &str = r#"{"type":"user","uuid":"u2","parentUuid":null,"sessionId":"s1","isSidechain":false,"message":{"role":"user","content":"hi"}}"#;
+    const TOOL_RESULT: &str = r#"{"type":"user","uuid":"u3","parentUuid":null,"sessionId":"s1","isSidechain":false,"message":{"role":"user","content":"ok"},"toolUseResult":{"stdout":"ok"}}"#;
+    const META: &str = r#"{"type":"user","uuid":"u4","parentUuid":null,"sessionId":"s1","isSidechain":false,"isMeta":true,"message":{"role":"user","content":"caveat"}}"#;
+    const PEER: &str = r#"{"type":"user","uuid":"u5","parentUuid":null,"sessionId":"s1","isSidechain":false,"message":{"role":"user","content":"hi"},"origin":{"kind":"peer"}}"#;
+
+    #[test]
+    fn both_tiers_agree_on_what_counts_as_a_human_turn() {
+        for line in [HUMAN, NO_ORIGIN, TOOL_RESULT, META, PEER] {
+            let fields = scan_line(line.as_bytes());
+            let metadata_tier = is_human_turn(&fields);
+            let record: crate::domain::record::UserRecord =
+                serde_json::from_slice(line.as_bytes()).expect("a parseable user record");
+            assert_eq!(metadata_tier, record.is_human_turn(), "the two tiers disagree about {line}");
+        }
+    }
+
+    #[test]
+    fn only_a_human_origin_without_plumbing_is_a_turn() {
+        let human: crate::domain::record::UserRecord = serde_json::from_slice(HUMAN.as_bytes()).expect("a user record");
+        let no_origin: crate::domain::record::UserRecord = serde_json::from_slice(NO_ORIGIN.as_bytes()).expect("a user record");
+        assert!(human.is_human_turn());
+        assert!(no_origin.is_human_turn(), "an absent origin is a human turn");
+        for line in [TOOL_RESULT, META, PEER] {
+            let record: crate::domain::record::UserRecord = serde_json::from_slice(line.as_bytes()).expect("a user record");
+            assert!(!record.is_human_turn(), "{line} is plumbing, not a turn");
+        }
+    }
+
     fn one_session(id: &str, lines: &[&str]) -> TempDir {
         let project = TempDir::new().expect("a temporary directory");
         let path = project.path().join(format!("{id}.jsonl"));

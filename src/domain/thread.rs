@@ -47,6 +47,7 @@ pub enum NodeKind {
 #[derive(Debug, Clone)]
 pub struct AssistantTurn {
     pub envelope: Envelope,
+    pub model: Option<String>,
     pub content: Vec<Block>,
     pub usage: Option<Usage>,
     pub stop_reason: Option<String>,
@@ -274,6 +275,7 @@ fn fold_assistant_fragment(
         let parent_key = record.envelope.parent_uuid.clone().map(Box::from);
         let turn = AssistantTurn {
             envelope: record.envelope.clone(),
+            model: record.message.model.clone(),
             content: Vec::new(),
             usage: record.message.usage.clone(),
             stop_reason: record.message.stop_reason.clone(),
@@ -297,6 +299,7 @@ fn fold_assistant_fragment(
                 let highest = fragment_highest.entry(index).or_insert(0);
                 if block_index >= *highest {
                     *highest = block_index;
+                    turn.model.clone_from(&record.message.model);
                     turn.usage.clone_from(&record.message.usage);
                     turn.stop_reason.clone_from(&record.message.stop_reason);
                 }
@@ -307,6 +310,7 @@ fn fold_assistant_fragment(
         let parent_key = record.envelope.parent_uuid.clone().map(Box::from);
         let turn = AssistantTurn {
             envelope: record.envelope.clone(),
+            model: record.message.model.clone(),
             content: Vec::new(),
             usage: record.message.usage.clone(),
             stop_reason: record.message.stop_reason.clone(),
