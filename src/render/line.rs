@@ -122,10 +122,14 @@ fn skip_escape(characters: &mut std::iter::Peekable<std::str::Chars<'_>>) {
 }
 
 pub fn wrap(text: &str, style: Style, width: usize) -> Vec<RenderedLine> {
-    let normalised = normalise(text);
+    wrap_spans(&[StyledSpan::new(text, style)], width)
+}
+
+pub fn wrap_spans(spans: &[StyledSpan], width: usize) -> Vec<RenderedLine> {
+    let normalised: Vec<StyledSpan> = spans.iter().map(|span| StyledSpan::new(normalise(&span.text), span.style)).collect();
     let mut lines = Vec::new();
-    for segment in normalised.split('\n') {
-        let wrapped = Wrapper::new(width).run(segment, style);
+    for segment in segments(&normalised) {
+        let wrapped = Wrapper::new(width).run(&segment);
         if wrapped.is_empty() {
             lines.push(RenderedLine::blank());
         } else {
@@ -135,12 +139,34 @@ pub fn wrap(text: &str, style: Style, width: usize) -> Vec<RenderedLine> {
     lines
 }
 
+fn segments(spans: &[StyledSpan]) -> Vec<Vec<StyledSpan>> {
+    let mut segments = vec![Vec::new()];
+    for span in spans {
+        let mut parts = span.text.split('\n');
+        if let Some(head) = parts.next()
+            && !head.is_empty()
+            && let Some(last) = segments.last_mut()
+        {
+            last.push(StyledSpan::new(head, span.style));
+        }
+        for part in parts {
+            let mut next = Vec::new();
+            if !part.is_empty() {
+                next.push(StyledSpan::new(part, span.style));
+            }
+            segments.push(next);
+        }
+    }
+    segments
+}
+
 struct Wrapper {
     width: usize,
     lines: Vec<RenderedLine>,
     current: RenderedLine,
     used: usize,
-    pending_space: bool,
+    pending_space: Option<Style>,
+    at_start: bool,
 }
 
 enum Token<'a> {
@@ -155,29 +181,32 @@ impl Wrapper {
             lines: Vec::new(),
             current: RenderedLine::blank(),
             used: 0,
-            pending_space: false,
+            pending_space: None,
+            at_start: true,
         }
     }
 
-    fn run(mut self, segment: &str, style: Style) -> Vec<RenderedLine> {
-        for (index, token) in tokenize(segment).into_iter().enumerate() {
-            match token {
-                Token::Space(indent) if index == 0 => self.word(indent, style),
-                Token::Space(_) if !self.current.spans.is_empty() => self.pending_space = true,
-                Token::Space(_) => {}
-                Token::Word(word) => self.word(word, style),
+    fn run(mut self, segment: &[StyledSpan]) -> Vec<RenderedLine> {
+        for span in segment {
+            for token in tokenize(&span.text) {
+                match token {
+                    Token::Space(indent) if self.at_start => self.word(indent, span.style),
+                    Token::Space(_) if !self.current.spans.is_empty() => self.pending_space = Some(span.style),
+                    Token::Space(_) => {}
+                    Token::Word(word) => self.word(word, span.style),
+                }
+                self.at_start = false;
             }
         }
         self.finish()
     }
 
     fn word(&mut self, word: &str, style: Style) {
-        let space = usize::from(self.pending_space);
+        let space = usize::from(self.pending_space.is_some());
         if !self.current.spans.is_empty() && self.used.saturating_add(space).saturating_add(word.width()) > self.width {
             self.newline();
         }
-        if self.pending_space {
-            self.pending_space = false;
+        if let Some(style) = self.pending_space.take() {
             self.emit(" ", style);
         }
 
@@ -209,7 +238,7 @@ impl Wrapper {
     }
 
     fn emit(&mut self, text: &str, style: Style) {
-        self.pending_space = false;
+        self.pending_space = None;
         match self.current.spans.last_mut() {
             Some(last) if last.style == style => last.text.push_str(text),
             _ => self.current.push(StyledSpan::new(text, style)),
@@ -221,7 +250,7 @@ impl Wrapper {
         let finished = std::mem::replace(&mut self.current, RenderedLine::blank());
         self.lines.push(finished);
         self.used = 0;
-        self.pending_space = false;
+        self.pending_space = None;
     }
 
     fn finish(mut self) -> Vec<RenderedLine> {
@@ -364,6 +393,26 @@ mod tests {
     fn an_empty_string_is_one_blank_line_rather_than_none() {
         assert_eq!(wrap("", plain(), 10), vec![RenderedLine::blank()]);
         assert!(RenderedLine::blank().is_blank());
+    }
+
+    #[test]
+    fn a_word_keeps_the_style_of_the_span_it_came_from_across_a_wrap() {
+        let bold = plain().add_modifier(ratatui::style::Modifier::BOLD);
+        let lines = wrap_spans(&[StyledSpan::new("alpha ", plain()), StyledSpan::new("beta gamma", bold)], 11);
+        assert_eq!(texts(&lines), vec!["alpha beta", "gamma"]);
+        assert_eq!(lines.first().map(|line| line.spans.len()), Some(2));
+        assert_eq!(lines.last().and_then(|line| line.spans.first()).map(|span| span.style), Some(bold));
+    }
+
+    #[test]
+    fn a_newline_inside_one_span_still_splits_the_whole_sequence() {
+        let lines = wrap_spans(&[StyledSpan::new("one\ntwo", plain()), StyledSpan::new(" three", plain())], 40);
+        assert_eq!(texts(&lines), vec!["one", "two three"]);
+    }
+
+    #[test]
+    fn an_empty_sequence_is_one_blank_line_the_way_an_empty_string_is() {
+        assert_eq!(wrap_spans(&[], 10), vec![RenderedLine::blank()]);
     }
 
     #[test]
