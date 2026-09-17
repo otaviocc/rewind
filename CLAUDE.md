@@ -92,16 +92,45 @@ current. One mechanism, used for both session loads and search queries.
 ## The on-disk schema
 
 These rules are invisible in the code and expensive to rediscover. Violating one produces a
-transcript that looks plausible and is wrong.
+transcript that looks plausible and is wrong. `tests/data/README.md` says which fixture
+reproduces each of them.
 
-- **Never decode the project directory name.** `/`, `.` and space all encode to `-`, so
-  `-Users-otaviocc-Developer-tr-ios` is not invertible. Real paths come from re-encoding the
-  keys of `~/.claude.json`'s `.projects` map and matching, falling back to the `cwd` field on
-  a transcript record.
+```
+~/.claude.json                               the projects map — a SIBLING, not inside
+~/.claude/
+  projects/<encoded>/<uuid>.jsonl            the transcript
+  projects/<encoded>/<uuid>/
+    custom-title.json
+    subagents/agent-<hex17>.jsonl + .meta.json + .forked-skill{,.marker}.json
+    tool-results/<base36>.txt                tool output too large for the transcript
+  history.jsonl
+  sessions/<pid>.json                        RUNNING processes, not session storage
+```
+
+- **A transcript file holds two disjoint record schemas, not one envelope with optional
+  fields.** *Transcript* records — `assistant`, `user`, `attachment`, `system` — always carry
+  `uuid`, `parentUuid`, `timestamp`, `isSidechain`, `cwd`, `sessionId`, `version`,
+  `gitBranch`, `userType` and `entrypoint`. *Latch and event* records — `mode`, `ai-title`,
+  `custom-title`, `agent-name`, `agent-color`, `last-prompt`, `atis-latch`,
+  `permission-mode`, `cost-state`, `pr-link`, `frame-link`, `queue-operation`,
+  `continued-in`, `artifact-*` — carry **only** `sessionId`, and sometimes `timestamp`.
+  `file-history-snapshot` and `file-history-delta` carry no `sessionId` at all; they key off
+  `messageId`. Do not model this as one struct.
+- **Never decode the project directory name.** Each of `/`, `.` and space encodes to `-`
+  and everything else survives verbatim — case, `_`, `+`, `(`, `)`, digits — so the encoding
+  is not invertible. Real paths come from re-encoding the keys of `~/.claude.json`'s
+  `.projects` map and matching, falling back to the `cwd` field on a transcript record when
+  no key matches or several do.
+- **The `.projects` map is not the enumeration.** Two thirds of its keys have no directory
+  under `projects/`. Discovery reads `projects/` and the map only ever resolves a directory
+  name back to a path. `projects/` also contains entries that are not project directories —
+  a `.DS_Store` among them — so skip anything that is not a directory.
 - **A session is a forest, not a list.** `parentUuid: null` appears at session start, after
   `/clear`, and after compaction. User rewinds and edits create genuine sibling branches.
-- **`compact_boundary` records stitch through `logicalParentUuid`**, not `parentUuid`
-  (which is null). Miss this and a compacted session renders as two disconnected halves.
+- **A compaction boundary is `type: "system"` with `subtype: "compact_boundary"`**, not a
+  top-level type of its own, so a scanner dispatching on `type` sees `system`. It stitches
+  through `logicalParentUuid`, not `parentUuid` (which is null), and carries
+  `compactMetadata`. Miss this and a compacted session renders as two disconnected halves.
 - **One assistant message is split across several records** sharing a `message.id`, ordered
   by `apiBlockIndex`. Coalesce on `(message.id, requestId)` — a retry can reuse `message.id`
   on another branch — and **register every fragment's `uuid` in the id map, all pointing at
@@ -110,17 +139,34 @@ transcript that looks plausible and is wrong.
   highest `apiBlockIndex`. Never sum; you will over-count by the fragment count.
 - **A `user` record is not a human turn** if it has `toolUseResult`, or `isMeta: true`, or an
   `origin.kind` other than `"human"`.
+- **`attachment` records are the context injections**, and there are nearly as many of them
+  as there are `assistant` records. The payload is discriminated by `attachment.type` across
+  some twenty shapes — `date`, `instructions`, `environment`, `queued_command`,
+  `skill_listing`, `plan_mode`, `edited_text_file` and the rest. There is no
+  `queued-command` record type; a queued command is an `attachment`.
+- **Tool output too large for the transcript is persisted beside it.** The `tool_result`
+  block keeps a `<persisted-output>` preamble and a preview, and `toolUseResult` carries
+  `persistedOutputPath` plus `persistedOutputSize`. That path is **absolute**, so it does not
+  resolve under `--claude-dir`: locate the file relative to the session directory instead.
+  Overflow files with no record pointing at them accumulate, so do not treat one as a link.
 - **Titles: take the last matching record in the file.** `custom-title` → `custom-title.json`
   → `ai-title` → `agent-name` → `last-prompt` → first human message. These are re-appended on
   every change, so the last one wins.
 - **Subagents live in their own files** at `<sessionId>/subagents/agent-<hex>.jsonl`, linked
   to the spawning `tool_use` block by `toolUseId` in the adjacent `.meta.json`. Load the
   `.meta.json` files eagerly (they are ~200 bytes) so every `Agent` call renders with its
-  real type and description; load the transcripts only when expanded.
+  real type and description; load the transcripts only when expanded. `toolUseId` is
+  **optional**: a forked skill has none, so nothing in the parent points at it. A `.meta.json`
+  can also have no transcript beside it at all. Only `agentType` and `spawnDepth` are always
+  there. Sidechain records add `agentId` — the bare hex, no `agent-` prefix — and carry the
+  *parent* session's `sessionId`.
 - **Never deserialize base64.** The longest line in the corpus is 1.96 MB of inline image.
   Redact `"data":"…"` before `serde_json` sees the line.
 - **Support the legacy shapes.** `type: "summary"` records, inline sidechains marked
-  `isSidechain: true`, and the old tool names `Task`, `Grep`, `Glob`, `TodoWrite`.
+  `isSidechain: true`, and the old tool names `Task`, `Grep`, `Glob`, `TodoWrite`. The first
+  two no longer appear in a current store at all — `isSidechain: true` now occurs only inside
+  `subagents/`, and `summary` nowhere — so their shapes in `tests/data` are reconstructed
+  rather than observed. Confirm before relying on a field name.
 
 Schema drift must never be silent. An unparseable line, an unknown record type or an unknown
 content block is counted into `diagnostics`, surfaced in the status line as `· 3 unreadable`,
@@ -151,10 +197,22 @@ session summaries; its absence should be invisible except for a progress line.
 (`fn a_compacted_session_stays_one_thread`). Integration suites in `tests/`, using `insta`
 snapshots for rendered output and `ratatui::backend::TestBackend` for frames.
 
-Tests read the fixture tree in `tests/data/claude`, never the developer's real `~/.claude`.
-`XDG_CONFIG_HOME` is pinned at a nonexistent path in `tests/common/mod.rs` so a local theme
-cannot repaint snapshots. `cargo-insta` is deliberately not used — new snapshots are reviewed
-and moved by hand.
+Tests read the fixture tree in `tests/data/`, never the developer's real `~/.claude`.
+`tests/common/mod.rs` pins `HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME` and the Windows
+equivalents at nonexistent paths, so a local theme cannot repaint a snapshot and a bug that
+falls back to the real `~/.claude` fails loudly instead of quietly reading hundreds of
+megabytes of personal history.
+
+`tests/data/` is a fake `$HOME`, because `.claude.json` is a sibling of `.claude` rather than
+a member of it. Every path inside it is under `/Users/fixture`, which exists nowhere, so the
+tree reads with no setup and every project reads as gone. `common::fixture_tree` is what
+makes a *present* working copy and a deterministic ordering testable: it copies the tree to a
+tempdir, rewrites `/Users/fixture` to the tempdir root, creates the working copies that are
+meant to exist, and stamps mtimes derived from the timestamps in the data. Git preserves
+neither mtimes nor the deliberately truncated line's bytes, so use the helper rather than
+statting the checkout, and see `tests/data/README.md` before changing a fixture.
+
+`cargo-insta` is deliberately not used — new snapshots are reviewed and moved by hand.
 
 ## Code conventions
 
