@@ -83,8 +83,11 @@ impl<'de> Deserialize<'de> for ImageSource {
                     match key.as_str() {
                         "data" => {
                             let data: String = map.next_value()?;
-                            bytes = data.len();
+                            if !data.is_empty() {
+                                bytes = data.len();
+                            }
                         }
+                        "redactedBytes" => bytes = map.next_value()?,
                         "media_type" => media_type = Some(map.next_value()?),
                         _ => {
                             let _ignored: de::IgnoredAny = map.next_value()?;
@@ -159,6 +162,15 @@ mod tests {
             serde_json::from_str(r#"{"type":"base64","media_type":"image/png","data":"abcde"}"#).expect("an image source");
         assert_eq!(source.media_type.as_deref(), Some("image/png"));
         assert_eq!(source.bytes, 5);
+    }
+
+    #[test]
+    fn a_redacted_image_source_reports_the_length_the_reader_elided() {
+        let source: ImageSource =
+            serde_json::from_str(r#"{"type":"base64","media_type":"image/png","data":"","redactedBytes":1960000}"#)
+                .expect("a redacted image source");
+        assert_eq!(source.media_type.as_deref(), Some("image/png"));
+        assert_eq!(source.bytes, 1_960_000);
     }
 
     #[test]

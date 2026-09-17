@@ -12,6 +12,7 @@ const REDACT_SPAN_FLOOR: usize = 1024;
 const SAMPLE: usize = 64;
 const BASE64_MARKER: &[u8] = b"\"type\":\"base64\"";
 const DATA_KEY: &[u8] = b"\"data\":\"";
+const REDACTED_KEY: &[u8] = b",\"redactedBytes\":";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineNote {
@@ -147,10 +148,15 @@ pub fn redact_base64<'a>(line: &'a [u8], scratch: &'a mut Vec<u8>) -> &'a [u8] {
         scratch.extend_from_slice(key);
         if blob.len() > REDACT_SPAN_FLOOR && looks_like_base64(blob) {
             redacted = true;
+            let Some((quote, after)) = tail.split_at_checked(1) else { break };
+            scratch.extend_from_slice(quote);
+            scratch.extend_from_slice(REDACTED_KEY);
+            scratch.extend_from_slice(blob.len().to_string().as_bytes());
+            rest = after;
         } else {
             scratch.extend_from_slice(blob);
+            rest = tail;
         }
-        rest = tail;
     }
 
     if !redacted {
@@ -255,6 +261,19 @@ mod tests {
         assert!(redacted.len() < REDACT_LINE_FLOOR.saturating_add(4096), "redacted to {} bytes", redacted.len());
         let value: serde_json::Value = serde_json::from_slice(&redacted).expect("the redacted line still parses");
         assert_eq!(value.pointer("/message/content/0/source/data").and_then(serde_json::Value::as_str), Some(""));
+    }
+
+    #[test]
+    fn redaction_records_the_length_it_elided() {
+        let line = image_line(1_960_000);
+        let mut scratch = Vec::new();
+        let redacted = redact_base64(&line, &mut scratch).to_vec();
+        let value: serde_json::Value = serde_json::from_slice(&redacted).expect("the redacted line still parses");
+        assert_eq!(
+            value.pointer("/message/content/0/source/redactedBytes").and_then(serde_json::Value::as_u64),
+            Some(1_960_000),
+            "the elided length is the one fact the renderer needs back"
+        );
     }
 
     #[test]
