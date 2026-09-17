@@ -185,7 +185,11 @@ Two parse tiers, and knowing which one you are in is the whole story.
 buffer the entire `message` value — base64 included — just to read the tag. That is why the
 hand-rolled scanner exists. Do not replace it with a serde-tagged enum.
 
-Read with `BufReader::read_until(b'\n')` into one reused `Vec<u8>`, never `.lines()`.
+Read with `fill_buf` + `memchr` + `consume` into one reused `Vec<u8>`, never `.lines()` and
+never `read_until`. `read_until` appends the whole line before anyone can see how long it is,
+so the 8 MB `MAX_LINE` cap could only reject a 100 MB line after it was already resident.
+`fill_buf` stops appending at the cap and keeps consuming to the newline, so an oversized line
+costs the cap and not the line.
 
 The project list is derived from `read_dir` + `stat` + one parse of `~/.claude.json` in 3–5 ms
 and **must never block on the cache**. The cache is a search corpus that happens to carry
@@ -259,6 +263,22 @@ issue thread, not the diff, to understand why the code looks the way it does.
 ```
 gh issue comment 7 --body "..."
 ```
+
+**Tick the Scope checklist as each item lands**, not in one sweep at the end. A half-ticked
+list is the only thing that says how far the work got when a session stops mid-issue, and the
+diff cannot say which scope items were deliberate. `gh issue edit` replaces the whole body,
+so round-trip it:
+
+```
+gh issue view 7 --json body -q .body > /tmp/7.md
+gh issue edit 7 --body-file /tmp/7.md
+```
+
+Tick only what is done and verified — never in advance, and never to make the list look
+finished. An item you decided against stays **unticked**, and the closing comment says why;
+deleting it or ticking it hides a decision. If the scope itself turned out to be wrong, edit
+the line and say so in a comment: the checklist is the spec, so changing it is exactly the
+kind of thing a future session needs to find.
 
 If the work reveals something a later milestone needs to know, open or update that issue
 rather than leaving it in a commit message. Never close an issue without a closing comment.
