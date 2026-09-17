@@ -4,10 +4,15 @@ use ratatui::layout::Size;
 
 use crate::ui::app::{CHROME_ROWS, Mode};
 
-pub const NARROW: u16 = 100;
 const MIN_WIDTH: u16 = 12;
 const SHARES: [u16; 3] = [1, 1, 2];
 const LABEL_ROW: u16 = 1;
+
+pub fn narrow() -> u16 {
+    let total = SHARES.iter().fold(0u16, |sum, &share| sum.saturating_add(share));
+    let dividers = u16::try_from(SHARES.len()).unwrap_or(u16::MAX).saturating_sub(1);
+    MIN_WIDTH.saturating_mul(total).saturating_add(dividers)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Columns {
@@ -16,7 +21,7 @@ pub enum Columns {
 }
 
 pub fn layout(width: u16) -> Columns {
-    if width < NARROW {
+    if width < narrow() {
         let (_, narrow_shares) = SHARES.split_at_checked(1).unwrap_or((&SHARES, &[]));
         let widths = split(width, narrow_shares);
         let sessions = widths.first().copied().unwrap_or(0);
@@ -80,14 +85,30 @@ mod tests {
 
     #[test]
     fn a_wide_terminal_shows_three_columns() {
-        assert!(matches!(layout(NARROW), Columns::Three { .. }));
+        assert!(matches!(layout(narrow()), Columns::Three { .. }));
         assert!(matches!(layout(200), Columns::Three { .. }));
     }
 
     #[test]
     fn a_narrow_terminal_drops_the_projects_column() {
-        assert!(matches!(layout(NARROW - 1), Columns::Two { .. }));
+        assert!(matches!(layout(narrow().saturating_sub(1)), Columns::Two { .. }));
         assert!(matches!(layout(40), Columns::Two { .. }));
+    }
+
+    #[test]
+    fn a_common_tmux_pane_width_keeps_all_three_columns() {
+        for width in 80..=95u16 {
+            assert!(matches!(layout(width), Columns::Three { .. }), "{width} columns should keep the projects column");
+        }
+    }
+
+    #[test]
+    fn the_threshold_is_the_width_at_which_every_share_still_clears_the_minimum() {
+        assert_eq!(
+            layout(narrow()),
+            Columns::Three { projects: MIN_WIDTH, sessions: MIN_WIDTH, conversation: MIN_WIDTH.saturating_mul(2) }
+        );
+        assert!(matches!(layout(narrow().saturating_sub(1)), Columns::Two { .. }));
     }
 
     #[test]

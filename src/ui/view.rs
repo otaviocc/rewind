@@ -365,11 +365,21 @@ mod tests {
 
     #[test]
     fn a_narrow_terminal_drops_the_projects_column() {
-        let app = app(Size::new(60, 24));
-        let buffer = frame(&app, Size::new(60, 24));
+        let app = app(Size::new(40, 24));
+        let buffer = frame(&app, Size::new(40, 24));
         let header = text_row(&buffer, 2);
         assert!(!header.contains("Projects"), "{header}");
         assert!(header.contains("Sessions"), "{header}");
+    }
+
+    #[test]
+    fn a_tmux_pane_of_ninety_three_columns_still_paints_all_three() {
+        let app = app(Size::new(93, 24));
+        let buffer = frame(&app, Size::new(93, 24));
+        let header = text_row(&buffer, 2);
+        assert!(header.contains("Projects"), "{header}");
+        assert!(header.contains("Sessions"), "{header}");
+        assert!(header.contains("Conversation"), "{header}");
     }
 
     #[test]
