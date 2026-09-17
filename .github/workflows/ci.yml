@@ -7,10 +7,10 @@
 #
 #     gh workflow enable ci.yml
 #
-# `make check` covers fmt, clippy, test and audit. The `msrv` job and the
-# ubuntu/windows legs of `test` are the two things it cannot reproduce on a
-# macOS box with Homebrew rust and no rustup, so those are the jobs most likely
-# to fail the first time this comes back on.
+# `make check` covers fmt, clippy, test, msrv and audit, and development happens
+# on both macOS and Fedora, so between the two machines the only leg with no
+# local equivalent is `test (windows-latest)`. That is the job most likely to
+# fail the first time this comes back on.
 
 name: CI
 

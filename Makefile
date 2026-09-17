@@ -1,11 +1,17 @@
-.PHONY: build run test clean fmt fmt-check lint audit check install uninstall
+.PHONY: build run test clean fmt fmt-check lint audit msrv check install uninstall
+
+# Single-sourced from Cargo.toml, the way the CI job reads it, so the MSRV is
+# stated in exactly one place.
+MSRV := $(shell sed -n 's/^rust-version *= *"\(.*\)"/\1/p' Cargo.toml)
 
 # `check` is what CI would run if CI were on. While the repository is private,
 # GitHub Actions is disabled (see CLAUDE.md), so this is the gate: run it before
-# every commit that closes an issue. It covers four of the five CI jobs; the
-# MSRV check and the Linux/Windows test matrix are the two this machine cannot
-# reproduce, and they come back with CI at M6.
-check: fmt-check lint test audit
+# every commit that closes an issue.
+#
+# `msrv` runs wherever rustup is available and skips where it is not, so this is
+# the same command on both development machines and the Fedora box is the one
+# that actually enforces the MSRV. Windows stays unverified until CI returns.
+check: fmt-check lint test msrv audit
 
 build:
 	cargo build --release
@@ -27,6 +33,20 @@ fmt-check:
 
 lint:
 	cargo clippy --all-targets -- -D warnings
+
+# Skips rather than fails without rustup: the macOS box is Homebrew rust, which
+# cannot install a second toolchain. A missing toolchain *with* rustup present is
+# a real failure, because that machine is expected to enforce this.
+msrv:
+	@if ! command -v rustup >/dev/null 2>&1; then \
+		echo "msrv: skipped, no rustup on this machine (MSRV is enforced on the Linux box)"; \
+	elif ! rustup toolchain list | grep -q '^$(MSRV)'; then \
+		echo "msrv: toolchain $(MSRV) is not installed"; \
+		echo "      run: rustup toolchain install $(MSRV)"; \
+		exit 1; \
+	else \
+		cargo +$(MSRV) check --locked --all-targets; \
+	fi
 
 # Accepted advisories, with a reason for each, are in .cargo/audit.toml.
 audit:

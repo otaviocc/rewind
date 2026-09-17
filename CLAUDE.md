@@ -7,11 +7,12 @@ reading. No network requests, ever. No writes to `~/.claude`, ever.
 ## Commands
 
 ```
-make check                                   THE GATE — fmt, clippy, test, audit
+make check                                   THE GATE — fmt, clippy, test, msrv, audit
 make build                                   cargo build --release
 make test                                    cargo test
 make fmt                                     cargo fmt
 make lint                                    cargo clippy --all-targets -- -D warnings
+make msrv                                    cargo +<rust-version> check --locked
 make audit                                   cargo audit --deny warnings
 cargo run -- --claude-dir tests/data/claude  run against the fixtures
 ```
@@ -24,14 +25,33 @@ is committed and known-good but disabled at the repository level; re-enabling it
 So `make check` is the gate, not a convenience: **run it before every commit that closes an
 issue, and say in the closing comment that it passed.** Nothing else will catch a regression.
 
-It reproduces four of the five CI jobs. The two it cannot are worth knowing about:
+### Two machines
 
-- **MSRV.** This machine has Homebrew rust and no rustup, so the 1.88 toolchain cannot be
-  installed to check against. Do not use a `std` API stabilised after 1.88 — the compiler
-  here will happily accept it and nothing will complain until CI comes back.
-- **The Linux and Windows test matrix.** Anything path-shaped, line-ending-shaped or
-  terminal-shaped is unverified off macOS. Prefer `Path::join` over string concatenation and
-  keep platform assumptions behind `cfg`.
+Development happens on both macOS and Fedora, and `make check` is the same command on
+either — but they do not check the same things.
+
+| | macOS | Fedora |
+| --- | --- | --- |
+| toolchain | Homebrew rust, no rustup | rustup (dnf) |
+| `msrv` | skipped, with a notice | **runs** — this is where the MSRV is enforced |
+| test matrix leg | macOS | Linux |
+
+So between the two, four of the five CI jobs are covered on every platform CI would build
+for except one. What is left:
+
+- **Windows is unverified** until CI returns at M6. Prefer `Path::join` over string
+  concatenation, keep platform assumptions behind `cfg`, and do not assume `\n` line endings
+  or a particular terminal.
+- **The MSRV is only enforced on Fedora.** Work done solely on the macOS box can introduce a
+  `std` API stabilised after `rust-version` and nothing will say so. Run `make check` on
+  Fedora before closing an issue whose work was written on macOS, or expect to find it at
+  M6 instead.
+
+`make msrv` reads `rust-version` straight out of `Cargo.toml`, the way the CI job does, so
+the MSRV is stated in exactly one place. It skips where rustup is absent and **fails** where
+rustup is present but the toolchain is not installed — that machine is expected to enforce
+it, so silence there would be a lie. It tells you the `rustup toolchain install` command to
+run.
 
 `cargo build` can report `Fresh` while the binary on disk is stale. If a change does not
 appear to take effect, `rm -rf target/debug/.fingerprint/rewind-*` and build again.
