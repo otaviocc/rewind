@@ -1,16 +1,25 @@
 //! Wiring: parse the command line, resolve the directories, hand over to the browser.
 
+use std::io::IsTerminal;
 use std::time::SystemTime;
 
 use anyhow::Result;
 use clap::Parser;
 use jiff::Timestamp;
+use rewind::ctx::Ctx;
 use rewind::domain::project::{self, Project, Resolution};
+use rewind::ui;
 use rewind::{cli::Cli, paths};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let claude = paths::claude_dir(cli.claude_dir)?;
+
+    if std::io::stdout().is_terminal() {
+        let options = ui::Options { claude_dir: claude, project: cli.project, session: cli.session, mouse: !cli.no_mouse };
+        return ui::run(Ctx { now: Timestamp::now() }, &options);
+    }
+
     let projects = project::discover(&claude)?;
 
     println!("rewind {}", env!("CARGO_PKG_VERSION"));

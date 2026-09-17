@@ -44,6 +44,8 @@ cargo install --locked --path .
 | --- | --- |
 | `h` `l` `Tab` | move between columns |
 | `j` `k` | move within a column |
+| `g` `G` | top · bottom of the column |
+| `Ctrl-d` `Ctrl-u` | half page down · up |
 | `Enter` | descend · expand a tool call · enter a subagent |
 | `Esc` | back out |
 | `f` | focus the conversation full-width |
