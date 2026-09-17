@@ -1,12 +1,8 @@
 //! Wiring: parse the command line, resolve the directories, hand over to the browser.
 
-mod cli;
-mod paths;
-
 use anyhow::Result;
 use clap::Parser;
-
-use crate::cli::Cli;
+use rewind::{cli::Cli, paths};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
