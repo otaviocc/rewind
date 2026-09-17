@@ -1,3 +1,17 @@
+# DISABLED. This workflow is switched off at the repository level while rewind
+# is private: GitHub Actions minutes are not free on a private repository, and
+# every job here failed before running a single step. Verification is local via
+# `make check` until then — see CLAUDE.md.
+#
+# The file is kept, and kept working, because re-enabling it is part of #26:
+#
+#     gh workflow enable ci.yml
+#
+# `make check` covers fmt, clippy, test and audit. The `msrv` job and the
+# ubuntu/windows legs of `test` are the two things it cannot reproduce on a
+# macOS box with Homebrew rust and no rustup, so those are the jobs most likely
+# to fail the first time this comes back on.
+
 name: CI
 
 on:

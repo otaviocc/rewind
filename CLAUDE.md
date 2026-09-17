@@ -7,12 +7,31 @@ reading. No network requests, ever. No writes to `~/.claude`, ever.
 ## Commands
 
 ```
+make check                                   THE GATE — fmt, clippy, test, audit
 make build                                   cargo build --release
 make test                                    cargo test
 make fmt                                     cargo fmt
 make lint                                    cargo clippy --all-targets -- -D warnings
+make audit                                   cargo audit --deny warnings
 cargo run -- --claude-dir tests/data/claude  run against the fixtures
 ```
+
+**CI is disabled and verification is local.** The repository is private until there is
+something people can use, and GitHub Actions does not run on it. `.github/workflows/ci.yml`
+is committed and known-good but disabled at the repository level; re-enabling it is part of
+#26, alongside going public.
+
+So `make check` is the gate, not a convenience: **run it before every commit that closes an
+issue, and say in the closing comment that it passed.** Nothing else will catch a regression.
+
+It reproduces four of the five CI jobs. The two it cannot are worth knowing about:
+
+- **MSRV.** This machine has Homebrew rust and no rustup, so the 1.88 toolchain cannot be
+  installed to check against. Do not use a `std` API stabilised after 1.88 — the compiler
+  here will happily accept it and nothing will complain until CI comes back.
+- **The Linux and Windows test matrix.** Anything path-shaped, line-ending-shaped or
+  terminal-shaped is unverified off macOS. Prefer `Path::join` over string concatenation and
+  keep platform assumptions behind `cfg`.
 
 `cargo build` can report `Fresh` while the binary on disk is stale. If a change does not
 appear to take effect, `rm -rf target/debug/.fingerprint/rewind-*` and build again.
