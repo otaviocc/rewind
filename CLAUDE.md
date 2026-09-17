@@ -113,9 +113,9 @@ reproduces each of them.
   `gitBranch`, `userType` and `entrypoint`. *Latch and event* records — `mode`, `ai-title`,
   `custom-title`, `agent-name`, `agent-color`, `last-prompt`, `atis-latch`,
   `permission-mode`, `cost-state`, `pr-link`, `frame-link`, `queue-operation`,
-  `continued-in`, `artifact-*` — carry **only** `sessionId`, and sometimes `timestamp`.
-  `file-history-snapshot` and `file-history-delta` carry no `sessionId` at all; they key off
-  `messageId`. Do not model this as one struct.
+  `continued-in`, `fork-context-ref`, `artifact-*` — carry **only** `sessionId`, and
+  sometimes `timestamp`. `file-history-snapshot` and `file-history-delta` carry no
+  `sessionId` at all; they key off `messageId`. Do not model this as one struct.
 - **Never decode the project directory name.** Each of `/`, `.` and space encodes to `-`
   and everything else survives verbatim — case, `_`, `+`, `(`, `)`, digits — so the encoding
   is not invertible. Real paths come from re-encoding the keys of `~/.claude.json`'s
