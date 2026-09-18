@@ -64,7 +64,9 @@ cargo install --locked --path .
 | `d` | what could not be read · `Esc` closes it |
 | `q` | quit |
 
-Mouse wheel scrolls whichever column is under the pointer. `--no-mouse` turns capture off.
+Mouse wheel scrolls whichever column is under the pointer, not whichever has focus. Clicking
+a row selects it, clicking a collapsed tool call expands it, and clicking a subagent call
+enters it. `--no-mouse` turns capture off.
 
 ## Flags
 
