@@ -10,6 +10,7 @@ use ratatui::layout::Size;
 use crate::ctx::Ctx;
 use crate::domain::project::{Project, ProjectError};
 use crate::domain::session::Session;
+use crate::domain::subagent::Agents;
 use crate::domain::thread::{Conversation, ThreadError};
 use crate::domain::tool;
 use crate::render::line::RenderedLine;
@@ -45,19 +46,20 @@ pub struct Pane {
 pub struct Rendered {
     conversation: Conversation,
     path: PathBuf,
+    agents: Agents,
     transcript: Transcript,
     wrapped_at: u16,
     revision: u64,
 }
 
 impl Rendered {
-    fn new(conversation: Conversation, path: PathBuf, width: u16, view: &View) -> Self {
-        let transcript = message::transcript(&conversation, &view.ctx(usize::from(width)));
-        Self { conversation, path, transcript, wrapped_at: width, revision: view.revision }
+    fn new(conversation: Conversation, path: PathBuf, agents: Agents, width: u16, view: &View) -> Self {
+        let transcript = message::transcript(&conversation, &view.ctx(usize::from(width), &agents));
+        Self { conversation, path, agents, transcript, wrapped_at: width, revision: view.revision }
     }
 
     fn rewrap(&mut self, width: u16, view: &View) {
-        self.transcript = message::transcript(&self.conversation, &view.ctx(usize::from(width)));
+        self.transcript = message::transcript(&self.conversation, &view.ctx(usize::from(width), &self.agents));
         self.wrapped_at = width;
         self.revision = view.revision;
     }
@@ -77,6 +79,10 @@ impl Rendered {
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    pub const fn agents(&self) -> &Agents {
+        &self.agents
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -87,8 +93,8 @@ struct View {
 }
 
 impl View {
-    const fn ctx(&self, width: usize) -> RenderCtx<'_> {
-        RenderCtx { width, expanded: &self.expanded, outputs: &self.outputs }
+    const fn ctx<'a>(&'a self, width: usize, agents: &'a Agents) -> RenderCtx<'a> {
+        RenderCtx { width, expanded: &self.expanded, outputs: &self.outputs, agents }
     }
 
     const fn bump(&mut self) {
@@ -269,14 +275,14 @@ impl App {
         self.pending_conversation_load.take()
     }
 
-    pub fn set_conversation(&mut self, generation: u64, result: Result<Box<Conversation>, ThreadError>) {
+    pub fn set_conversation(&mut self, generation: u64, result: Result<Box<Conversation>, ThreadError>, agents: Agents) {
         if generation != self.conversation_generation {
             return;
         }
         let width = columns::conversation_width(self.area, self.mode);
         let path = self.pending_conversation_path.take().unwrap_or_default();
         self.conversation = match result {
-            Ok(conversation) => Loadable::Ready(Rendered::new(*conversation, path, width, &self.view)),
+            Ok(conversation) => Loadable::Ready(Rendered::new(*conversation, path, agents, width, &self.view)),
             Err(error) => Loadable::Failed(error.to_string()),
         };
     }
@@ -623,7 +629,7 @@ mod tests {
         let conversation = crate::domain::thread::build(&path).expect("a built conversation");
         let mut app = app(area);
         app.pending_conversation_path = Some(path);
-        app.set_conversation(app.conversation_generation(), Ok(Box::new(conversation)));
+        app.set_conversation(app.conversation_generation(), Ok(Box::new(conversation)), Agents::default());
         let _ = dir.keep();
         app
     }
@@ -767,7 +773,7 @@ mod tests {
 
         let conversation = crate::domain::thread::build(&path).expect("a built conversation");
         app.pending_conversation_path = Some(path);
-        app.set_conversation(app.conversation_generation(), Ok(Box::new(conversation)));
+        app.set_conversation(app.conversation_generation(), Ok(Box::new(conversation)), Agents::default());
         assert!(call_lines(&app).iter().all(|text| text.contains('▸')), "expansion is per session, not global");
     }
 
@@ -914,7 +920,7 @@ mod tests {
 
     fn loaded(app: &mut App, text: &str) {
         let generation = app.conversation_generation();
-        app.set_conversation(generation, Ok(Box::new(conversation(text))));
+        app.set_conversation(generation, Ok(Box::new(conversation(text))), Agents::default());
     }
 
     #[test]
@@ -958,7 +964,7 @@ mod tests {
         app.apply(Action::Focus { forward: true });
         app.apply(Action::Move(Motion::Line(1)));
 
-        app.set_conversation(stale, Ok(Box::new(conversation("stale"))));
+        app.set_conversation(stale, Ok(Box::new(conversation("stale"))), Agents::default());
         assert!(matches!(app.conversation(), Loadable::Loading), "the stale result must not land");
     }
 

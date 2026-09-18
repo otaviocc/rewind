@@ -1,10 +1,14 @@
 //! A tool call as one dense line: a glyph, the tool's name, a digest of what it was asked to do,
 //! and how it went.
 
+use std::collections::HashSet;
+use std::hash::BuildHasher;
+
 use ratatui::style::Style;
 use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
 
+use crate::domain::subagent::Agent;
 use crate::domain::thread::Conversation;
 use crate::domain::tool::{self, Hunk, Label, Outcome, Status};
 use crate::render::line::{RenderedLine, StyledSpan, normalise, truncate};
@@ -16,6 +20,10 @@ const SEPARATOR: &str = " · ";
 const HEAD_GAP: &str = "  ";
 const TAIL_GAP: usize = 1;
 const LEAST_DIGEST: usize = 8;
+const ENTER: &str = "⏎";
+const RULE: &str = "─";
+const MARK_GAP: &str = "   ";
+const AGENT_TOOLS: [&str; 2] = ["Agent", "Task"];
 const GUTTER: &str = "  ┃ ";
 const GUTTER_BLANK: &str = "  ┃";
 const FOLD: usize = 20;
@@ -30,6 +38,16 @@ pub struct Styles {
     pub error: Style,
     pub added: Style,
     pub removed: Style,
+    pub enter: Style,
+}
+
+pub fn spawned<'a>(conversation: &Conversation, ctx: &'a Ctx<'_>, id: &str, name: &str) -> Option<&'a Agent> {
+    if !AGENT_TOOLS.contains(&name) {
+        return None;
+    }
+    let result = conversation.result_of(id).and_then(|node| Outcome::of(node, id));
+    let agent_id = result.and_then(|outcome| outcome.detail).and_then(|detail| detail.get("agentId")).and_then(Value::as_str);
+    ctx.agents.spawned_by(id, agent_id)
 }
 
 pub fn call(
@@ -43,15 +61,42 @@ pub fn call(
     let outcome = conversation.result_of(id).and_then(|node| Outcome::of(node, id));
     let detail = outcome.and_then(|outcome| outcome.detail);
     let status = tool::status(outcome.as_ref());
-    let digest = tool::digest(name, input, detail);
+    let agent = spawned(conversation, ctx, id, name);
+    let digest = agent.map_or_else(
+        || {
+            let digest = tool::digest(name, input, detail);
+            joined(digest.primary.as_deref(), digest.secondary.as_deref())
+        },
+        |agent| joined(Some(agent.label()), agent.description.as_deref()),
+    );
     let expanded = ctx.is_expanded(id);
     let glyph = if expanded { EXPANDED } else { COLLAPSED };
-    let mut lines =
-        vec![line(glyph, name, &joined(digest.primary.as_deref(), digest.secondary.as_deref()), status, ctx.width, styles)];
+    let mark = agent.is_some_and(Agent::enterable).then_some(ENTER);
+    let mut lines = vec![line(glyph, name, &digest, mark, status, ctx.width, styles)];
     if expanded {
         lines.extend(body(ctx, id, name, input, outcome.as_ref(), styles));
     }
     lines
+}
+
+pub fn unreached<'a, S: BuildHasher>(ctx: &'a Ctx<'_>, reached: &HashSet<Box<str>, S>) -> Vec<&'a Agent> {
+    ctx.agents.all().iter().filter(|agent| agent.parent.is_none() && agent.enterable() && !reached.contains(&agent.id)).collect()
+}
+
+pub fn unreached_header(agents: &[&Agent], width: usize, styles: &Styles) -> Vec<RenderedLine> {
+    let count = agents.len();
+    let what = if agents.iter().all(|agent| agent.is_forked_skill()) { "forked skill" } else { "agent" };
+    let plural = if count == 1 { "" } else { "s" };
+    vec![
+        cut(&RULE.repeat(width), width, styles.muted),
+        cut(&format!("{count} {what}{plural} ran with no spawning call"), width, styles.muted),
+    ]
+}
+
+pub fn unreached_line(agent: &Agent, width: usize, styles: &Styles) -> RenderedLine {
+    let kind = Some(&*agent.kind).filter(|kind| *kind != agent.label());
+    let digest = joined(kind, agent.description.as_deref());
+    line(COLLAPSED, agent.label(), &digest, Some(ENTER), Status::Ok, width, styles)
 }
 
 fn body(ctx: &Ctx<'_>, id: &str, name: &str, input: &Value, outcome: Option<&Outcome<'_>>, styles: &Styles) -> Vec<RenderedLine> {
@@ -181,19 +226,32 @@ fn joined(primary: Option<&str>, secondary: Option<&str>) -> String {
     }
 }
 
-fn line(glyph: &str, name: &str, detail: &str, status: Status, width: usize, styles: &Styles) -> RenderedLine {
+fn line(
+    glyph: &str,
+    name: &str,
+    detail: &str,
+    mark: Option<&str>,
+    status: Status,
+    width: usize,
+    styles: &Styles,
+) -> RenderedLine {
     let mut line = RenderedLine::blank();
     let heading = heading(name);
     let head_width = glyph.width().saturating_add(heading.width());
     let outcome = label_of(status);
-    let outcome_width = outcome.width();
+    let mark_width = mark.map_or(0, |mark| mark.width().saturating_add(MARK_GAP.width()));
+    let outcome_width = outcome.width().saturating_add(mark_width);
 
-    if head_width.saturating_add(TAIL_GAP).saturating_add(outcome_width) > width {
+    if head_width.saturating_add(TAIL_GAP).saturating_add(outcome.width()) > width {
         line.push(StyledSpan::new(truncate(&format!("{glyph}{heading}"), width), styles.name));
         return line;
     }
     line.push(StyledSpan::new(glyph, styles.glyph));
     line.push(StyledSpan::new(heading, styles.name));
+
+    let affordable = head_width.saturating_add(TAIL_GAP).saturating_add(outcome_width) <= width;
+    let mark = mark.filter(|_| affordable);
+    let outcome_width = if affordable { outcome_width } else { outcome.width() };
 
     let spent = head_width.saturating_add(HEAD_GAP.width()).saturating_add(outcome_width).saturating_add(TAIL_GAP);
     let room = width.saturating_sub(spent);
@@ -208,6 +266,9 @@ fn line(glyph: &str, name: &str, detail: &str, status: Status, width: usize, sty
 
     let pad = width.saturating_sub(tail).saturating_sub(outcome_width).max(TAIL_GAP);
     line.push(StyledSpan::new(" ".repeat(pad), styles.muted));
+    if let Some(mark) = mark {
+        line.push(StyledSpan::new(format!("{mark}{MARK_GAP}"), styles.enter));
+    }
     line.push(StyledSpan::new(outcome, if status.is_error() { styles.error } else { styles.muted }));
     line
 }
@@ -243,11 +304,12 @@ mod tests {
             error: Style::new().fg(Color::Red),
             added: Style::new().fg(Color::Green),
             removed: Style::new().fg(Color::Red),
+            enter: Style::new().add_modifier(Modifier::BOLD),
         }
     }
 
     fn rendered(name: &str, detail: &str, status: Status, width: usize) -> String {
-        line(COLLAPSED, name, detail, status, width, &styles()).text()
+        line(COLLAPSED, name, detail, None, status, width, &styles()).text()
     }
 
     #[test]
@@ -324,7 +386,7 @@ mod tests {
     #[test]
     fn only_the_three_error_outcomes_are_painted_in_the_error_style() {
         let error = |status| {
-            line(COLLAPSED, "Bash", "x", status, 40, &styles())
+            line(COLLAPSED, "Bash", "x", None, status, 40, &styles())
                 .spans
                 .last()
                 .map(|span| span.style)

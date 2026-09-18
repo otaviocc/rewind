@@ -9,7 +9,7 @@ use thiserror::Error;
 
 use crate::domain::block::{Block, Content, Usage};
 use crate::domain::diagnostics::{Defect, Diagnostics};
-use crate::domain::latch::{CostStateLatch, Latch};
+use crate::domain::latch::{CostStateLatch, ForkContextRefLatch, Latch};
 use crate::domain::lines::Lines;
 use crate::domain::record::{self, AssistantRecord, AttachmentRecord, Envelope, ParseError, Record, SystemRecord, UserRecord};
 
@@ -52,6 +52,8 @@ pub struct AssistantTurn {
     pub usage: Option<Usage>,
     pub stop_reason: Option<String>,
     pub fragments: u32,
+    pub attribution_agent: Option<String>,
+    pub attribution_skill: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -85,6 +87,7 @@ pub struct SessionState {
     pub cost_state: Option<CostStateLatch>,
     pub continued_in: Option<String>,
     pub summary: Option<String>,
+    pub fork_context: Option<ForkContextRefLatch>,
 }
 
 #[derive(Debug, Clone)]
@@ -301,6 +304,8 @@ fn fold_assistant_fragment(
             usage: record.message.usage.clone(),
             stop_reason: record.message.stop_reason.clone(),
             fragments: 1,
+            attribution_agent: record.attribution_agent.clone(),
+            attribution_skill: record.attribution_skill.clone(),
         };
         let id = push_node(nodes, provisional, ids, line, parent_key, NodeKind::Assistant(turn));
         let index = id.index();
@@ -323,6 +328,8 @@ fn fold_assistant_fragment(
                     turn.model.clone_from(&record.message.model);
                     turn.usage.clone_from(&record.message.usage);
                     turn.stop_reason.clone_from(&record.message.stop_reason);
+                    turn.attribution_agent.clone_from(&record.attribution_agent);
+                    turn.attribution_skill.clone_from(&record.attribution_skill);
                 }
             }
         }
@@ -336,6 +343,8 @@ fn fold_assistant_fragment(
             usage: record.message.usage.clone(),
             stop_reason: record.message.stop_reason.clone(),
             fragments: 1,
+            attribution_agent: record.attribution_agent.clone(),
+            attribution_skill: record.attribution_skill.clone(),
         };
         let id = push_node(nodes, provisional, ids, line, parent_key, NodeKind::Assistant(turn));
         let index = id.index();
@@ -375,6 +384,7 @@ fn fold_latch(latch: Latch, state: &mut SessionState) {
         }
         Latch::CostState(inner) => state.cost_state = Some(inner),
         Latch::ContinuedIn(inner) => state.continued_in = Some(inner.continued_in_session_id),
+        Latch::ForkContextRef(inner) => state.fork_context = Some(inner),
         Latch::Known { .. } => {}
     }
 }

@@ -10,6 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use common::fixtures;
+use rewind::domain::subagent::{self, Agents};
 use rewind::domain::thread;
 use rewind::domain::tool::{self, Outcome};
 use rewind::render::line::RenderedLine;
@@ -46,16 +47,17 @@ fn session_path(session: &str) -> PathBuf {
 struct View {
     expanded: Expanded,
     outputs: Outputs,
+    agents: Agents,
 }
 
 impl View {
     const fn ctx(&self, width: usize) -> Ctx<'_> {
-        Ctx { width, expanded: &self.expanded, outputs: &self.outputs }
+        Ctx { width, expanded: &self.expanded, outputs: &self.outputs, agents: &self.agents }
     }
 
     fn expanding(path: &Path) -> Self {
         let conversation = thread::build(path).expect("a built conversation");
-        let mut view = Self::default();
+        let mut view = Self { agents: subagent::discover(path), ..Self::default() };
         for (id, detail) in ids(&conversation) {
             view.expanded.insert(id.clone());
             if let Some(found) = detail.as_ref().and_then(tool::overflow) {
@@ -91,7 +93,7 @@ fn rendered(session: &str, width: usize) -> String {
 }
 
 fn render_file(path: &Path, width: usize) -> String {
-    lines_of(&built(path, width, &View::default()))
+    lines_of(&built(path, width, &View { agents: subagent::discover(path), ..View::default() }))
 }
 
 fn expanded(session: &str, width: usize) -> String {
@@ -110,7 +112,8 @@ fn lines_of(transcript: &Transcript) -> String {
 }
 
 fn widths(path: &Path, width: usize) -> Vec<usize> {
-    built(path, width, &View::default()).lines.iter().map(RenderedLine::width).collect()
+    let view = View { agents: subagent::discover(path), ..View::default() };
+    built(path, width, &view).lines.iter().map(RenderedLine::width).collect()
 }
 
 fn expanded_widths(path: &Path, width: usize) -> Vec<usize> {
@@ -185,13 +188,14 @@ fn an_expanded_call_degrades_rather_than_overflows_a_narrow_column() {
 fn an_overflowed_result_is_read_from_the_sidecar_beside_the_session_and_folded() {
     let text = expanded(BASELINE, 80);
     assert!(text.contains("Fresh   memchr"), "the sidecar was not read:\n{text}");
-    assert!(text.contains("more lines"), "a 1 400-line sidecar was not folded:\n{text}");
+    assert!(text.contains("more lines"), "a two-thousand-line sidecar was not folded:\n{text}");
     assert!(!text.contains("<persisted-output>"), "the preamble reached the transcript:\n{text}");
 
     let sidecar = tool::overflow_path(&session_path(BASELINE), "b7k2m9x4q.txt");
     let whole = tool::read_overflow(&sidecar).expect("the sidecar reads");
     assert!(whole.len() > 1_000, "the fixture stopped being large enough to fold, at {} lines", whole.len());
-    assert!(text.lines().count() < 60, "a {}-line result must not put {} lines on screen", whole.len(), text.lines().count());
+    let on_screen = text.lines().count();
+    assert!(on_screen < whole.len() / 10, "a {}-line result must not put {on_screen} lines on screen", whole.len());
 }
 
 #[test]

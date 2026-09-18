@@ -1,6 +1,8 @@
 //! One conversation becomes styled lines: a role rail, one header per run of replies, prose, and
 //! one dense line per tool call.
 
+use std::collections::HashSet;
+
 use ratatui::style::{Color, Modifier, Style};
 
 use crate::domain::block::{Block, Content, ImageSource};
@@ -60,6 +62,7 @@ const fn tool_styles() -> tool::Styles {
         error: error_style(),
         added: added_style(),
         removed: removed_style(),
+        enter: label_style(),
     }
 }
 
@@ -89,6 +92,7 @@ struct Group {
 pub struct Anchor {
     pub id: Box<str>,
     pub line: usize,
+    pub agent: Option<Box<str>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -138,6 +142,12 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
         }
     }
 
+    let reached: HashSet<Box<str>> =
+        groups.iter().flat_map(|group| group.anchors.iter()).filter_map(|anchor| anchor.agent.clone()).collect();
+    if let Some(tail) = unreached(ctx, inner, &reached) {
+        groups.push(tail);
+    }
+
     let mut transcript = Transcript::default();
     for group in groups {
         if !transcript.lines.is_empty() {
@@ -149,6 +159,21 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
         transcript.lines.extend(railed(group.lines, group.rail.style()));
     }
     transcript
+}
+
+fn unreached(ctx: &Ctx<'_>, width: usize, reached: &HashSet<Box<str>>) -> Option<Group> {
+    let styles = tool_styles();
+    let agents = tool::unreached(ctx, reached);
+    if agents.is_empty() {
+        return None;
+    }
+    let mut lines = tool::unreached_header(&agents, width, &styles);
+    let mut anchors = Vec::new();
+    for agent in agents {
+        anchors.push(Anchor { id: agent.id.clone(), line: lines.len(), agent: Some(agent.id.clone()) });
+        lines.push(tool::unreached_line(agent, width, &styles));
+    }
+    Some(Group { rail: Rail::Assistant, model: None, lines, anchors })
 }
 
 fn shift(anchors: &mut [Anchor], by: usize) {
@@ -209,7 +234,9 @@ fn blocks(
             Block::Text { text } => lines.extend(markdown(text, ctx.width)),
             Block::Thinking { thinking } => lines.push(one(&thinking_summary(thinking), dim_style(), ctx.width)),
             Block::ToolUse { id, name, input } => {
-                anchors.push(Anchor { id: Box::from(id.as_str()), line: lines.len() });
+                let agent =
+                    tool::spawned(conversation, ctx, id, name).filter(|agent| agent.enterable()).map(|agent| agent.id.clone());
+                anchors.push(Anchor { id: Box::from(id.as_str()), line: lines.len(), agent });
                 lines.extend(tool::call(conversation, ctx, id, name, input, &styles));
             }
             Block::Image { source } => lines.push(one(&image_summary(source), dim_style(), ctx.width)),
@@ -282,10 +309,12 @@ mod tests {
     fn plain(width: usize) -> Ctx<'static> {
         static EXPANDED: std::sync::OnceLock<crate::render::Expanded> = std::sync::OnceLock::new();
         static OUTPUTS: std::sync::OnceLock<crate::render::Outputs> = std::sync::OnceLock::new();
+        static AGENTS: std::sync::OnceLock<crate::domain::subagent::Agents> = std::sync::OnceLock::new();
         Ctx {
             width,
             expanded: EXPANDED.get_or_init(crate::render::Expanded::new),
             outputs: OUTPUTS.get_or_init(crate::render::Outputs::new),
+            agents: AGENTS.get_or_init(crate::domain::subagent::Agents::default),
         }
     }
 

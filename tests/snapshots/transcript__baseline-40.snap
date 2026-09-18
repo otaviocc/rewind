@@ -12,7 +12,7 @@ expression: "rendered(BASELINE, 40)"
 ▎
 ▎ ▸ Bash  wc -l src/engine/grid.rs    ok
 ▎
-▎ ▸ Agent  Explore · Trace the grid … ok
+▎ ▸ Agent  Explore · Trace the g… ⏎   ok
 ▎
 ▎ ▸ Bash  cargo build -v 2>&1         ok
 ▎
@@ -20,3 +20,9 @@ expression: "rendered(BASELINE, 40)"
 ▎
 ▎ Two hundred and twelve lines, and no
 ▎ serde_json anywhere in it.
+▎
+▎ ▸ Agent  code-review · Review … ⏎   ok
+
+▎ ──────────────────────────────────────
+▎ 1 forked skill ran with no spawning c…
+▎ ▸ code-review  Review the grid… ⏎   ok

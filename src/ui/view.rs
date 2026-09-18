@@ -468,7 +468,7 @@ mod tests {
         fs::write(&path, line + "\n").expect("a written transcript");
         let conversation = crate::domain::thread::build(&path).expect("a built conversation");
         let generation = app.conversation_generation();
-        app.set_conversation(generation, Ok(Box::new(conversation)));
+        app.set_conversation(generation, Ok(Box::new(conversation)), crate::domain::subagent::Agents::default());
         app.reflow();
     }
 

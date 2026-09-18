@@ -33,6 +33,7 @@ pub enum Latch {
     LastPrompt(LastPromptLatch),
     CostState(CostStateLatch),
     ContinuedIn(ContinuedInLatch),
+    ForkContextRef(ForkContextRefLatch),
     Known { kind: String, session_id: Option<String>, message_id: Option<String>, timestamp: Option<Timestamp> },
 }
 
@@ -90,6 +91,18 @@ pub struct ContinuedInLatch {
     pub continued_in_session_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ForkContextRefLatch {
+    #[serde(rename = "agentId", default)]
+    pub agent_id: Option<String>,
+    #[serde(rename = "parentSessionId", default)]
+    pub parent_session_id: Option<String>,
+    #[serde(rename = "parentLastUuid", default)]
+    pub parent_last_uuid: Option<String>,
+    #[serde(rename = "contextLength", default)]
+    pub context_length: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 struct GenericLatch {
     #[serde(rename = "sessionId", default)]
@@ -113,6 +126,24 @@ pub fn parse_generic(kind: &str, line: &[u8]) -> Result<Latch, serde_json::Error
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_fork_context_ref_names_the_agent_and_the_point_it_forked_from() {
+        let json = r#"{"type":"fork-context-ref","agentId":"b2c3d4e5f60718293","parentSessionId":"s1","parentLastUuid":"u9","contextLength":757}"#;
+        let latch: ForkContextRefLatch = serde_json::from_str(json).expect("a fork-context-ref");
+        assert_eq!(latch.agent_id.as_deref(), Some("b2c3d4e5f60718293"), "the bare hex, no agent- prefix");
+        assert_eq!(latch.parent_last_uuid.as_deref(), Some("u9"));
+        assert_eq!(latch.context_length, Some(757));
+    }
+
+    #[test]
+    fn every_field_of_a_fork_context_ref_is_optional_so_a_bare_one_is_not_drift() {
+        let latch: ForkContextRefLatch =
+            serde_json::from_str(r#"{"type":"fork-context-ref","sessionId":"s1"}"#).expect("a bare fork-context-ref");
+        assert_eq!(latch.agent_id, None, "requiring agentId would turn a future shape into drift");
+        assert_eq!(latch.parent_session_id, None);
+        assert_eq!(latch.context_length, None);
+    }
 
     #[test]
     fn a_custom_title_latch_deserializes() {

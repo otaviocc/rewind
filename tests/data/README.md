@@ -66,7 +66,8 @@ invertible, which is the whole reason `.claude.json` exists.
 ### `11111111-….jsonl` — the readable baseline
 
 A human prompt turn, assistant prose with a `thinking` block, `Bash` / `Agent` / `Read` tool
-calls with their results, three `attachment` subtypes, and two `system` subtypes.
+calls with their results, three `attachment` subtypes, and two `system` subtypes. The second
+`Agent` call exists to be reached by its result's `agentId` alone — see `subagents/` below.
 
 Its tail is the **latch family**: records carrying only `sessionId` and no envelope at all.
 They are ordered so both title rules are provable from one file — `custom-title` wins on
@@ -104,13 +105,20 @@ the file sits where the session directory implies, which makes resolving it rela
 session the only thing that works. `b0orphan1.txt` is an overflow file no record points at,
 which real sessions accumulate.
 
-`subagents/` holds three `.meta.json` files, and the differences are the point:
+`subagents/` holds five `.meta.json` files, and the differences are the point. There are
+**four** ways an agent can be reached, and one of each:
 
 | File | |
 | --- | --- |
-| `agent-a1b2c3d4e5f607182` | meta + transcript, `toolUseId` joining it to a real `tool_use` block in the parent |
-| `agent-b2c3d4e5f60718293` | meta + transcript, but **no `toolUseId`** — a forked skill, so nothing in the parent points at it. Carries the `forked-skill.json` + `.marker.json` sidecars, and a `fork-context-ref` |
-| `agent-c3d4e5f607182934a` | **meta with no transcript**, `stoppedByUser`. Eager meta loading has to survive this |
+| `agent-a1b2c3d4e5f607182` | **joined.** meta + transcript, `toolUseId` naming a real `tool_use` block in the parent |
+| `agent-d4e5f60718293a4b5` | **reached only by the result.** No `toolUseId` at all, but the spawning call's `toolUseResult.agentId` names it. Observed on 2026-09-18: this key reaches 360 agents where `toolUseId` reaches 312, and where both exist they agree in 312 of 312. A reader that joins only on `toolUseId` loses this one. Carries the `forked-skill.json` + `.marker.json` sidecars |
+| `agent-b2c3d4e5f60718293` | **reached by nothing.** No `toolUseId`, and no result names it either, so it is findable only by listing the directory. A forked skill, with both sidecars and a `fork-context-ref` |
+| `agent-e5f60718293a4b5c6` | **nested.** `spawnDepth: 2` and `parentAgentId`, and its `toolUseId` is an `Agent` call inside `agent-a1b2c3d4e5f607182.jsonl` — **not** in the session transcript. Observed: resolving a depth-2 `toolUseId` against the session finds the wrong parent, or nothing |
+| `agent-c3d4e5f607182934a` | **dangling.** `toolUseId` that resolves nowhere, `stoppedByUser`, and **no transcript**. Eager meta loading has to survive this. Note this shape occurs in **zero** files in a current store — 389 metas, 389 transcripts — so it is forward-looking rather than observed |
+
+The two transcripts that pair with `a1b2…` and `b2c3…` differ deliberately in attribution:
+`attributionAgent` set and `attributionSkill` null on the first, inverted on the second. That
+is how a forked skill labels itself, and both polarities occur.
 
 `fork-context-ref` is fixtured as the **first line** of `agent-b2c3d4e5f60718293.jsonl`, which
 is where a real store puts it — **observed** on 2026-09-17, and observed *only* inside

@@ -21,8 +21,8 @@ fn the_custom_title_record_wins_even_though_an_ai_title_follows_it() {
     assert_eq!(session.title_source, TitleSource::CustomTitle);
     assert_eq!(session.git_branch.as_deref(), Some("main"));
     assert_eq!(session.slug.as_deref(), Some("read-the-grid-scanner-back-to-me-velvet-pumpkin"));
-    assert_eq!(session.records, 37);
-    assert_eq!(session.messages, 7, "1 human turn and 6 coalesced assistant messages");
+    assert_eq!(session.records, 39);
+    assert_eq!(session.messages, 8, "1 human turn and 7 coalesced assistant messages");
     assert!(session.first_activity.is_some());
     assert!(session.last_activity.is_some());
     assert!(session.first_activity <= session.last_activity);

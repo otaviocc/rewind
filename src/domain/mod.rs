@@ -8,5 +8,6 @@ pub mod project;
 pub mod record;
 pub mod scan;
 pub mod session;
+pub mod subagent;
 pub mod thread;
 pub mod tool;

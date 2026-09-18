@@ -20,6 +20,7 @@ use ratatui::crossterm::execute;
 use crate::ctx::Ctx;
 use crate::domain::project::{self, Project, ProjectError};
 use crate::domain::session;
+use crate::domain::subagent::{self, Agents};
 use crate::domain::thread::{self, Conversation, ThreadError};
 use crate::domain::tool;
 use crate::ui::app::App;
@@ -28,7 +29,7 @@ enum Wake {
     Input(event::Event),
     ProjectsLoaded { generation: u64, result: Result<Vec<Project>, ProjectError> },
     SessionsLoaded { generation: u64, sessions: Vec<session::Session> },
-    ConversationLoaded { generation: u64, result: Result<Box<Conversation>, ThreadError> },
+    ConversationLoaded { generation: u64, result: Result<Box<Conversation>, ThreadError>, agents: Box<Agents> },
     ToolOutputLoaded { generation: u64, id: Box<str>, result: Result<Vec<String>, String> },
     InputLost(String),
 }
@@ -126,7 +127,7 @@ fn handle(app: &mut App, wake: Wake) -> Result<()> {
         }
         Wake::ProjectsLoaded { generation, result } => app.set_projects(generation, result),
         Wake::SessionsLoaded { generation, sessions } => app.set_sessions(generation, sessions),
-        Wake::ConversationLoaded { generation, result } => app.set_conversation(generation, result),
+        Wake::ConversationLoaded { generation, result, agents } => app.set_conversation(generation, result, *agents),
         Wake::ToolOutputLoaded { generation, id, result } => app.set_tool_output(generation, id, result),
         Wake::InputLost(error) => bail!("cannot read keyboard input: {error}"),
     }
@@ -169,8 +170,9 @@ fn spawn_sessions_load(tx: &Sender<Wake>, project_dir: PathBuf, generation: u64)
 fn spawn_conversation_load(tx: &Sender<Wake>, path: PathBuf, generation: u64) {
     let tx = tx.clone();
     std::thread::spawn(move || {
+        let agents = Box::new(subagent::discover(&path));
         let result = thread::build(&path).map(Box::new);
-        let _ = tx.send(Wake::ConversationLoaded { generation, result });
+        let _ = tx.send(Wake::ConversationLoaded { generation, result, agents });
     });
 }
 

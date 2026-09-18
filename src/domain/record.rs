@@ -75,6 +75,7 @@ pub fn parse(line: &[u8]) -> Result<Record, ParseError> {
         "last-prompt" => Ok(Record::Latch(Latch::LastPrompt(serde_json::from_slice(line)?))),
         "cost-state" => Ok(Record::Latch(Latch::CostState(serde_json::from_slice(line)?))),
         "continued-in" => Ok(Record::Latch(Latch::ContinuedIn(serde_json::from_slice(line)?))),
+        "fork-context-ref" => Ok(Record::Latch(Latch::ForkContextRef(serde_json::from_slice(line)?))),
         other if latch::is_known_latch(other) => Ok(Record::Latch(latch::parse_generic(other, line)?)),
         other => Err(ParseError::UnknownType(other.to_owned())),
     }
@@ -314,11 +315,20 @@ mod tests {
 
     #[test]
     fn a_known_but_unmodelled_latch_never_becomes_drift() {
-        for kind in ["frame-link", "fork-context-ref", "artifact-autoreact-ledger", "artifact-comment-monitor"] {
+        for kind in ["frame-link", "artifact-autoreact-ledger", "artifact-comment-monitor"] {
             let line = format!(r#"{{"type":"{kind}","sessionId":"s1"}}"#);
             let record = parse(line.as_bytes()).unwrap_or_else(|error| panic!("{kind} must parse as a known latch: {error}"));
             assert!(matches!(record, Record::Latch(Latch::Known { .. })), "{kind} did not parse as a known latch");
         }
+    }
+
+    #[test]
+    fn a_fork_context_ref_parses_as_its_own_latch_rather_than_the_generic_one() {
+        let line = br#"{"type":"fork-context-ref","agentId":"b2c3d4e5f60718293","parentLastUuid":"u9","contextLength":757}"#;
+        let record = parse(line).expect("a fork-context-ref");
+        let Record::Latch(Latch::ForkContextRef(latch)) = record else { panic!("not a fork-context-ref latch") };
+        assert_eq!(latch.agent_id.as_deref(), Some("b2c3d4e5f60718293"));
+        assert_eq!(latch.parent_last_uuid.as_deref(), Some("u9"), "the generic latch dropped all of this");
     }
 
     #[test]

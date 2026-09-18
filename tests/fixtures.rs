@@ -172,30 +172,57 @@ fn the_title_latches_prove_both_precedence_and_recency() {
 }
 
 #[test]
-fn one_subagent_meta_is_orphaned_and_the_rest_resolve() {
+fn every_subagent_meta_falls_into_exactly_one_of_the_four_ways_it_can_be_reached() {
     let subagents = fixtures().join("projects").join(HOLODECK).join(BASELINE).join("subagents");
-    let parent = read_lossy(&fixtures().join("projects").join(HOLODECK).join(format!("{BASELINE}.jsonl")));
+    let session = read_lossy(&fixtures().join("projects").join(HOLODECK).join(format!("{BASELINE}.jsonl")));
 
-    let mut orphans = BTreeSet::new();
-    let mut resolved = BTreeSet::new();
+    let mut joined = BTreeSet::new();
+    let mut nested = BTreeSet::new();
+    let mut unlinked = BTreeSet::new();
+    let mut dangling = BTreeSet::new();
     for entry in fs::read_dir(&subagents).expect("the subagents directory") {
         let path = entry.expect("a readable entry").path();
         let name = path.file_name().expect("a file name").to_string_lossy().into_owned();
-        if !name.ends_with(".meta.json") {
-            continue;
-        }
+        let Some(stem) = name.strip_suffix(".meta.json") else { continue };
         let meta: serde_json::Value = serde_json::from_str(&read_lossy(&path)).expect("a parseable subagent meta");
         assert!(meta.get("agentType").is_some(), "{name} has no agentType");
-        let Some(id) = meta.get("toolUseId").and_then(serde_json::Value::as_str) else { continue };
-        if parent.contains(id) {
-            resolved.insert(name)
-        } else {
-            orphans.insert(name)
+        assert!(meta.get("spawnDepth").is_some(), "{name} has no spawnDepth");
+
+        let Some(id) = meta.get("toolUseId").and_then(serde_json::Value::as_str) else {
+            unlinked.insert(stem.to_owned());
+            continue;
         };
+        match meta.get("parentAgentId").and_then(serde_json::Value::as_str) {
+            Some(parent) => {
+                let inside = read_lossy(&subagents.join(format!("agent-{parent}.jsonl")));
+                assert!(inside.contains(id), "{name} is depth 2 but its toolUseId is not in agent-{parent}");
+                assert!(!session.contains(id), "a depth-2 toolUseId must not resolve against the session");
+                nested.insert(stem.to_owned());
+            }
+            None if session.contains(id) => {
+                joined.insert(stem.to_owned());
+            }
+            None => {
+                dangling.insert(stem.to_owned());
+            }
+        }
     }
-    assert_eq!(resolved.len(), 1, "expected one meta joined to the parent transcript, got {resolved:?}");
-    assert_eq!(orphans.len(), 1, "expected one deliberately orphaned meta, got {orphans:?}");
-    assert!(!subagents.join("agent-c3d4e5f607182934a.jsonl").exists(), "the orphaned meta must have no transcript beside it");
+
+    let names = |set: &BTreeSet<String>| set.iter().cloned().collect::<Vec<_>>();
+    assert_eq!(names(&joined), ["agent-a1b2c3d4e5f607182"], "joined by its own toolUseId");
+    assert_eq!(names(&nested), ["agent-e5f60718293a4b5c6"], "depth 2, joined inside its parent agent");
+    assert_eq!(
+        names(&unlinked),
+        ["agent-b2c3d4e5f60718293", "agent-d4e5f60718293a4b5"],
+        "forked skills: one reachable only by listing, one only via the result's agentId"
+    );
+    assert_eq!(names(&dangling), ["agent-c3d4e5f607182934a"], "a toolUseId that resolves nowhere");
+
+    assert!(!subagents.join("agent-c3d4e5f607182934a.jsonl").exists(), "the dangling meta must have no transcript beside it");
+    assert!(
+        session.contains(r#""agentId":"d4e5f60718293a4b5""#),
+        "the result's agentId is the only key that reaches the forked skill"
+    );
 }
 
 #[test]
