@@ -28,6 +28,7 @@ never writes to `~/.claude`.
                      │                          │ ▎   ┃ -    base.or(user)
                      │                          │ ▎   ┃ +    user.or(base)
                      │                          │ ▎ ▸ Agent  code-review · check the fix  ⏎   ok
+                     │                          │ ▎ ── 2 alternate branches · [b] ──
 ────────────────────────────────────────────────────────────────────────────
  vademecum · 61 msgs · main · 148.2k in / 22.9k out · 12/61 · 19%
 ```
@@ -56,7 +57,7 @@ cargo install --locked --path .
 | `n` `N` | next · previous tool call |
 | `Space` `t` | expand one tool call · all of them |
 | `i` | reveal context injections |
-| `b` | cycle alternate branches |
+| `b` | cycle the alternate branches at the marker |
 | `y` `Y` | copy the message · the whole session |
 | `c` | copy `claude --resume <id>` |
 | `e` | export to a file |
