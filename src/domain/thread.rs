@@ -1,7 +1,7 @@
 //! A session is a forest, not a list: fold the latch tail, coalesce assistant fragments,
 //! resolve parents, sever cycles, and pick the default branch through every root.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
@@ -108,6 +108,7 @@ pub struct Conversation {
     roots: Vec<NodeId>,
     thread: Vec<NodeId>,
     chosen: HashMap<NodeId, NodeId>,
+    restitched: HashSet<NodeId>,
     state: SessionState,
     diagnostics: Diagnostics,
 }
@@ -170,7 +171,8 @@ impl Conversation {
         if node.children.len() < 2 {
             return Vec::new();
         }
-        let turns: Vec<NodeId> = node.children.iter().copied().filter(|child| self.is_turn(*child)).collect();
+        let turns: Vec<NodeId> =
+            node.children.iter().copied().filter(|child| self.is_turn(*child) && !self.restitched.contains(child)).collect();
         if turns.len() < 2 { Vec::new() } else { turns }
     }
 
@@ -289,17 +291,18 @@ pub fn build(path: &Path) -> Result<Conversation, ThreadError> {
 
     let mut roots = resolve_parents(&mut nodes, &provisional, &ids, &mut diagnostics);
     sever_cycles(&mut nodes, &mut roots, &provisional, &mut diagnostics);
-    let inline = lift_inline_sidechains(&mut nodes);
+    let (inline, restitched) = lift_inline_sidechains(&mut nodes);
     order_and_mark_roots(&mut nodes, &mut roots);
     let (thread, chosen) = choose_threads(&nodes, &roots, state.leaf_uuid.as_deref(), &ids);
 
     let results = index_results(&nodes);
 
-    Ok(Conversation { nodes, ids, results, inline, roots, thread, chosen, state, diagnostics })
+    Ok(Conversation { nodes, ids, results, inline, roots, thread, chosen, restitched, state, diagnostics })
 }
 
-fn lift_inline_sidechains(nodes: &mut [Node]) -> HashMap<Box<str>, NodeId> {
+fn lift_inline_sidechains(nodes: &mut [Node]) -> (HashMap<Box<str>, NodeId>, HashSet<NodeId>) {
     let mut lifted = HashMap::new();
+    let mut restitched = HashSet::new();
     let starts: Vec<(NodeId, NodeId)> = nodes
         .iter()
         .filter(|node| node.is_sidechain())
@@ -311,7 +314,7 @@ fn lift_inline_sidechains(nodes: &mut [Node]) -> HashMap<Box<str>, NodeId> {
 
     for (start, parent) in starts {
         let Some(tool_use_id) = spawning_call(nodes, parent) else { continue };
-        restitch(nodes, start, parent);
+        restitched.extend(restitch(nodes, start, parent));
         if let Some(node) = nodes.get_mut(parent.index()) {
             node.children.retain(|child| *child != start);
         }
@@ -320,10 +323,10 @@ fn lift_inline_sidechains(nodes: &mut [Node]) -> HashMap<Box<str>, NodeId> {
         }
         lifted.insert(tool_use_id, start);
     }
-    lifted
+    (lifted, restitched)
 }
 
-fn restitch(nodes: &mut [Node], start: NodeId, parent: NodeId) {
+fn restitch(nodes: &mut [Node], start: NodeId, parent: NodeId) -> Vec<NodeId> {
     let mut stack = vec![start];
     let mut rejoining = Vec::new();
     while let Some(id) = stack.pop() {
@@ -336,6 +339,7 @@ fn restitch(nodes: &mut [Node], start: NodeId, parent: NodeId) {
             }
         }
     }
+    let mut reparented = Vec::new();
     for (inside, child) in rejoining {
         if let Some(node) = nodes.get_mut(inside.index()) {
             node.children.retain(|found| *found != child);
@@ -346,7 +350,9 @@ fn restitch(nodes: &mut [Node], start: NodeId, parent: NodeId) {
         if let Some(node) = nodes.get_mut(parent.index()) {
             node.children.push(child);
         }
+        reparented.push(child);
     }
+    reparented
 }
 
 fn spawning_call(nodes: &[Node], parent: NodeId) -> Option<Box<str>> {
@@ -880,6 +886,31 @@ mod tests {
         let (_dir, path) = write(&[r#"{"type":"custom-title","customTitle":"Renamed","sessionId":"s1"}"#]);
         let conversation = build(&path).expect("a conversation");
         assert_eq!(conversation.state().custom_title.as_deref(), Some("Renamed"));
+    }
+
+    #[test]
+    fn restitching_an_inline_sidechain_does_not_manufacture_an_alternate() {
+        let (_dir, path) = write(&[
+            r#"{"parentUuid":null,"isSidechain":false,"message":{"role":"user","content":"hi"},"type":"user","origin":{"kind":"human"},"uuid":"u1","timestamp":"2026-01-01T00:00:00Z","sessionId":"s1"}"#,
+            r#"{"parentUuid":"u1","isSidechain":false,"message":{"model":"m","id":"msg1","role":"assistant","content":[{"type":"tool_use","id":"toolu1","name":"Task","input":{}}]},"type":"assistant","uuid":"a1","timestamp":"2026-01-01T00:01:00Z","sessionId":"s1"}"#,
+            r#"{"parentUuid":"a1","isSidechain":true,"message":{"role":"user","content":"sidechain prompt"},"type":"user","uuid":"s1","timestamp":"2026-01-01T00:02:00Z","sessionId":"s1"}"#,
+            r#"{"parentUuid":"s1","isSidechain":true,"message":{"model":"m","id":"msg2","role":"assistant","content":[{"type":"text","text":"sidechain reply"}]},"type":"assistant","uuid":"s2","timestamp":"2026-01-01T00:03:00Z","sessionId":"s1"}"#,
+            r#"{"parentUuid":"s2","isSidechain":false,"message":{"model":"m","id":"msg3","role":"assistant","content":[{"type":"text","text":"rejoined"}]},"type":"assistant","uuid":"a2","timestamp":"2026-01-01T00:04:00Z","sessionId":"s1"}"#,
+            r#"{"parentUuid":"a1","isSidechain":false,"message":{"role":"user","content":"a genuine rewind"},"type":"user","origin":{"kind":"human"},"uuid":"u2","timestamp":"2026-01-01T00:05:00Z","sessionId":"s1"}"#,
+        ]);
+        let conversation = build(&path).expect("a conversation");
+        let spawn = conversation.id_of("a1").expect("the spawning turn");
+        let rejoined = conversation.id_of("a2").expect("the restitched rejoin");
+        let rewind = conversation.id_of("u2").expect("the genuine alternate");
+        let node = conversation.node(spawn).expect("the spawning node");
+        assert_eq!(node.children.len(), 2, "the rejoin and the genuine rewind both land on the spawning turn");
+        assert!(node.children.contains(&rejoined));
+        assert!(node.children.contains(&rewind));
+        assert_eq!(
+            conversation.alternates(spawn),
+            Vec::new(),
+            "the restitched rejoin must not be counted as a second alternate branch"
+        );
     }
 
     #[test]
