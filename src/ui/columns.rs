@@ -6,7 +6,6 @@ use crate::ui::app::{CHROME_ROWS, Mode};
 
 const MIN_WIDTH: u16 = 12;
 const SHARES: [u16; 3] = [1, 1, 2];
-const LABEL_ROW: u16 = 1;
 
 pub fn narrow() -> u16 {
     let total = SHARES.iter().fold(0u16, |sum, &share| sum.saturating_add(share));
@@ -45,7 +44,7 @@ pub fn conversation_width(area: Size, mode: Mode) -> u16 {
 }
 
 pub fn conversation_height(area: Size) -> usize {
-    usize::from(area.height.saturating_sub(CHROME_ROWS).saturating_sub(LABEL_ROW)).max(1)
+    usize::from(area.height.saturating_sub(CHROME_ROWS)).max(1)
 }
 
 fn split(width: u16, shares: &[u16]) -> Vec<u16> {
@@ -139,5 +138,11 @@ mod tests {
     #[test]
     fn a_zero_width_terminal_does_not_panic() {
         let _ = layout(0);
+    }
+
+    #[test]
+    fn the_conversation_height_matches_the_rows_a_list_column_gets() {
+        let area = Size::new(60, 24);
+        assert_eq!(conversation_height(area), usize::from(area.height.saturating_sub(CHROME_ROWS)));
     }
 }

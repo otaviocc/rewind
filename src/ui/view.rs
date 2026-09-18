@@ -647,6 +647,20 @@ mod tests {
     }
 
     #[test]
+    fn scrolled_to_the_bottom_the_conversation_fills_every_row_it_is_given() {
+        let mut app = app(Size::new(60, 24));
+        app.set_projects(app.generation(), Ok(vec![project("a", true)]));
+        app.set_sessions(app.generation(), vec![session("s1", "a session")]);
+        app.apply(Action::ToggleFocusMode);
+        with_conversation(&mut app, &"prose ".repeat(200));
+
+        app.apply(Action::Move(Motion::Bottom));
+        let buffer = frame(&app, Size::new(60, 24));
+        let last_row = buffer.area.height.saturating_sub(3);
+        assert!(!text_row(&buffer, last_row).is_empty(), "the last content row went unused after scrolling to the end");
+    }
+
+    #[test]
     fn a_terminal_too_short_for_the_chrome_draws_what_it_can_and_does_not_panic() {
         let app = app(Size::new(40, 3));
         let _ = frame(&app, Size::new(40, 3));
