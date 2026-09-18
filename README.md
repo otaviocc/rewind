@@ -14,7 +14,7 @@ never writes to `~/.claude`.
  rewind · vademecum · Theme loader fallback bug · code-review      ?  help
 ────────────────────────────────────────────────────────────────────────────
  Projects            Sessions                  Conversation
- ▸ rewind      2d  4 │ ▸ Rewind TUI: PRD…  2d  4 │ ▎ you
+ ▸ rewind      2d  4 │   Rewind TUI: PRD…  2d  4 │ ▎ you
    vademecum   5d 36 │   fallout-vault…    5d 18 │ ▎ the fallback picks the wrong
    tr-ios      1w 95 │   Theme loader…     1w 61 │ ▎ theme when the file is partial
    .dotfiles   2w 27 │   minimap flicker…  3w  9 │
@@ -32,6 +32,10 @@ never writes to `~/.claude`.
 ────────────────────────────────────────────────────────────────────────────
  vademecum · 61 msgs · main · 148.2k in / 22.9k out · 12/61 · 19%
 ```
+
+The column with the keyboard names itself twice: its heading takes the accent colour, and
+its selected row takes a solid band while the other columns keep a faint one. `Tab` moves
+both.
 
 *Under construction — see the milestones for what works today.*
 
@@ -142,7 +146,7 @@ The element keys are `body`, `muted`, `label`, `human_gutter`, `assistant_gutter
 `inline_code`, `code_block`, `code_block_lang`, `link`, `quote`, `quote_gutter`,
 `list_bullet`, `table_header`, `table_border`, `rule`, `html`, `header_title`, `status`,
 `status_notice`, `status_error`, `cursor_line`, `search_match`, `search_current`, `selection`,
-`help_window`, `scroll_progress` and `hint`.
+`help_window`, `scroll_progress`, `hint`, `column_title` and `column_title_active`.
 
 ### Inheriting
 
