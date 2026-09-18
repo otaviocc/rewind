@@ -14,7 +14,7 @@ use crate::domain::subagent::{Agent, Agents};
 use crate::domain::thread::{Conversation, NodeId, NodeKind, ThreadError};
 use crate::domain::tool;
 use crate::render::line::RenderedLine;
-use crate::render::message::{self, Anchor, Transcript};
+use crate::render::message::{self, Anchor, Position, Transcript};
 use crate::render::{Ctx as RenderCtx, Expanded, Outputs, Overflow};
 use crate::ui::input::{Action, Motion};
 use crate::ui::{Options, columns, listing};
@@ -87,6 +87,10 @@ impl Rendered {
         &self.transcript.anchors
     }
 
+    pub const fn transcript(&self) -> &Transcript {
+        &self.transcript
+    }
+
     pub const fn conversation(&self) -> &Conversation {
         &self.conversation
     }
@@ -142,6 +146,13 @@ struct Frame {
     view: View,
     call_cursor: Option<usize>,
     label: Option<Box<str>>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct Anchored {
+    position: Option<Position>,
+    cursor: Option<Box<str>>,
+    row: Option<usize>,
 }
 
 pub struct App {
@@ -262,6 +273,37 @@ impl App {
         self.anchors().get(cursor).map(|anchor| anchor.line)
     }
 
+    fn anchored(&self) -> Anchored {
+        let Loadable::Ready(rendered) = &self.conversation else { return Anchored::default() };
+        let cursor = self.call_cursor.and_then(|cursor| self.anchors().get(cursor)).map(|anchor| anchor.id.clone());
+        Anchored {
+            position: rendered.transcript().position(self.conversation_pane.top),
+            row: cursor.as_ref().and_then(|_| self.cursor_line()).map(|line| line.saturating_sub(self.conversation_pane.top)),
+            cursor,
+        }
+    }
+
+    fn restore(&mut self, anchored: &Anchored) {
+        self.call_cursor = anchored
+            .cursor
+            .as_ref()
+            .and_then(|key| self.anchors().iter().position(|anchor| anchor.id == *key))
+            .or_else(|| self.call_cursor.filter(|_| !self.anchors().is_empty()));
+        self.clamp_call_cursor();
+
+        let last = self.last(Column::Conversation);
+        if let (Some(row), Some(line)) = (anchored.row, self.cursor_line()) {
+            self.conversation_pane.top = line.saturating_sub(row).min(last);
+            return;
+        }
+        let Loadable::Ready(rendered) = &self.conversation else { return };
+        if let Some(line) = anchored.position.and_then(|position| rendered.transcript().line_of(position)) {
+            self.conversation_pane.top = line.min(last);
+            return;
+        }
+        self.conversation_pane.top = self.conversation_pane.top.min(last);
+    }
+
     pub const fn focused(&self) -> Column {
         self.focused
     }
@@ -370,14 +412,14 @@ impl App {
     pub fn reflow(&mut self) {
         let width = columns::conversation_width(self.area, self.mode);
         let revision = self.view.revision;
-        let Loadable::Ready(rendered) = &mut self.conversation else { return };
-        if rendered.wrapped_at == width && rendered.revision == revision {
+        let stale = match &self.conversation {
+            Loadable::Ready(rendered) => rendered.wrapped_at != width || rendered.revision != revision,
+            Loadable::Loading | Loadable::Failed(_) => false,
+        };
+        if !stale {
             return;
         }
-        rendered.rewrap(width, &self.view);
-        let last = rendered.lines().len().saturating_sub(1);
-        self.conversation_pane.top = self.conversation_pane.top.min(last);
-        self.clamp_call_cursor();
+        self.rerender();
     }
 
     pub fn set_projects(&mut self, generation: u64, result: Result<Vec<Project>, ProjectError>) {
@@ -464,7 +506,7 @@ impl App {
             self.queue_tool_output(&id);
         }
         self.view.bump();
-        self.anchor_at_row(&id, row);
+        self.anchor_at(&id, row);
     }
 
     fn toggle_all_calls(&mut self) {
@@ -484,26 +526,29 @@ impl App {
         }
         self.view.bump();
         match anchor {
-            Some(anchor) => self.anchor_at_row(&anchor, row),
+            Some(anchor) => self.anchor_at(&anchor, row),
             None => self.rerender(),
         }
     }
 
     fn rerender(&mut self) {
+        let anchored = self.anchored();
         let width = columns::conversation_width(self.area, self.mode);
         if let Loadable::Ready(rendered) = &mut self.conversation {
             rendered.rewrap(width, &self.view);
         }
-        self.clamp_call_cursor();
+        self.restore(&anchored);
     }
 
-    fn anchor_at_row(&mut self, id: &str, row: Option<usize>) {
-        self.rerender();
-        let Some(found) = self.anchors().iter().position(|anchor| &*anchor.id == id) else { return };
-        self.call_cursor = Some(found);
-        match row.and_then(|row| self.cursor_line().map(|line| line.saturating_sub(row))) {
-            Some(top) => self.conversation_pane.top = top.min(self.last(Column::Conversation)),
-            None => self.reveal_call_cursor(),
+    fn anchor_at(&mut self, id: &str, row: Option<usize>) {
+        let anchored = Anchored { position: None, cursor: Some(Box::from(id)), row };
+        let width = columns::conversation_width(self.area, self.mode);
+        if let Loadable::Ready(rendered) = &mut self.conversation {
+            rendered.rewrap(width, &self.view);
+        }
+        self.restore(&anchored);
+        if row.is_none() {
+            self.reveal_call_cursor();
         }
     }
 
@@ -949,6 +994,83 @@ mod tests {
         app.apply(Action::Ascend);
         assert_eq!(app.depth(), 0);
         assert!(app.lines().iter().any(|line| line.text().contains("Glob")), "the session came back");
+    }
+
+    fn wide_transcript(area: Size) -> App {
+        let dir = tempfile::TempDir::new().expect("a temporary directory");
+        let path = dir.path().join("session.jsonl");
+        let prose = "the deflector array reads back one plate at a time and then the next ".repeat(6);
+        let mut lines = vec![
+            r#"{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:00Z","origin":{"kind":"human"},"message":{"role":"user","content":"start"}}"#
+                .to_owned(),
+        ];
+        for index in 0..12u32 {
+            let parent = if index == 0 { "u1".to_owned() } else { format!("a{}", index.saturating_sub(1)) };
+            lines.push(format!(
+                r#"{{"type":"assistant","uuid":"a{index}","parentUuid":"{parent}","sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:01Z","requestId":"q{index}","message":{{"model":"opus-5","id":"m{index}","role":"assistant","content":[{{"type":"text","text":"{prose}"}}]}}}}"#
+            ));
+        }
+        std::fs::write(&path, lines.join("\n") + "\n").expect("a written transcript");
+        let conversation = crate::domain::thread::build(&path).expect("a built conversation");
+        let mut app = app(area);
+        app.pending_conversation_path = Some(path);
+        app.set_conversation(app.conversation_generation(), Ok(Box::new(conversation)), Agents::default());
+        let _ = dir.keep();
+        app
+    }
+
+    fn node_at_top(app: &App) -> Option<crate::render::message::Position> {
+        let Loadable::Ready(rendered) = app.conversation() else { return None };
+        rendered.transcript().position(app.pane(Column::Conversation).top)
+    }
+
+    #[test]
+    fn a_resize_keeps_the_node_being_read_at_the_top_rather_than_the_line_number() {
+        let mut app = wide_transcript(Size::new(120, 20));
+        app.apply(Action::Focus { forward: true });
+        app.apply(Action::Focus { forward: true });
+        app.apply(Action::Move(Motion::HalfPage(1)));
+        app.apply(Action::Move(Motion::HalfPage(1)));
+        let before = node_at_top(&app).expect("a node at the top");
+        let top_before = app.pane(Column::Conversation).top;
+
+        app.apply(Action::Resize(Size::new(48, 20)));
+        app.reflow();
+
+        assert_ne!(app.lines().len(), 0);
+        assert_ne!(app.pane(Column::Conversation).top, top_before, "a narrower column must move the line index");
+        let after = node_at_top(&app).expect("a node at the top");
+        assert_eq!(after.node, before.node, "the same node is still at the top of the viewport");
+    }
+
+    #[test]
+    fn entering_focus_mode_keeps_the_node_being_read_at_the_top() {
+        let mut app = wide_transcript(Size::new(120, 20));
+        app.apply(Action::Focus { forward: true });
+        app.apply(Action::Focus { forward: true });
+        app.apply(Action::Move(Motion::HalfPage(1)));
+        let before = node_at_top(&app).expect("a node at the top");
+
+        app.apply(Action::ToggleFocusMode);
+        app.reflow();
+        assert_eq!(node_at_top(&app).map(|position| position.node), Some(before.node));
+
+        app.apply(Action::ToggleFocusMode);
+        app.reflow();
+        assert_eq!(node_at_top(&app).map(|position| position.node), Some(before.node), "and back again");
+    }
+
+    #[test]
+    fn the_call_cursor_is_re_found_by_key_rather_than_by_index() {
+        let mut app = with_calls(Size::new(120, 30));
+        app.apply(Action::NextCall { forward: true });
+        app.apply(Action::NextCall { forward: true });
+        let Some(key) = app.anchors().get(1).map(|anchor| anchor.id.clone()) else { panic!("a second call") };
+
+        app.apply(Action::Resize(Size::new(60, 30)));
+        app.reflow();
+        let cursor = app.call_cursor().expect("a cursor");
+        assert_eq!(app.anchors().get(cursor).map(|anchor| anchor.id.clone()), Some(key), "the same call, not the same index");
     }
 
     #[test]

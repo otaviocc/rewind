@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use ratatui::style::{Color, Modifier, Style};
 
 use crate::domain::block::{Block, Content, ImageSource};
-use crate::domain::thread::{Conversation, NodeKind};
+use crate::domain::thread::{Conversation, NodeId, NodeKind};
 use crate::render::line::{RenderedLine, StyledSpan, truncate};
 use crate::render::prose;
 use crate::render::{Ctx, tool};
@@ -87,6 +87,7 @@ struct Group {
     model: Option<String>,
     lines: Vec<RenderedLine>,
     anchors: Vec<Anchor>,
+    spans: Vec<Span>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,10 +97,39 @@ pub struct Anchor {
     pub agent: Option<Box<str>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Span {
+    pub node: NodeId,
+    pub line: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Position {
+    pub node: NodeId,
+    pub offset: usize,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Transcript {
     pub lines: Vec<RenderedLine>,
     pub anchors: Vec<Anchor>,
+    pub spans: Vec<Span>,
+}
+
+impl Transcript {
+    pub fn position(&self, line: usize) -> Option<Position> {
+        let index = self.spans.partition_point(|span| span.line <= line).checked_sub(1)?;
+        let span = self.spans.get(index)?;
+        Some(Position { node: span.node, offset: line.saturating_sub(span.line) })
+    }
+
+    pub fn line_of(&self, position: Position) -> Option<usize> {
+        let index = self.spans.iter().position(|span| span.node == position.node)?;
+        let span = self.spans.get(index)?;
+        let ceiling =
+            self.spans.get(index.saturating_add(1)).map_or_else(|| self.lines.len(), |next| next.line).saturating_sub(1);
+        Some(span.line.saturating_add(position.offset).min(ceiling.max(span.line)))
+    }
 }
 
 pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
@@ -118,7 +148,8 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
                 let mut lines = vec![header(human, None, inner)];
                 let mut anchors = Vec::new();
                 content(conversation, ctx, &record.message.content, &mut lines, &mut anchors);
-                groups.push(Group { rail: Rail::Human, model: None, lines, anchors });
+                let spans = vec![Span { node: id, line: 0 }];
+                groups.push(Group { rail: Rail::Human, model: None, lines, anchors, spans });
             }
             NodeKind::Assistant(turn) => {
                 let mut body = Vec::new();
@@ -130,16 +161,20 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
                 match groups.last_mut() {
                     Some(group) if group.rail == Rail::Assistant && group.model == turn.model => {
                         group.lines.push(RenderedLine::blank());
-                        shift(&mut anchors, group.lines.len());
+                        let at = group.lines.len();
+                        shift(&mut anchors, at);
                         group.lines.append(&mut body);
                         group.anchors.append(&mut anchors);
+                        group.spans.push(Span { node: id, line: at });
                     }
                     _ => {
                         let detail = model_label(turn.model.as_deref());
                         let mut lines = vec![header(ASSISTANT_LABEL, detail.as_deref(), inner)];
-                        shift(&mut anchors, lines.len());
+                        let at = lines.len();
+                        shift(&mut anchors, at);
                         lines.append(&mut body);
-                        groups.push(Group { rail: Rail::Assistant, model: turn.model.clone(), lines, anchors });
+                        let spans = vec![Span { node: id, line: at }];
+                        groups.push(Group { rail: Rail::Assistant, model: turn.model.clone(), lines, anchors, spans });
                     }
                 }
             }
@@ -167,8 +202,13 @@ fn flatten(groups: Vec<Group>) -> Transcript {
             transcript.lines.push(RenderedLine::blank());
         }
         let mut anchors = group.anchors;
+        let mut spans = group.spans;
         shift(&mut anchors, transcript.lines.len());
+        for span in &mut spans {
+            span.line = span.line.saturating_add(transcript.lines.len());
+        }
         transcript.anchors.append(&mut anchors);
+        transcript.spans.append(&mut spans);
         transcript.lines.extend(railed(group.lines, group.rail.style()));
     }
     transcript
@@ -186,7 +226,7 @@ fn unreached(ctx: &Ctx<'_>, width: usize, reached: &HashSet<Box<str>>) -> Option
         anchors.push(Anchor { id: agent.id.clone(), line: lines.len(), agent: Some(agent.id.clone()) });
         lines.push(tool::unreached_line(agent, width, &styles));
     }
-    Some(Group { rail: Rail::Assistant, model: None, lines, anchors })
+    Some(Group { rail: Rail::Assistant, model: None, lines, anchors, spans: Vec::new() })
 }
 
 fn shift(anchors: &mut [Anchor], by: usize) {
@@ -518,6 +558,67 @@ mod tests {
         let lines = rendered(&[HUMAN, &assistant("a1", "u1", block)]);
         assert!(lines.contains(&"▎ thinking · 3 lines".to_owned()), "{lines:?}");
         assert!(!lines.iter().any(|line| line.contains("EqoBCkgI")), "the signature leaked: {lines:?}");
+    }
+
+    #[test]
+    fn every_rendered_node_gets_a_span_naming_the_line_it_starts_on() {
+        let built = built(&[HUMAN, &assistant("a1", "u1", PARAGRAPHS)]);
+        assert_eq!(built.spans.len(), 2, "one span per node that rendered");
+        let lines: Vec<usize> = built.spans.iter().map(|span| span.line).collect();
+        assert_eq!(lines, [0, 4], "the human turn at 0, the reply after the unrailed blank");
+        assert!(built.spans.windows(2).all(|pair| pair[0].line < pair[1].line), "spans are ascending");
+    }
+
+    #[test]
+    fn a_line_resolves_to_the_node_it_came_from_and_back_again() {
+        let built = built(&[HUMAN, &assistant("a1", "u1", PARAGRAPHS)]);
+        let Some(first) = built.spans.first().copied() else { panic!("a span") };
+        let Some(second) = built.spans.get(1).copied() else { panic!("two spans") };
+
+        let position = built.position(1).expect("a position inside the human turn");
+        assert_eq!(position.node, first.node);
+        assert_eq!(position.offset, 1);
+        assert_eq!(built.line_of(position), Some(1), "and it maps back to the same line");
+
+        let position = built.position(second.line).expect("a position at the reply");
+        assert_eq!(position.node, second.node);
+        assert_eq!(position.offset, 0);
+    }
+
+    #[test]
+    fn a_line_before_the_first_span_belongs_to_no_node() {
+        let built = Transcript::default();
+        assert_eq!(built.position(0), None, "an empty transcript anchors nothing");
+    }
+
+    #[test]
+    fn an_offset_past_the_end_of_its_node_is_clamped_rather_than_leaking_into_the_next() {
+        let built = built(&[HUMAN, &assistant("a1", "u1", PARAGRAPHS)]);
+        let Some(first) = built.spans.first().copied() else { panic!("a span") };
+        let Some(second) = built.spans.get(1).copied() else { panic!("two spans") };
+        let line = built.line_of(Position { node: first.node, offset: 99 }).expect("a clamped line");
+        assert!(line < second.line, "offset 99 in a two-line turn must not land in the reply");
+    }
+
+    #[test]
+    fn a_span_survives_a_rewrap_because_it_is_keyed_on_the_node_not_the_line() {
+        let dir = TempDir::new().expect("a temporary directory");
+        let path = dir.path().join("session.jsonl");
+        let lines = [HUMAN.to_owned(), assistant("a1", "u1", PARAGRAPHS)];
+        fs::write(&path, lines.join("\n") + "\n").expect("a written transcript");
+        let conversation = thread::build(&path).expect("a built conversation");
+
+        let wide = transcript(&conversation, &plain(60));
+        let narrow = transcript(&conversation, &plain(24));
+        assert_ne!(wide.lines.len(), narrow.lines.len(), "the two widths must actually differ");
+
+        let nodes = |built: &Transcript| built.spans.iter().map(|span| span.node).collect::<Vec<_>>();
+        assert_eq!(nodes(&wide), nodes(&narrow), "the same nodes, at different lines");
+        assert_ne!(
+            wide.spans.iter().map(|span| span.line).collect::<Vec<_>>(),
+            narrow.spans.iter().map(|span| span.line).collect::<Vec<_>>(),
+            "and the lines genuinely moved"
+        );
     }
 
     #[test]
