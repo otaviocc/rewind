@@ -54,10 +54,12 @@ pub enum Element {
     HelpWindow,
     ScrollProgress,
     Hint,
+    ColumnTitle,
+    ColumnTitleActive,
 }
 
 impl Element {
-    pub const ALL: [Self; 45] = [
+    pub const ALL: [Self; 47] = [
         Self::Body,
         Self::Muted,
         Self::Label,
@@ -103,6 +105,8 @@ impl Element {
         Self::HelpWindow,
         Self::ScrollProgress,
         Self::Hint,
+        Self::ColumnTitle,
+        Self::ColumnTitleActive,
     ];
 
     #[expect(
@@ -160,6 +164,8 @@ impl Element {
             Self::HelpWindow => "help_window",
             Self::ScrollProgress => "scroll_progress",
             Self::Hint => "hint",
+            Self::ColumnTitle => "column_title",
+            Self::ColumnTitleActive => "column_title_active",
         }
     }
 
@@ -185,7 +191,8 @@ pub fn default_style(element: Element, palette: &Palette) -> Style {
         | Element::TableBorder
         | Element::Rule
         | Element::Html
-        | Element::Hint => style.fg(palette.muted),
+        | Element::Hint
+        | Element::ColumnTitle => style.fg(palette.muted),
         Element::Label
         | Element::ToolName
         | Element::Heading
@@ -193,7 +200,7 @@ pub fn default_style(element: Element, palette: &Palette) -> Style {
         | Element::TableHeader
         | Element::HeaderTitle
         | Element::Subagent => style.add_modifier(Modifier::BOLD),
-        Element::HumanGutter => style.fg(palette.accent).add_modifier(Modifier::BOLD),
+        Element::HumanGutter | Element::ColumnTitleActive => style.fg(palette.accent).add_modifier(Modifier::BOLD),
         Element::AssistantGutter => style.fg(palette.notice).add_modifier(Modifier::DIM),
         Element::ToolSummary | Element::DiffContext | Element::Status | Element::CodeBlock => style,
         Element::ToolError | Element::StatusError | Element::DiffRemoved => style.fg(palette.error),

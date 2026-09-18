@@ -49,3 +49,5 @@ selection             fg white         bg blue
 help_window           fg reset         bg reset
 scroll_progress       fg cyan          bg -
 hint                  fg darkgray      bg -
+column_title          fg darkgray      bg -
+column_title_active   fg cyan          bg -             bold

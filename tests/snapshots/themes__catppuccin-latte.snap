@@ -49,3 +49,5 @@ selection             fg #4c4f69       bg #acb0be
 help_window           fg #4c4f69       bg #eff1f5
 scroll_progress       fg #8839ef       bg -
 hint                  fg #bcc0cc       bg -
+column_title          fg #bcc0cc       bg -
+column_title_active   fg #8839ef       bg -             bold

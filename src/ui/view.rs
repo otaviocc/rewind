@@ -181,12 +181,13 @@ fn column(area: Rect, buf: &mut Buffer, app: &App, which: Column, focused: bool)
     if area.width == 0 || area.height == 0 {
         return;
     }
-    row(area, buf, area.x, label(which), app.theme().style(Element::HeaderTitle));
+    let title = if focused { Element::ColumnTitleActive } else { Element::ColumnTitle };
+    row(area, buf, area.x, label(which), app.theme().style(title));
     let inner = Rect { y: area.y.saturating_add(1), height: area.height.saturating_sub(1), ..area };
     match which {
         Column::Projects => projects_rows(inner, buf, app, focused),
         Column::Sessions => sessions_rows(inner, buf, app, focused),
-        Column::Conversation => conversation_rows(inner, buf, app),
+        Column::Conversation => conversation_rows(inner, buf, app, focused),
     }
 }
 
@@ -207,9 +208,6 @@ fn projects_rows(area: Rect, buf: &mut Buffer, app: &App, focused: bool) {
         let Some(project) = projects.get(index) else { continue };
         let y = area.y.saturating_add(u16::try_from(row_index).unwrap_or(u16::MAX));
         let picked = index == pane.selected;
-        if picked {
-            buf.set_style(Rect { y, height: 1, ..area }, app.theme().style(Element::CursorLine));
-        }
         let marker = if !project.present {
             GONE
         } else if picked && focused {
@@ -225,6 +223,7 @@ fn projects_rows(area: Rect, buf: &mut Buffer, app: &App, focused: bool) {
             .map_or_else(|| project.path.display().to_string(), |name| name.to_string_lossy().into_owned());
         let info = format!("{} {}", age::relative(app.ctx.now, timestamp_of(project.last_activity)), project.sessions);
         text_and_info(Rect { y, height: 1, ..area }, buf, &name, &info, app);
+        band(Rect { y, height: 1, ..area }, buf, app, picked, focused);
     }
 }
 
@@ -237,19 +236,17 @@ fn sessions_rows(area: Rect, buf: &mut Buffer, app: &App, focused: bool) {
         let Some(session) = sessions.get(index) else { continue };
         let y = area.y.saturating_add(u16::try_from(row_index).unwrap_or(u16::MAX));
         let picked = index == pane.selected;
-        if picked {
-            buf.set_style(Rect { y, height: 1, ..area }, app.theme().style(Element::CursorLine));
-        }
         let marker = if picked && focused { CHEVRON } else { " " };
         row(Rect { y, height: 1, ..area }, buf, area.x, marker, app.theme().style(Element::Status));
 
         let age = session.last_activity.map_or_else(|| "-".to_owned(), |at| age::relative(app.ctx.now, at));
         let info = format!("{age} {}", session.messages);
         text_and_info(Rect { y, height: 1, ..area }, buf, &session.title, &info, app);
+        band(Rect { y, height: 1, ..area }, buf, app, picked, focused);
     }
 }
 
-fn conversation_rows(area: Rect, buf: &mut Buffer, app: &App) {
+fn conversation_rows(area: Rect, buf: &mut Buffer, app: &App, focused: bool) {
     let lines = app.lines();
     let top = app.pane(Column::Conversation).top;
     let last = lines.len().min(top.saturating_add(usize::from(area.height)));
@@ -260,10 +257,16 @@ fn conversation_rows(area: Rect, buf: &mut Buffer, app: &App) {
         let y = area.y.saturating_add(u16::try_from(row_index).unwrap_or(u16::MAX));
         let row = Rect { y, height: 1, ..area };
         painted(row, buf, line);
-        if cursor == Some(index) {
-            buf.set_style(row, app.theme().style(Element::CursorLine));
-        }
+        band(row, buf, app, cursor == Some(index), focused);
     }
+}
+
+fn band(area: Rect, buf: &mut Buffer, app: &App, picked: bool, focused: bool) {
+    if !picked {
+        return;
+    }
+    let element = if focused { Element::Selection } else { Element::CursorLine };
+    buf.set_style(area, app.theme().style(element));
 }
 
 fn painted(area: Rect, buf: &mut Buffer, line: &RenderedLine) {
@@ -572,6 +575,22 @@ mod tests {
         assert!(tinted > 0);
     }
 
+    fn with_tool_call(app: &mut App) {
+        use std::fs;
+
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().expect("a temporary directory");
+        let path = dir.path().join("session.jsonl");
+        let user = r#"{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:00Z","origin":{"kind":"human"},"message":{"role":"user","content":"scan the grid"}}"#;
+        let assistant = r#"{"type":"assistant","uuid":"a1","parentUuid":"u1","sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:01Z","requestId":"r1","message":{"id":"m1","role":"assistant","model":"opus-5","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/grid.rs"}}]}}"#;
+        fs::write(&path, format!("{user}\n{assistant}\n")).expect("a written transcript");
+        let conversation = crate::domain::thread::build(&path).expect("a built conversation");
+        let generation = app.conversation_generation();
+        app.set_conversation(generation, Ok(Box::new(conversation)), crate::domain::subagent::Agents::default());
+        app.reflow();
+    }
+
     fn with_conversation(app: &mut App, text: &str) {
         use std::fs;
 
@@ -639,6 +658,103 @@ mod tests {
     fn a_zero_area_terminal_does_not_panic() {
         let app = app(Size::new(0, 0));
         let _ = frame(&app, Size::new(0, 0));
+    }
+
+    #[test]
+    fn the_focused_column_header_takes_the_active_title_colour() {
+        let app = app(Size::new(120, 24));
+        let buffer = frame(&app, Size::new(120, 24));
+        let active = app.theme().style(Element::ColumnTitleActive).fg.unwrap_or_default();
+        let resting = app.theme().style(Element::ColumnTitle).fg.unwrap_or_default();
+        assert_ne!(active, resting, "the two title colours must differ or the cue says nothing");
+
+        for (column, x, _) in columns::placement(120, Mode::Browse) {
+            let want = if column == Column::Projects { active } else { resting };
+            assert_eq!(buffer[(x, 2)].fg, want, "the {column:?} header at {x}");
+        }
+    }
+
+    #[test]
+    fn an_unfocused_column_header_recedes_when_the_focus_moves_on() {
+        let mut app = app(Size::new(120, 24));
+        app.apply(Action::Focus { forward: true });
+        let buffer = frame(&app, Size::new(120, 24));
+        let active = app.theme().style(Element::ColumnTitleActive).fg.unwrap_or_default();
+        let resting = app.theme().style(Element::ColumnTitle).fg.unwrap_or_default();
+
+        for (column, x, _) in columns::placement(120, Mode::Browse) {
+            let want = if column == Column::Sessions { active } else { resting };
+            assert_eq!(buffer[(x, 2)].fg, want, "the {column:?} header at {x}");
+        }
+    }
+
+    #[test]
+    fn the_focused_selection_band_is_stronger_than_an_unfocused_one() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("a", true), project("b", true)]));
+        app.set_sessions(app.generation(), vec![session("s1", "a session"), session("s2", "another")]);
+
+        let selection = app.theme().style(Element::Selection).bg.unwrap_or_default();
+        let cursor = app.theme().style(Element::CursorLine).bg.unwrap_or_default();
+        assert_ne!(selection, cursor, "the two bands must differ or the cue says nothing");
+
+        let sessions_x = columns::placement(120, Mode::Browse)
+            .into_iter()
+            .find_map(|(column, x, _)| (column == Column::Sessions).then_some(x))
+            .expect("a sessions column");
+
+        let buffer = frame(&app, Size::new(120, 24));
+        assert_eq!(buffer[(0, 3)].bg, selection, "the focused projects row");
+        assert_eq!(buffer[(sessions_x, 3)].bg, cursor, "the unfocused sessions row");
+
+        app.apply(Action::Focus { forward: true });
+        let buffer = frame(&app, Size::new(120, 24));
+        assert_eq!(buffer[(0, 3)].bg, cursor, "the projects row once the focus left it");
+        assert_eq!(buffer[(sessions_x, 3)].bg, selection, "the sessions row once the focus arrived");
+    }
+
+    #[test]
+    fn the_focused_band_repaints_the_whole_row_so_nothing_reads_as_muted_against_it() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("a", true), project("b", true)]));
+        let buffer = frame(&app, Size::new(120, 24));
+        let selection = app.theme().style(Element::Selection);
+
+        let width = columns::placement(120, Mode::Browse)
+            .into_iter()
+            .find_map(|(column, _, width)| (column == Column::Projects).then_some(width))
+            .expect("a projects column");
+        for x in 0..width {
+            assert_eq!(buffer[(x, 3)].bg, selection.bg.unwrap_or_default(), "the band stops short at {x}");
+            assert_eq!(buffer[(x, 3)].fg, selection.fg.unwrap_or_default(), "the age and count keep the hint colour at {x}");
+        }
+    }
+
+    #[test]
+    fn the_conversation_cursor_line_takes_the_focused_band() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("a", true)]));
+        app.set_sessions(app.generation(), vec![session("s1", "a session")]);
+        with_tool_call(&mut app);
+        app.apply(Action::Focus { forward: true });
+        app.apply(Action::Focus { forward: true });
+        app.apply(Action::NextCall { forward: true });
+        assert!(app.cursor_line().is_some(), "the call cursor never landed on a tool call");
+
+        let x = columns::placement(120, Mode::Browse)
+            .into_iter()
+            .find_map(|(column, x, _)| (column == Column::Conversation).then_some(x))
+            .expect("a conversation column");
+        let y = 3 + u16::try_from(app.cursor_line().unwrap_or(0)).unwrap_or(0);
+
+        let buffer = frame(&app, Size::new(120, 24));
+        let selection = app.theme().style(Element::Selection).bg.unwrap_or_default();
+        assert_eq!(buffer[(x, y)].bg, selection, "the focused conversation cursor line");
+
+        app.apply(Action::Focus { forward: false });
+        let buffer = frame(&app, Size::new(120, 24));
+        let cursor = app.theme().style(Element::CursorLine).bg.unwrap_or_default();
+        assert_eq!(buffer[(x, y)].bg, cursor, "the conversation cursor line once the focus left it");
     }
 
     #[test]

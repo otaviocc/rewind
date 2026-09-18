@@ -49,3 +49,5 @@ selection             fg #e8ecf2       bg #3a4152
 help_window           fg reset         bg reset
 scroll_progress       fg #d9a05b       bg -
 hint                  fg #4f5561       bg -
+column_title          fg #4f5561       bg -
+column_title_active   fg #d9a05b       bg -             bold
