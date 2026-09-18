@@ -1,6 +1,6 @@
 //! Syntax highlighting for fenced code blocks, and the process-global cache in front of it.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
@@ -13,7 +13,7 @@ use syntect::util::LinesWithEndings;
 use crate::render::line::{self, StyledSpan};
 use crate::theme::{Element, Theme as RewindTheme};
 
-const THEME: &str = "base16-ocean.dark";
+const FALLBACK: &str = "base16-ocean.dark";
 const PLAIN: &str = "Plain Text";
 const CAPACITY: usize = 256;
 
@@ -24,13 +24,15 @@ pub fn highlight(lang: Option<&str>, text: &str, theme: &RewindTheme) -> CodeLin
     let syntax = syntax_for(syntaxes, lang, text);
     let fallback = theme.style(Element::CodeBlock);
 
+    let (name, syntect_theme) = syntect_theme(theme.syntax_theme.as_deref());
+
     let key =
-        Key { syntax: syntax.map_or("", |syntax| syntax.name.as_str()).to_owned(), theme: THEME.to_owned(), text: hash(text) };
+        Key { syntax: syntax.map_or("", |syntax| syntax.name.as_str()).to_owned(), theme: name.to_owned(), text: hash(text) };
     if let Some(hit) = cached(&key) {
         return hit;
     }
 
-    let lines = Arc::new(match (syntax, syntect_theme()) {
+    let lines = Arc::new(match (syntax, syntect_theme) {
         (Some(syntax), Some(syntect_theme)) => paint(syntaxes, syntax, syntect_theme, text),
         _ => unpainted(text, fallback),
     });
@@ -100,9 +102,31 @@ fn syntax_set() -> &'static SyntaxSet {
     })
 }
 
-fn syntect_theme() -> Option<&'static SyntectTheme> {
+fn theme_set() -> &'static ThemeSet {
     static THEMES: OnceLock<ThemeSet> = OnceLock::new();
-    THEMES.get_or_init(ThemeSet::load_defaults).themes.get(THEME)
+    THEMES.get_or_init(ThemeSet::load_defaults)
+}
+
+fn syntect_theme(name: Option<&str>) -> (&'static str, Option<&'static SyntectTheme>) {
+    let themes = theme_set();
+
+    if let Some(name) = name {
+        if let Some((name, theme)) = themes.themes.get_key_value(name) {
+            return (name, Some(theme));
+        }
+        warn(name);
+    }
+
+    (FALLBACK, themes.themes.get(FALLBACK))
+}
+
+fn warn(name: &str) {
+    static SAID: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
+    let said = SAID.get_or_init(|| Mutex::new(BTreeSet::new()));
+    let mut said = said.lock().unwrap_or_else(PoisonError::into_inner);
+    if said.insert(name.to_owned()) {
+        eprintln!("rewind: no syntax theme named {name:?}; using {FALLBACK}");
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -153,8 +177,45 @@ mod tests {
         RewindTheme::default()
     }
 
+    fn themed(syntax_theme: &str) -> RewindTheme {
+        let mut theme = RewindTheme::default();
+        theme.syntax_theme = Some(syntax_theme.to_owned());
+        theme
+    }
+
     fn styles(lines: &[Vec<StyledSpan>]) -> Vec<Style> {
         lines.iter().flatten().map(|span| span.style).collect()
+    }
+
+    #[test]
+    fn a_theme_that_names_a_syntax_theme_paints_a_different_set_of_colours() {
+        const CODE: &str = "fn main() {\n    let x = \"hi\";\n}\n";
+        let ocean = styles(&highlight(Some("rust"), CODE, &themed("base16-ocean.dark")));
+        let mocha = styles(&highlight(Some("rust"), CODE, &themed("base16-mocha.dark")));
+        assert_ne!(ocean, mocha, "two syntax themes painted the same block identically");
+    }
+
+    #[test]
+    fn a_syntax_theme_nobody_bundles_falls_back_rather_than_dropping_the_highlighting() {
+        const CODE: &str = "fn fallen_back() {}\n";
+        let unknown = styles(&highlight(Some("rust"), CODE, &themed("no-such-syntax-theme")));
+        let fallback = styles(&highlight(Some("rust"), CODE, &themed(FALLBACK)));
+        assert_eq!(unknown, fallback, "an unknown syntax theme did not land on the fallback");
+        assert!(unknown.iter().collect::<std::collections::HashSet<_>>().len() > 1, "the highlighting was dropped");
+    }
+
+    #[test]
+    fn saying_nothing_about_a_syntax_theme_is_the_fallback() {
+        const CODE: &str = "fn unsaid() {}\n";
+        assert_eq!(styles(&highlight(Some("rust"), CODE, &theme())), styles(&highlight(Some("rust"), CODE, &themed(FALLBACK))));
+    }
+
+    #[test]
+    fn the_cache_does_not_hand_one_syntax_theme_another_ones_colours() {
+        const CODE: &str = "fn cache_keyed_by_theme() {}\n";
+        let first = styles(&highlight(Some("rust"), CODE, &themed("base16-ocean.dark")));
+        let second = styles(&highlight(Some("rust"), CODE, &themed("InspiredGitHub")));
+        assert_ne!(first, second, "the second theme was served the first one's cached block");
     }
 
     #[test]
