@@ -14,18 +14,18 @@ never writes to `~/.claude`.
  rewind · vademecum · Theme loader fallback bug                    ?  help
 ────────────────────────────────────────────────────────────────────────────
  Projects            Sessions                  Conversation
- ▸ rewind      2d  4 │ ▸ Rewind TUI: PRD…  2d  4 │ ▎you
-   vademecum   5d 36 │   fallout-vault…    5d 18 │ the fallback picks the wrong
-   tr-ios      1w 95 │   Theme loader…     1w 61 │ theme when the file is partial
+ ▸ rewind      2d  4 │ ▸ Rewind TUI: PRD…  2d  4 │ ▎ you
+   vademecum   5d 36 │   fallout-vault…    5d 18 │ ▎ the fallback picks the wrong
+   tr-ios      1w 95 │   Theme loader…     1w 61 │ ▎ theme when the file is partial
    .dotfiles   2w 27 │   minimap flicker…  3w  9 │
- ⊘ old-spike   6mo 3 │                          │ ▎claude  opus-5
-                     │                          │ Right — `merge` is folding the
-                     │                          │ base in the wrong direction.
-                     │                          │
-                     │                          │ ▸ Read  src/theme/loader.rs  903 lines
-                     │                          │ ▾ Edit  src/theme/loader.rs
-                     │                          │     - base.or(user)
-                     │                          │     + user.or(base)
+ ⊘ old-spike   6mo 3 │                          │ ▎ claude · opus-5
+                     │                          │ ▎ Right — `merge` is folding the
+                     │                          │ ▎ base in the wrong direction.
+                     │                          │ ▎
+                     │                          │ ▎ ▸ Read  src/theme/loader.rs  903 lines
+                     │                          │ ▎ ▾ Edit  src/theme/loader.rs
+                     │                          │ ▎     - base.or(user)
+                     │                          │ ▎     + user.or(base)
 ────────────────────────────────────────────────────────────────────────────
  vademecum · 61 msgs · main · 148.2k in / 22.9k out · 12/61 · 19%
 ```
