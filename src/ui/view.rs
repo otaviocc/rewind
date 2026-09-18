@@ -321,7 +321,7 @@ fn statusbar(area: Rect, buf: &mut Buffer, app: &App) {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::SystemTime;
 
     use ratatui::Terminal;
@@ -330,6 +330,7 @@ mod tests {
 
     use super::*;
     use crate::ctx::Ctx;
+    use crate::domain::diagnostics::Diagnostics;
     use crate::domain::project::{Project, Resolution};
     use crate::domain::session::{Session, TitleSource};
     use crate::ui::Options;
@@ -368,6 +369,7 @@ mod tests {
             records: 10,
             messages: 6,
             continued_in: None,
+            diagnostics: Diagnostics::new(Path::new("session.jsonl")),
         }
     }
 

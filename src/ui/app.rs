@@ -828,6 +828,7 @@ mod tests {
     use std::time::SystemTime;
 
     use super::*;
+    use crate::domain::diagnostics::Diagnostics;
     use crate::domain::project::Resolution;
 
     fn ctx() -> Ctx {
@@ -862,6 +863,7 @@ mod tests {
             records: 1,
             messages: 1,
             continued_in: None,
+            diagnostics: Diagnostics::new(Path::new("session.jsonl")),
         }
     }
 

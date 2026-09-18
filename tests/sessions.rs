@@ -5,6 +5,7 @@
 mod common;
 
 use common::fixture_tree;
+use rewind::domain::diagnostics::Defect;
 use rewind::domain::session::{TitleSource, discover};
 
 #[test]
@@ -82,4 +83,36 @@ fn a_project_with_no_transcripts_discovers_no_sessions() {
     let tree = fixture_tree();
     let shuttlebay = tree.claude_dir().join("projects").join(tree.project_dir("Developer/shuttlebay"));
     assert!(discover(&shuttlebay).is_empty());
+}
+
+#[test]
+fn the_scan_tier_reports_the_two_defects_it_can_see_without_parsing_a_record() {
+    let tree = fixture_tree();
+    let holodeck = tree.claude_dir().join("projects").join(tree.project_dir("Developer/holodeck"));
+    let sessions = discover(&holodeck);
+    let session = sessions
+        .iter()
+        .find(|session| session.id == "44444444-4444-4444-8444-444444444444")
+        .expect("the drift session was discovered");
+
+    let defects = session.diagnostics.defects();
+    assert_eq!(session.diagnostics.count(), 2, "the unknown content block needs the load tier: {defects:?}");
+    assert!(
+        defects.iter().any(|defect| matches!(defect, Defect::UnknownRecord { kind, .. } if kind == "telemetry-latch")),
+        "{defects:?}"
+    );
+    assert!(defects.iter().any(|defect| matches!(defect, Defect::Truncated { .. })), "{defects:?}");
+}
+
+#[test]
+fn a_session_with_nothing_wrong_with_it_reports_no_defects() {
+    let tree = fixture_tree();
+    let holodeck = tree.claude_dir().join("projects").join(tree.project_dir("Developer/holodeck"));
+    let sessions = discover(&holodeck);
+    let session = sessions
+        .iter()
+        .find(|session| session.id == "11111111-1111-4111-8111-111111111111")
+        .expect("the baseline session was discovered");
+
+    assert_eq!(session.diagnostics.defects(), [], "the baseline session is the readable one");
 }

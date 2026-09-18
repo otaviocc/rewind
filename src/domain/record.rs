@@ -71,6 +71,25 @@ fn unknown_block_kinds(content: &Content) -> Vec<&str> {
     }
 }
 
+const CONCRETE_TYPES: [&str; 12] = [
+    "user",
+    "assistant",
+    "system",
+    "attachment",
+    "summary",
+    "custom-title",
+    "ai-title",
+    "agent-name",
+    "last-prompt",
+    "cost-state",
+    "continued-in",
+    "fork-context-ref",
+];
+
+pub fn is_known_type(kind: &str) -> bool {
+    CONCRETE_TYPES.contains(&kind) || latch::is_known_latch(kind)
+}
+
 pub fn parse(line: &[u8]) -> Result<Record, ParseError> {
     let kind = scan::top_level_str(line, "type").ok_or(ParseError::NoType)?;
     match kind {
@@ -400,6 +419,20 @@ mod tests {
         let line = br#"{"type":"telemetry-latch","sessionId":"s1"}"#;
         let error = parse(line).expect_err("telemetry-latch is not a known type");
         assert!(matches!(error, ParseError::UnknownType(kind) if kind == "telemetry-latch"));
+    }
+
+    #[test]
+    fn the_metadata_tier_and_the_load_tier_agree_on_what_is_known() {
+        for kind in CONCRETE_TYPES {
+            assert!(is_known_type(kind), "{kind} parses here but reads as drift at the metadata tier");
+            let line = format!(r#"{{"type":"{kind}"}}"#);
+            assert!(
+                !matches!(parse(line.as_bytes()), Err(ParseError::UnknownType(_))),
+                "{kind} is known at the metadata tier but reads as drift here"
+            );
+        }
+        assert!(is_known_type("queue-operation"), "the generic latches are known too");
+        assert!(!is_known_type("telemetry-latch"));
     }
 
     #[test]

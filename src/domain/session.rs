@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use thiserror::Error;
 
+use crate::domain::diagnostics::{Defect, Diagnostics};
 use crate::domain::project;
+use crate::domain::record;
 use crate::domain::scan;
 
 #[derive(Debug, Error)]
@@ -40,6 +42,7 @@ pub struct Session {
     pub records: u64,
     pub messages: u64,
     pub continued_in: Option<String>,
+    pub diagnostics: Diagnostics,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -122,14 +125,24 @@ fn load_session(path: &Path, id: &str, project_dir: &Path) -> Result<Session, Se
     let mut first_activity: Option<Timestamp> = None;
     let mut last_activity: Option<Timestamp> = None;
 
+    let mut diagnostics = Diagnostics::new(path);
     let mut start = 0usize;
+    let mut line_number: u64 = 0;
     for end in newlines {
         let line = bytes.get(start..end).unwrap_or_default();
         start = end.saturating_add(1);
+        line_number = line_number.saturating_add(1);
         if line.is_empty() {
             continue;
         }
         let fields = scan_line(line);
+        match fields.record_type {
+            None => diagnostics.push(Defect::Unparseable { line: line_number, message: "no top-level type".to_owned() }),
+            Some(kind) if !record::is_known_type(kind) => {
+                diagnostics.push(Defect::UnknownRecord { line: line_number, kind: kind.to_owned() });
+            }
+            Some(_) => {}
+        }
         if fields.is_sidechain {
             continue;
         }
@@ -175,6 +188,10 @@ fn load_session(path: &Path, id: &str, project_dir: &Path) -> Result<Session, Se
         }
     }
 
+    if !bytes.get(start..).unwrap_or_default().is_empty() {
+        diagnostics.push(Defect::Truncated { line: line_number.saturating_add(1) });
+    }
+
     let messages = human_turns.saturating_add(u64::try_from(assistant_pairs.len()).unwrap_or(u64::MAX));
     let custom_title_file = if latches.custom_title.is_none() { custom_title_file(project_dir, id) } else { None };
     let (title, title_source) = resolve_title(&latches, custom_title_file.as_deref(), first_human_message.as_deref())
@@ -192,6 +209,7 @@ fn load_session(path: &Path, id: &str, project_dir: &Path) -> Result<Session, Se
         records,
         messages,
         continued_in: latches.continued_in,
+        diagnostics,
     })
 }
 
