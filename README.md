@@ -11,7 +11,7 @@ and the conversation rendered as something worth reading. It makes no network re
 never writes to `~/.claude`.
 
 ```
- rewind · vademecum · Theme loader fallback bug                    ?  help
+ rewind · vademecum · Theme loader fallback bug · code-review      ?  help
 ────────────────────────────────────────────────────────────────────────────
  Projects            Sessions                  Conversation
  ▸ rewind      2d  4 │ ▸ Rewind TUI: PRD…  2d  4 │ ▎ you
@@ -27,6 +27,7 @@ never writes to `~/.claude`.
                      │                          │ ▎   ┃ @@ -18,3 +18,3 @@
                      │                          │ ▎   ┃ -    base.or(user)
                      │                          │ ▎   ┃ +    user.or(base)
+                     │                          │ ▎ ▸ Agent  code-review · check the fix  ⏎   ok
 ────────────────────────────────────────────────────────────────────────────
  vademecum · 61 msgs · main · 148.2k in / 22.9k out · 12/61 · 19%
 ```
@@ -48,7 +49,7 @@ cargo install --locked --path .
 | `g` `G` | top · bottom of the column |
 | `Ctrl-d` `Ctrl-u` | half page down · up |
 | `Enter` | descend · expand the selected tool call · enter a subagent |
-| `Esc` | back out |
+| `Esc` | leave a subagent · back out |
 | `f` | focus the conversation full-width |
 | `/` | filter the list |
 | `?` | search everything |
