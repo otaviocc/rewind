@@ -18,7 +18,7 @@ use crate::render::line::RenderedLine;
 use crate::render::message::{self, Anchor, Position, Transcript};
 use crate::render::{Branches, Ctx as RenderCtx, Expanded, Outputs, Overflow};
 use crate::ui::input::{Action, Motion};
-use crate::ui::{Options, columns, listing};
+use crate::ui::{Options, columns, diagnostics, listing};
 
 pub const CHROME_ROWS: u16 = 5;
 pub const DEBOUNCE: Duration = Duration::from_millis(120);
@@ -199,6 +199,8 @@ pub struct App {
     label: Option<Box<str>>,
     pending_subagent_load: Option<(Box<str>, PathBuf, u64)>,
     drift: BTreeMap<PathBuf, Diagnostics>,
+    diagnostics_open: bool,
+    diagnostics_pane: Pane,
 }
 
 impl App {
@@ -232,6 +234,8 @@ impl App {
             label: None,
             pending_subagent_load: None,
             drift: BTreeMap::new(),
+            diagnostics_open: false,
+            diagnostics_pane: Pane::default(),
         }
     }
 
@@ -498,7 +502,51 @@ impl App {
         self.request_conversation_for_selection();
     }
 
+    pub const fn diagnostics_open(&self) -> bool {
+        self.diagnostics_open
+    }
+
+    pub const fn diagnostics_top(&self) -> usize {
+        self.diagnostics_pane.top
+    }
+
+    pub fn diagnostics_lines(&self) -> Vec<RenderedLine> {
+        diagnostics::lines(&self.drift, usize::from(diagnostics::inner(self.diagnostics_area()).width))
+    }
+
+    const fn diagnostics_area(&self) -> Size {
+        Size::new(self.area.width, self.area.height.saturating_sub(CHROME_ROWS))
+    }
+
+    fn toggle_diagnostics(&mut self) {
+        self.diagnostics_open = !self.diagnostics_open;
+        self.diagnostics_pane = Pane::default();
+    }
+
+    fn scroll_diagnostics(&mut self, motion: Motion) {
+        let last = self.diagnostics_lines().len().saturating_sub(1);
+        let height = usize::from(diagnostics::inner(self.diagnostics_area()).height);
+        self.diagnostics_pane.top = listing::scroll_target(motion, self.diagnostics_pane.top, last, height);
+    }
+
     pub fn apply(&mut self, action: Action) {
+        if self.diagnostics_open {
+            match action {
+                Action::Quit => self.quit = true,
+                Action::Resize(size) => self.area = size,
+                Action::ToggleDiagnostics | Action::Ascend => self.toggle_diagnostics(),
+                Action::Move(motion) => self.scroll_diagnostics(motion),
+                Action::Focus { .. }
+                | Action::Descend
+                | Action::ToggleFocusMode
+                | Action::NextCall { .. }
+                | Action::ToggleCall
+                | Action::ToggleAllCalls
+                | Action::CycleBranch
+                | Action::ToggleInjections => {}
+            }
+            return;
+        }
         match action {
             Action::Quit => self.quit = true,
             Action::Resize(size) => self.area = size,
@@ -512,6 +560,7 @@ impl App {
             Action::ToggleAllCalls => self.toggle_all_calls(),
             Action::CycleBranch => self.cycle_branch(),
             Action::ToggleInjections => self.toggle_injections(),
+            Action::ToggleDiagnostics => self.toggle_diagnostics(),
         }
     }
 

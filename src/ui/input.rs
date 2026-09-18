@@ -24,6 +24,7 @@ pub enum Action {
     ToggleAllCalls,
     CycleBranch,
     ToggleInjections,
+    ToggleDiagnostics,
     Resize(Size),
 }
 
@@ -64,6 +65,7 @@ fn key_action(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('t') => Some(Action::ToggleAllCalls),
         KeyCode::Char('b') => Some(Action::CycleBranch),
         KeyCode::Char('i') => Some(Action::ToggleInjections),
+        KeyCode::Char('d') => Some(Action::ToggleDiagnostics),
         KeyCode::Char('q') => Some(Action::Quit),
         _ => None,
     }
@@ -109,6 +111,7 @@ mod tests {
             (press(KeyCode::Char('t')), Action::ToggleAllCalls),
             (press(KeyCode::Char('b')), Action::CycleBranch),
             (press(KeyCode::Char('i')), Action::ToggleInjections),
+            (press(KeyCode::Char('d')), Action::ToggleDiagnostics),
             (press(KeyCode::Char('q')), Action::Quit),
             (control('c'), Action::Quit),
         ];
@@ -134,6 +137,11 @@ mod tests {
     fn a_control_binding_does_not_answer_to_its_bare_letter_twice_over() {
         assert_eq!(action(&control('q')), None);
         assert_eq!(action(&control('f')), None);
+    }
+
+    #[test]
+    fn control_d_still_pages_rather_than_opening_the_diagnostics() {
+        assert_eq!(action(&control('d')), Some(Action::Move(Motion::HalfPage(1))));
     }
 
     #[test]

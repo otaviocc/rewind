@@ -3,6 +3,7 @@
 pub mod age;
 pub mod app;
 pub mod columns;
+pub mod diagnostics;
 pub mod input;
 pub mod listing;
 pub mod view;

@@ -1,9 +1,9 @@
 //! Painting one frame: header, hairline rules, the columns, and the status bar.
 
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Rect, Size};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::Widget;
+use ratatui::widgets::{Block, Clear, Widget};
 use ratatui::{Frame, symbols};
 use unicode_width::UnicodeWidthStr;
 
@@ -11,6 +11,7 @@ use crate::render::line::{RenderedLine, truncate};
 use crate::ui::age;
 use crate::ui::app::{App, Column, Loadable, Mode};
 use crate::ui::columns::{self, Columns};
+use crate::ui::diagnostics;
 
 const TITLE_PREFIX: &str = "rewind";
 const HINTS: &str = "? help";
@@ -60,6 +61,7 @@ impl Widget for Screen<'_> {
         rule(top_rule, buf, hint_style());
         progress(top_rule, buf, self.app);
         content(content_rows, buf, self.app);
+        overlay(content_rows, buf, self.app);
         rule(bottom_rule, buf, hint_style());
         statusbar(status_row, buf, self.app);
     }
@@ -184,6 +186,35 @@ fn content(area: Rect, buf: &mut Buffer, app: &App) {
                 app.focused() == Column::Conversation,
             );
         }
+    }
+}
+
+fn overlay(area: Rect, buf: &mut Buffer, app: &App) {
+    if !app.diagnostics_open() {
+        return;
+    }
+    let outer = diagnostics::outer(Size::new(area.width, area.height));
+    if outer.width <= 2 || outer.height <= 2 {
+        return;
+    }
+    let box_area = Rect {
+        x: area.x.saturating_add(area.width.saturating_sub(outer.width).saturating_div(2)),
+        y: area.y.saturating_add(area.height.saturating_sub(outer.height).saturating_div(2)),
+        width: outer.width,
+        height: outer.height,
+    };
+    Clear.render(box_area, buf);
+    let frame = Block::bordered().title(diagnostics::TITLE).border_style(hint_style()).title_style(title_style());
+    let inner = frame.inner(box_area);
+    frame.render(box_area, buf);
+
+    let lines = app.diagnostics_lines();
+    let top = app.diagnostics_top();
+    let last = lines.len().min(top.saturating_add(usize::from(inner.height)));
+    for (row_index, index) in (top..last).enumerate() {
+        let Some(line) = lines.get(index) else { continue };
+        let y = inner.y.saturating_add(u16::try_from(row_index).unwrap_or(u16::MAX));
+        painted(Rect { y, height: 1, ..inner }, buf, line);
     }
 }
 
@@ -514,6 +545,44 @@ mod tests {
         let buffer = frame(&app, Size::new(120, 24));
         let status = text_row(&buffer, 23);
         assert!(!status.contains("unreadable"), "{status}");
+    }
+
+    fn screen(buffer: &Buffer) -> String {
+        (0..buffer.area.height).map(|y| text_row(buffer, y)).collect::<Vec<String>>().join("\n")
+    }
+
+    #[test]
+    fn d_opens_the_diagnostics_over_the_columns_and_escape_closes_it() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("a", true)]));
+        let generation = app.generation();
+        app.set_sessions(generation, vec![drifting_session("s1")]);
+
+        app.apply(Action::ToggleDiagnostics);
+        let opened = screen(&frame(&app, Size::new(120, 24)));
+        assert!(opened.contains("Diagnostics"), "{opened}");
+        assert!(opened.contains("server_tool_use"), "{opened}");
+        assert!(opened.contains("telemetry-latch"), "{opened}");
+
+        app.apply(Action::Ascend);
+        let closed = screen(&frame(&app, Size::new(120, 24)));
+        assert!(!closed.contains("server_tool_use"), "{closed}");
+    }
+
+    #[test]
+    fn the_diagnostics_open_over_a_column_that_has_loaded_nothing_at_all() {
+        let mut app = app(Size::new(120, 24));
+        app.apply(Action::ToggleDiagnostics);
+        let opened = screen(&frame(&app, Size::new(120, 24)));
+        assert!(opened.contains("Nothing unreadable"), "{opened}");
+    }
+
+    #[test]
+    fn a_key_the_diagnostics_do_not_use_does_not_reach_the_view_underneath() {
+        let mut app = app(Size::new(120, 24));
+        app.apply(Action::ToggleDiagnostics);
+        app.apply(Action::ToggleFocusMode);
+        assert_eq!(app.mode(), Mode::Browse, "focus mode must not toggle behind the overlay");
     }
 
     #[test]
