@@ -6,14 +6,21 @@ use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
 
 use crate::domain::thread::Conversation;
-use crate::domain::tool::{self, Label, Outcome, Status};
+use crate::domain::tool::{self, Hunk, Label, Outcome, Status};
 use crate::render::line::{RenderedLine, StyledSpan, normalise, truncate};
+use crate::render::{Ctx, Overflow};
 
 const COLLAPSED: &str = "▸ ";
+const EXPANDED: &str = "▾ ";
 const SEPARATOR: &str = " · ";
 const HEAD_GAP: &str = "  ";
 const TAIL_GAP: usize = 1;
 const LEAST_DIGEST: usize = 8;
+const GUTTER: &str = "  ┃ ";
+const GUTTER_BLANK: &str = "  ┃";
+const FOLD: usize = 20;
+const KEY_COLUMN: usize = 14;
+const DIFF_TOOLS: [&str; 2] = ["Edit", "Write"];
 
 pub struct Styles {
     pub glyph: Style,
@@ -21,22 +28,147 @@ pub struct Styles {
     pub digest: Style,
     pub muted: Style,
     pub error: Style,
+    pub added: Style,
+    pub removed: Style,
 }
 
-pub fn collapsed(
+pub fn call(
     conversation: &Conversation,
+    ctx: &Ctx<'_>,
     id: &str,
     name: &str,
     input: &Value,
+    styles: &Styles,
+) -> Vec<RenderedLine> {
+    let outcome = conversation.result_of(id).and_then(|node| Outcome::of(node, id));
+    let detail = outcome.and_then(|outcome| outcome.detail);
+    let status = tool::status(outcome.as_ref());
+    let digest = tool::digest(name, input, detail);
+    let expanded = ctx.is_expanded(id);
+    let glyph = if expanded { EXPANDED } else { COLLAPSED };
+    let mut lines =
+        vec![line(glyph, name, &joined(digest.primary.as_deref(), digest.secondary.as_deref()), status, ctx.width, styles)];
+    if expanded {
+        lines.extend(body(ctx, id, name, input, outcome.as_ref(), styles));
+    }
+    lines
+}
+
+fn body(ctx: &Ctx<'_>, id: &str, name: &str, input: &Value, outcome: Option<&Outcome<'_>>, styles: &Styles) -> Vec<RenderedLine> {
+    let inner = ctx.width.saturating_sub(GUTTER.width()).max(1);
+    let mut lines = fields(input, inner, styles);
+    let tail = output(ctx, id, name, outcome, inner, styles);
+    if !lines.is_empty() && !tail.is_empty() {
+        lines.push(RenderedLine::blank());
+    }
+    lines.extend(tail);
+    for line in &mut lines {
+        detrail(line);
+        let glyph = if line.spans.is_empty() { GUTTER_BLANK } else { GUTTER };
+        line.prefix(StyledSpan::new(glyph, styles.muted));
+    }
+    lines
+}
+
+fn detrail(line: &mut RenderedLine) {
+    while let Some(last) = line.spans.last_mut() {
+        let trimmed = last.text.trim_end();
+        if trimmed.len() == last.text.len() {
+            return;
+        }
+        if trimmed.is_empty() {
+            line.spans.pop();
+        } else {
+            last.text = trimmed.to_owned();
+            return;
+        }
+    }
+}
+
+fn fields(input: &Value, width: usize, styles: &Styles) -> Vec<RenderedLine> {
+    let Some(fields) = input.as_object() else { return Vec::new() };
+    fields.iter().map(|(key, value)| field(key, value, width, styles)).collect()
+}
+
+fn field(key: &str, value: &Value, width: usize, styles: &Styles) -> RenderedLine {
+    let mut line = RenderedLine::blank();
+    let column = KEY_COLUMN.min(width.saturating_sub(2));
+    if column == 0 {
+        line.push(StyledSpan::new(truncate(key, width), styles.muted));
+        return line;
+    }
+    let key = truncate(key, column);
+    let pad = column.saturating_sub(key.width()).saturating_add(1);
+    line.push(StyledSpan::new(format!("{key}{}", " ".repeat(pad)), styles.muted));
+    let room = width.saturating_sub(column).saturating_sub(1);
+    line.push(StyledSpan::new(truncate(&flattened(value), room), styles.digest));
+    line
+}
+
+fn flattened(value: &Value) -> String {
+    value.as_str().map_or_else(|| serde_json::to_string(value).unwrap_or_default(), normalise).replace('\n', " ")
+}
+
+fn output(
+    ctx: &Ctx<'_>,
+    id: &str,
+    name: &str,
+    outcome: Option<&Outcome<'_>>,
     width: usize,
     styles: &Styles,
-) -> RenderedLine {
-    let node = conversation.result_of(id);
-    let outcome = node.and_then(|node| Outcome::of(node, id));
-    let status = tool::status(outcome.as_ref());
-    let digest = tool::digest(name, input, outcome.and_then(|outcome| outcome.detail));
-    let detail = joined(digest.primary.as_deref(), digest.secondary.as_deref());
-    line(name, &detail, status, width, styles)
+) -> Vec<RenderedLine> {
+    let Some(outcome) = outcome else { return Vec::new() };
+    if DIFF_TOOLS.contains(&name)
+        && let Some(hunks) = outcome.detail.and_then(tool::patch)
+    {
+        return folded(diff(&hunks, width, styles), width, styles);
+    }
+    if let Some(found) = outcome.detail.and_then(tool::overflow) {
+        match ctx.outputs.get(id) {
+            Some(Overflow::Lines(lines)) => {
+                return folded(lines.iter().map(|text| cut(text, width, styles.digest)).collect(), width, styles);
+            }
+            Some(Overflow::Pending) | None => {
+                return vec![cut(&format!("reading {} …", found.name), width, styles.muted)];
+            }
+            Some(Overflow::Failed(error)) => return vec![cut(error, width, styles.error)],
+        }
+    }
+    let body = outcome.body();
+    let body = tool::without_preamble(&body);
+    let style = if outcome.status().is_error() { styles.error } else { styles.digest };
+    folded(normalise(body).lines().map(|text| cut(text, width, style)).collect(), width, styles)
+}
+
+fn diff(hunks: &[Hunk], width: usize, styles: &Styles) -> Vec<RenderedLine> {
+    let mut lines = Vec::new();
+    for hunk in hunks {
+        let head = format!("@@ -{},{} +{},{} @@", hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines);
+        lines.push(cut(&head, width, styles.muted));
+        for text in &hunk.lines {
+            let style = match text.as_bytes().first() {
+                Some(b'+') => styles.added,
+                Some(b'-') => styles.removed,
+                _ => styles.digest,
+            };
+            lines.push(cut(text, width, style));
+        }
+    }
+    lines
+}
+
+fn folded(mut lines: Vec<RenderedLine>, width: usize, styles: &Styles) -> Vec<RenderedLine> {
+    let Some(hidden) = lines.len().checked_sub(FOLD).filter(|hidden| *hidden > 0) else { return lines };
+    lines.truncate(FOLD);
+    let plural = if hidden == 1 { "line" } else { "lines" };
+    lines.push(cut(&format!("… {hidden} more {plural}"), width, styles.muted));
+    lines
+}
+
+fn cut(text: &str, width: usize, style: Style) -> RenderedLine {
+    let mut line = RenderedLine::blank();
+    line.push(StyledSpan::new(truncate(&normalise(text).replace('\n', " "), width), style));
+    line
 }
 
 fn joined(primary: Option<&str>, secondary: Option<&str>) -> String {
@@ -49,18 +181,18 @@ fn joined(primary: Option<&str>, secondary: Option<&str>) -> String {
     }
 }
 
-fn line(name: &str, detail: &str, status: Status, width: usize, styles: &Styles) -> RenderedLine {
+fn line(glyph: &str, name: &str, detail: &str, status: Status, width: usize, styles: &Styles) -> RenderedLine {
     let mut line = RenderedLine::blank();
     let heading = heading(name);
-    let head_width = COLLAPSED.width().saturating_add(heading.width());
+    let head_width = glyph.width().saturating_add(heading.width());
     let outcome = label_of(status);
     let outcome_width = outcome.width();
 
     if head_width.saturating_add(TAIL_GAP).saturating_add(outcome_width) > width {
-        line.push(StyledSpan::new(truncate(&format!("{COLLAPSED}{heading}"), width), styles.name));
+        line.push(StyledSpan::new(truncate(&format!("{glyph}{heading}"), width), styles.name));
         return line;
     }
-    line.push(StyledSpan::new(COLLAPSED, styles.glyph));
+    line.push(StyledSpan::new(glyph, styles.glyph));
     line.push(StyledSpan::new(heading, styles.name));
 
     let spent = head_width.saturating_add(HEAD_GAP.width()).saturating_add(outcome_width).saturating_add(TAIL_GAP);
@@ -109,11 +241,13 @@ mod tests {
             digest: Style::new(),
             muted: Style::new().fg(Color::DarkGray),
             error: Style::new().fg(Color::Red),
+            added: Style::new().fg(Color::Green),
+            removed: Style::new().fg(Color::Red),
         }
     }
 
     fn rendered(name: &str, detail: &str, status: Status, width: usize) -> String {
-        line(name, detail, status, width, &styles()).text()
+        line(COLLAPSED, name, detail, status, width, &styles()).text()
     }
 
     #[test]
@@ -154,6 +288,20 @@ mod tests {
     }
 
     #[test]
+    fn a_body_line_is_right_trimmed_so_no_gutter_or_diff_context_leaves_whitespace() {
+        let mut line = RenderedLine::blank();
+        line.push(StyledSpan::new(" use crate::engine::grid::Cell;  ", Style::new()));
+        line.push(StyledSpan::new("   ", Style::new()));
+        detrail(&mut line);
+        assert_eq!(line.text(), " use crate::engine::grid::Cell;", "the leading column survives, the tail does not");
+
+        let mut blank = RenderedLine::blank();
+        blank.push(StyledSpan::new(" ", Style::new()));
+        detrail(&mut blank);
+        assert!(blank.spans.is_empty(), "a blank diff context line becomes a blank body line");
+    }
+
+    #[test]
     fn a_newline_in_a_digest_never_reaches_the_width_arithmetic() {
         let detail = joined(Some("git commit -m 'one\ntwo'"), None);
         assert!(!detail.contains('\n'));
@@ -176,7 +324,7 @@ mod tests {
     #[test]
     fn only_the_three_error_outcomes_are_painted_in_the_error_style() {
         let error = |status| {
-            line("Bash", "x", status, 40, &styles())
+            line(COLLAPSED, "Bash", "x", status, 40, &styles())
                 .spans
                 .last()
                 .map(|span| span.style)

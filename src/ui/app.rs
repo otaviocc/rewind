@@ -1,6 +1,8 @@
 //! The shell's state, and the reducer that is the only way to change it.
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ratatui::layout::Size;
@@ -9,8 +11,10 @@ use crate::ctx::Ctx;
 use crate::domain::project::{Project, ProjectError};
 use crate::domain::session::Session;
 use crate::domain::thread::{Conversation, ThreadError};
+use crate::domain::tool;
 use crate::render::line::RenderedLine;
-use crate::render::message;
+use crate::render::message::{self, Anchor, Transcript};
+use crate::render::{Ctx as RenderCtx, Expanded, Outputs, Overflow};
 use crate::ui::input::{Action, Motion};
 use crate::ui::{Options, columns, listing};
 
@@ -40,22 +44,55 @@ pub struct Pane {
 #[derive(Debug, Clone)]
 pub struct Rendered {
     conversation: Conversation,
-    lines: Vec<RenderedLine>,
+    path: PathBuf,
+    transcript: Transcript,
     wrapped_at: u16,
+    revision: u64,
 }
 
 impl Rendered {
-    fn new(conversation: Conversation, width: u16) -> Self {
-        let lines = message::transcript(&conversation, usize::from(width));
-        Self { conversation, lines, wrapped_at: width }
+    fn new(conversation: Conversation, path: PathBuf, width: u16, view: &View) -> Self {
+        let transcript = message::transcript(&conversation, &view.ctx(usize::from(width)));
+        Self { conversation, path, transcript, wrapped_at: width, revision: view.revision }
+    }
+
+    fn rewrap(&mut self, width: u16, view: &View) {
+        self.transcript = message::transcript(&self.conversation, &view.ctx(usize::from(width)));
+        self.wrapped_at = width;
+        self.revision = view.revision;
     }
 
     pub fn lines(&self) -> &[RenderedLine] {
-        &self.lines
+        &self.transcript.lines
+    }
+
+    pub fn anchors(&self) -> &[Anchor] {
+        &self.transcript.anchors
     }
 
     pub const fn conversation(&self) -> &Conversation {
         &self.conversation
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct View {
+    expanded: Expanded,
+    outputs: Outputs,
+    revision: u64,
+}
+
+impl View {
+    const fn ctx(&self, width: usize) -> RenderCtx<'_> {
+        RenderCtx { width, expanded: &self.expanded, outputs: &self.outputs }
+    }
+
+    const fn bump(&mut self) {
+        self.revision = self.revision.saturating_add(1);
     }
 }
 
@@ -86,7 +123,11 @@ pub struct App {
     pending_session: Option<String>,
     pending_session_load: Option<(PathBuf, u64)>,
     pending_conversation_load: Option<(PathBuf, u64)>,
+    pending_tool_output: VecDeque<(Box<str>, PathBuf, u64)>,
+    pending_conversation_path: Option<PathBuf>,
     conversation_due: Option<Instant>,
+    view: View,
+    call_cursor: Option<usize>,
 }
 
 impl App {
@@ -111,7 +152,11 @@ impl App {
             pending_session: options.session.clone(),
             pending_session_load: None,
             pending_conversation_load: None,
+            pending_tool_output: VecDeque::new(),
+            pending_conversation_path: None,
             conversation_due: None,
+            view: View::default(),
+            call_cursor: None,
         }
     }
 
@@ -144,6 +189,22 @@ impl App {
             Loadable::Ready(rendered) => rendered.lines(),
             Loadable::Loading | Loadable::Failed(_) => &[],
         }
+    }
+
+    pub fn anchors(&self) -> &[Anchor] {
+        match &self.conversation {
+            Loadable::Ready(rendered) => rendered.anchors(),
+            Loadable::Loading | Loadable::Failed(_) => &[],
+        }
+    }
+
+    pub const fn call_cursor(&self) -> Option<usize> {
+        self.call_cursor
+    }
+
+    pub fn cursor_line(&self) -> Option<usize> {
+        let cursor = self.call_cursor?;
+        self.anchors().get(cursor).map(|anchor| anchor.line)
     }
 
     pub const fn focused(&self) -> Column {
@@ -180,6 +241,22 @@ impl App {
         self.pending_session_load.take()
     }
 
+    pub fn take_tool_output(&mut self) -> Option<(Box<str>, PathBuf, u64)> {
+        self.pending_tool_output.pop_front()
+    }
+
+    pub fn set_tool_output(&mut self, generation: u64, id: Box<str>, result: Result<Vec<String>, String>) {
+        if generation != self.conversation_generation {
+            return;
+        }
+        let overflow = match result {
+            Ok(lines) => Overflow::Lines(Arc::new(lines)),
+            Err(error) => Overflow::Failed(error),
+        };
+        self.view.outputs.insert(id, overflow);
+        self.view.bump();
+    }
+
     pub const fn conversation_due(&self) -> Option<Instant> {
         self.conversation_due
     }
@@ -197,21 +274,24 @@ impl App {
             return;
         }
         let width = columns::conversation_width(self.area, self.mode);
+        let path = self.pending_conversation_path.take().unwrap_or_default();
         self.conversation = match result {
-            Ok(conversation) => Loadable::Ready(Rendered::new(*conversation, width)),
+            Ok(conversation) => Loadable::Ready(Rendered::new(*conversation, path, width, &self.view)),
             Err(error) => Loadable::Failed(error.to_string()),
         };
     }
 
     pub fn reflow(&mut self) {
         let width = columns::conversation_width(self.area, self.mode);
+        let revision = self.view.revision;
         let Loadable::Ready(rendered) = &mut self.conversation else { return };
-        if rendered.wrapped_at == width {
+        if rendered.wrapped_at == width && rendered.revision == revision {
             return;
         }
-        *rendered = Rendered::new(rendered.conversation.clone(), width);
-        let last = rendered.lines.len().saturating_sub(1);
+        rendered.rewrap(width, &self.view);
+        let last = rendered.lines().len().saturating_sub(1);
         self.conversation_pane.top = self.conversation_pane.top.min(last);
+        self.clamp_call_cursor();
     }
 
     pub fn set_projects(&mut self, generation: u64, result: Result<Vec<Project>, ProjectError>) {
@@ -251,10 +331,107 @@ impl App {
             Action::Resize(size) => self.area = size,
             Action::ToggleFocusMode => self.toggle_focus_mode(),
             Action::Focus { forward } => self.move_focus(forward),
-            Action::Descend => self.move_focus(true),
+            Action::Descend => self.descend(),
             Action::Ascend => self.ascend(),
             Action::Move(motion) => self.move_selection(motion),
+            Action::NextCall { forward } => self.move_call_cursor(forward),
+            Action::ToggleCall => self.toggle_call(),
+            Action::ToggleAllCalls => self.toggle_all_calls(),
         }
+    }
+
+    fn clamp_call_cursor(&mut self) {
+        let calls = self.anchors().len();
+        self.call_cursor = self.call_cursor.filter(|_| calls > 0).map(|cursor| cursor.min(calls.saturating_sub(1)));
+    }
+
+    fn move_call_cursor(&mut self, forward: bool) {
+        let calls = self.anchors().len();
+        if calls == 0 {
+            return;
+        }
+        let last = calls.saturating_sub(1);
+        self.call_cursor = Some(match (self.call_cursor, forward) {
+            (None, true) => 0,
+            (None, false) => last,
+            (Some(cursor), true) => cursor.saturating_add(1).min(last),
+            (Some(cursor), false) => cursor.saturating_sub(1),
+        });
+        self.reveal_call_cursor();
+    }
+
+    fn reveal_call_cursor(&mut self) {
+        let Some(line) = self.cursor_line() else { return };
+        let height = columns::conversation_height(self.area);
+        self.conversation_pane.top = listing::revealed(self.conversation_pane.top, line, height);
+    }
+
+    fn toggle_call(&mut self) {
+        let Some(cursor) = self.call_cursor else {
+            self.move_call_cursor(true);
+            return;
+        };
+        let Some(id) = self.anchors().get(cursor).map(|anchor| anchor.id.clone()) else { return };
+        let row = self.cursor_line().map(|line| line.saturating_sub(self.conversation_pane.top));
+        if !self.view.expanded.remove(&id) {
+            self.view.expanded.insert(id.clone());
+            self.queue_tool_output(&id);
+        }
+        self.view.bump();
+        self.anchor_at_row(&id, row);
+    }
+
+    fn toggle_all_calls(&mut self) {
+        let ids: Vec<Box<str>> = self.anchors().iter().map(|anchor| anchor.id.clone()).collect();
+        if ids.is_empty() {
+            return;
+        }
+        let anchor = self.call_cursor.and_then(|cursor| self.anchors().get(cursor)).map(|anchor| anchor.id.clone());
+        let row = self.cursor_line().map(|line| line.saturating_sub(self.conversation_pane.top));
+        if self.view.expanded.is_empty() {
+            for id in &ids {
+                self.view.expanded.insert(id.clone());
+                self.queue_tool_output(id);
+            }
+        } else {
+            self.view.expanded.clear();
+        }
+        self.view.bump();
+        match anchor {
+            Some(anchor) => self.anchor_at_row(&anchor, row),
+            None => self.rerender(),
+        }
+    }
+
+    fn rerender(&mut self) {
+        let width = columns::conversation_width(self.area, self.mode);
+        if let Loadable::Ready(rendered) = &mut self.conversation {
+            rendered.rewrap(width, &self.view);
+        }
+        self.clamp_call_cursor();
+    }
+
+    fn anchor_at_row(&mut self, id: &str, row: Option<usize>) {
+        self.rerender();
+        let Some(found) = self.anchors().iter().position(|anchor| &*anchor.id == id) else { return };
+        self.call_cursor = Some(found);
+        match row.and_then(|row| self.cursor_line().map(|line| line.saturating_sub(row))) {
+            Some(top) => self.conversation_pane.top = top.min(self.last(Column::Conversation)),
+            None => self.reveal_call_cursor(),
+        }
+    }
+
+    fn queue_tool_output(&mut self, id: &str) {
+        let Loadable::Ready(rendered) = &self.conversation else { return };
+        let Some(node) = rendered.conversation().result_of(id) else { return };
+        let Some(outcome) = tool::Outcome::of(node, id) else { return };
+        let Some(found) = outcome.detail.and_then(tool::overflow) else { return };
+        if self.view.outputs.contains_key(id) {
+            return;
+        }
+        let path = tool::overflow_path(rendered.path(), found.name);
+        self.view.outputs.insert(Box::from(id), Overflow::Pending);
+        self.pending_tool_output.push_back((Box::from(id), path, self.conversation_generation));
     }
 
     const fn toggle_focus_mode(&mut self) {
@@ -269,6 +446,14 @@ impl App {
                 Mode::Browse
             }
         };
+    }
+
+    fn descend(&mut self) {
+        if self.focused == Column::Conversation {
+            self.toggle_call();
+            return;
+        }
+        self.move_focus(true);
     }
 
     fn ascend(&mut self) {
@@ -335,6 +520,10 @@ impl App {
         self.conversation_generation = self.conversation_generation.saturating_add(1);
         self.conversation = Loadable::Loading;
         self.conversation_pane = Pane::default();
+        self.view = View::default();
+        self.call_cursor = None;
+        self.pending_tool_output.clear();
+        self.pending_conversation_path = self.selected_session().map(|session| session.path.clone());
         self.pending_conversation_load =
             self.selected_session().map(|session| (session.path.clone(), self.conversation_generation));
         self.conversation_due =
@@ -414,6 +603,191 @@ mod tests {
             messages: 1,
             continued_in: None,
         }
+    }
+
+    fn with_calls(area: Size) -> App {
+        let dir = tempfile::TempDir::new().expect("a temporary directory");
+        let path = dir.path().join("session.jsonl");
+        let human = r#"{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:00Z","origin":{"kind":"human"},"message":{"role":"user","content":"do three things"}}"#;
+        let mut lines = vec![human.to_owned()];
+        for index in 0..3u32 {
+            let parent = if index == 0 { "u1".to_owned() } else { format!("r{}", index.saturating_sub(1)) };
+            lines.push(format!(
+                r#"{{"type":"assistant","uuid":"a{index}","parentUuid":"{parent}","sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:01Z","requestId":"q{index}","message":{{"model":"opus-5","id":"m{index}","role":"assistant","content":[{{"type":"tool_use","id":"t{index}","name":"Bash","input":{{"command":"step {index}","description":"a step"}}}}]}}}}"#
+            ));
+            lines.push(format!(
+                r#"{{"type":"user","uuid":"r{index}","parentUuid":"a{index}","sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:02Z","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"t{index}","content":"line one\nline two","is_error":false}}]}},"toolUseResult":{{"stdout":"line one\nline two\n"}}}}"#
+            ));
+        }
+        std::fs::write(&path, lines.join("\n") + "\n").expect("a written transcript");
+        let conversation = crate::domain::thread::build(&path).expect("a built conversation");
+        let mut app = app(area);
+        app.pending_conversation_path = Some(path);
+        app.set_conversation(app.conversation_generation(), Ok(Box::new(conversation)));
+        let _ = dir.keep();
+        app
+    }
+
+    fn call_lines(app: &App) -> Vec<String> {
+        app.lines().iter().map(RenderedLine::text).filter(|text| text.contains('▸') || text.contains('▾')).collect()
+    }
+
+    #[test]
+    fn a_transcript_with_no_calls_has_no_cursor_to_move() {
+        let mut app = app(Size::new(120, 30));
+        app.apply(Action::NextCall { forward: true });
+        assert_eq!(app.call_cursor(), None);
+        app.apply(Action::ToggleCall);
+        assert_eq!(app.call_cursor(), None, "nothing to expand and nothing to select");
+    }
+
+    #[test]
+    fn the_call_cursor_hops_between_calls_and_stops_at_both_ends() {
+        let mut app = with_calls(Size::new(120, 30));
+        assert_eq!(app.anchors().len(), 3);
+        assert_eq!(app.call_cursor(), None, "quiet until it is asked for");
+
+        app.apply(Action::NextCall { forward: true });
+        assert_eq!(app.call_cursor(), Some(0), "the first call, not the second");
+        app.apply(Action::NextCall { forward: true });
+        app.apply(Action::NextCall { forward: true });
+        app.apply(Action::NextCall { forward: true });
+        assert_eq!(app.call_cursor(), Some(2), "no call past the last");
+        for _ in 0..5 {
+            app.apply(Action::NextCall { forward: false });
+        }
+        assert_eq!(app.call_cursor(), Some(0), "no call before the first");
+    }
+
+    #[test]
+    fn the_cursor_line_is_the_line_the_calls_header_is_on() {
+        let mut app = with_calls(Size::new(120, 30));
+        app.apply(Action::NextCall { forward: true });
+        let line = app.cursor_line().expect("a cursor line");
+        let text = app.lines().get(line).map(RenderedLine::text).unwrap_or_default();
+        assert!(text.contains("▸ Bash  step 0"), "{text:?}");
+    }
+
+    #[test]
+    fn space_expands_the_call_under_the_cursor_and_collapses_it_again() {
+        let mut app = with_calls(Size::new(120, 30));
+        let collapsed = app.lines().len();
+        app.apply(Action::NextCall { forward: true });
+
+        app.apply(Action::ToggleCall);
+        assert!(app.lines().len() > collapsed, "expanding added no lines");
+        assert_eq!(call_lines(&app).first().map(|text| text.contains('▾')), Some(true));
+
+        app.apply(Action::ToggleCall);
+        assert_eq!(app.lines().len(), collapsed, "collapsing did not undo the expansion");
+        assert_eq!(call_lines(&app).first().map(|text| text.contains('▸')), Some(true));
+    }
+
+    #[test]
+    fn enter_expands_a_call_once_the_conversation_is_the_focused_column() {
+        let mut app = with_calls(Size::new(120, 30));
+        app.apply(Action::Focus { forward: true });
+        app.apply(Action::Descend);
+        assert_eq!(app.focused(), Column::Conversation, "the first Enter still descends");
+        assert_eq!(app.call_cursor(), None);
+
+        app.apply(Action::Descend);
+        assert_eq!(app.call_cursor(), Some(0), "the next Enter reaches the first call");
+        app.apply(Action::Descend);
+        assert!(call_lines(&app).first().is_some_and(|text| text.contains('▾')), "and the one after expands it");
+    }
+
+    #[test]
+    fn space_with_no_cursor_yet_selects_the_first_call_rather_than_expanding_nothing() {
+        let mut app = with_calls(Size::new(120, 30));
+        app.apply(Action::ToggleCall);
+        assert_eq!(app.call_cursor(), Some(0));
+        assert!(call_lines(&app).iter().all(|text| text.contains('▸')), "the first press only selects");
+    }
+
+    #[test]
+    fn t_expands_every_call_and_the_next_press_collapses_every_call() {
+        let mut app = with_calls(Size::new(120, 30));
+        let collapsed = app.lines().len();
+
+        app.apply(Action::ToggleAllCalls);
+        assert!(call_lines(&app).iter().all(|text| text.contains('▾')), "{:?}", call_lines(&app));
+
+        app.apply(Action::ToggleAllCalls);
+        assert_eq!(app.lines().len(), collapsed);
+        assert!(call_lines(&app).iter().all(|text| text.contains('▸')));
+    }
+
+    #[test]
+    fn t_collapses_everything_when_only_some_calls_are_expanded() {
+        let mut app = with_calls(Size::new(120, 30));
+        app.apply(Action::NextCall { forward: true });
+        app.apply(Action::ToggleCall);
+        app.apply(Action::ToggleAllCalls);
+        assert!(call_lines(&app).iter().all(|text| text.contains('▸')), "a fold, not three independent toggles");
+    }
+
+    #[test]
+    fn the_selected_call_stays_on_the_same_screen_row_across_an_expansion() {
+        let mut app = with_calls(Size::new(120, 12));
+        for _ in 0..3 {
+            app.apply(Action::NextCall { forward: true });
+        }
+        let before = app.cursor_line().expect("a cursor line").saturating_sub(app.pane(Column::Conversation).top);
+
+        app.apply(Action::ToggleCall);
+        let after = app.cursor_line().expect("a cursor line").saturating_sub(app.pane(Column::Conversation).top);
+        assert_eq!(before, after, "the call under the cursor moved on screen when it expanded");
+        assert_eq!(app.call_cursor(), Some(2), "and it is still the same call");
+    }
+
+    #[test]
+    fn expanding_a_call_above_the_viewport_does_not_shift_the_one_being_read() {
+        let mut app = with_calls(Size::new(120, 30));
+        app.apply(Action::NextCall { forward: true });
+        app.apply(Action::ToggleCall);
+        let expanded = app.lines().len();
+        app.apply(Action::NextCall { forward: true });
+        app.apply(Action::ToggleCall);
+        assert!(app.lines().len() > expanded, "the second expansion is independent of the first");
+        assert_eq!(app.call_cursor(), Some(1), "the cursor followed the call, not the line index");
+    }
+
+    #[test]
+    fn selecting_another_session_forgets_which_calls_were_expanded() {
+        let mut app = with_calls(Size::new(120, 30));
+        let Loadable::Ready(rendered) = app.conversation() else { panic!("a rendered conversation") };
+        let path = rendered.path().to_path_buf();
+        app.apply(Action::ToggleAllCalls);
+        assert!(call_lines(&app).iter().all(|text| text.contains('▾')));
+
+        app.set_projects(app.generation(), Ok(vec![project("a")]));
+        app.set_sessions(app.generation(), vec![session("s1"), session("s2")]);
+        assert_eq!(app.call_cursor(), None, "the cursor does not survive a session change");
+
+        let conversation = crate::domain::thread::build(&path).expect("a built conversation");
+        app.pending_conversation_path = Some(path);
+        app.set_conversation(app.conversation_generation(), Ok(Box::new(conversation)));
+        assert!(call_lines(&app).iter().all(|text| text.contains('▸')), "expansion is per session, not global");
+    }
+
+    #[test]
+    fn an_overflowed_result_is_queued_for_a_worker_and_never_read_on_the_ui_thread() {
+        let mut app = with_calls(Size::new(120, 30));
+        app.apply(Action::ToggleAllCalls);
+        assert!(app.take_tool_output().is_none(), "no call here carries a persistedOutputPath");
+    }
+
+    #[test]
+    fn a_stale_tool_output_is_dropped_the_way_a_stale_conversation_is() {
+        let mut app = with_calls(Size::new(120, 30));
+        let stale = app.conversation_generation();
+        app.apply(Action::NextCall { forward: true });
+        app.apply(Action::ToggleCall);
+        let before = app.lines().len();
+        app.set_tool_output(stale.saturating_add(7), Box::from("t0"), Ok(vec!["nope".to_owned()]));
+        app.reflow();
+        assert_eq!(app.lines().len(), before, "a result from another session must not land");
     }
 
     #[test]
@@ -651,7 +1025,7 @@ mod tests {
         assert_eq!(app.focused(), Column::Conversation);
 
         app.apply(Action::Move(Motion::Line(1)));
-        assert_eq!(app.pane(Column::Conversation).selected, 0, "the conversation has no cursor");
+        assert_eq!(app.pane(Column::Conversation).selected, 0, "the conversation has no line cursor");
         assert_eq!(app.pane(Column::Conversation).top, 0, "a short transcript does not scroll");
 
         app.apply(Action::Move(Motion::Bottom));

@@ -21,6 +21,7 @@ use crate::ctx::Ctx;
 use crate::domain::project::{self, Project, ProjectError};
 use crate::domain::session;
 use crate::domain::thread::{self, Conversation, ThreadError};
+use crate::domain::tool;
 use crate::ui::app::App;
 
 enum Wake {
@@ -28,6 +29,7 @@ enum Wake {
     ProjectsLoaded { generation: u64, result: Result<Vec<Project>, ProjectError> },
     SessionsLoaded { generation: u64, sessions: Vec<session::Session> },
     ConversationLoaded { generation: u64, result: Result<Box<Conversation>, ThreadError> },
+    ToolOutputLoaded { generation: u64, id: Box<str>, result: Result<Vec<String>, String> },
     InputLost(String),
 }
 
@@ -102,6 +104,9 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App, tx: &Sender<Wake>, 
         if let Some((path, generation)) = app.take_conversation_load(Instant::now()) {
             spawn_conversation_load(tx, path, generation);
         }
+        if let Some((id, path, generation)) = app.take_tool_output() {
+            spawn_tool_output_load(tx, id, path, generation);
+        }
     }
 }
 
@@ -122,6 +127,7 @@ fn handle(app: &mut App, wake: Wake) -> Result<()> {
         Wake::ProjectsLoaded { generation, result } => app.set_projects(generation, result),
         Wake::SessionsLoaded { generation, sessions } => app.set_sessions(generation, sessions),
         Wake::ConversationLoaded { generation, result } => app.set_conversation(generation, result),
+        Wake::ToolOutputLoaded { generation, id, result } => app.set_tool_output(generation, id, result),
         Wake::InputLost(error) => bail!("cannot read keyboard input: {error}"),
     }
     Ok(())
@@ -165,5 +171,13 @@ fn spawn_conversation_load(tx: &Sender<Wake>, path: PathBuf, generation: u64) {
     std::thread::spawn(move || {
         let result = thread::build(&path).map(Box::new);
         let _ = tx.send(Wake::ConversationLoaded { generation, result });
+    });
+}
+
+fn spawn_tool_output_load(tx: &Sender<Wake>, id: Box<str>, path: PathBuf, generation: u64) {
+    let tx = tx.clone();
+    std::thread::spawn(move || {
+        let result = tool::read_overflow(&path);
+        let _ = tx.send(Wake::ToolOutputLoaded { generation, id, result });
     });
 }

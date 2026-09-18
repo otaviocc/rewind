@@ -7,7 +7,7 @@ use crate::domain::block::{Block, Content, ImageSource};
 use crate::domain::thread::{Conversation, NodeKind};
 use crate::render::line::{RenderedLine, StyledSpan, truncate};
 use crate::render::prose;
-use crate::render::tool;
+use crate::render::{Ctx, tool};
 use unicode_width::UnicodeWidthStr;
 
 const RAIL: &str = "▎ ";
@@ -43,8 +43,24 @@ const fn error_style() -> Style {
     Style::new().fg(Color::Red)
 }
 
+const fn added_style() -> Style {
+    Style::new().fg(Color::Green)
+}
+
+const fn removed_style() -> Style {
+    Style::new().fg(Color::Red)
+}
+
 const fn tool_styles() -> tool::Styles {
-    tool::Styles { glyph: body_style(), name: label_style(), digest: body_style(), muted: dim_style(), error: error_style() }
+    tool::Styles {
+        glyph: body_style(),
+        name: label_style(),
+        digest: body_style(),
+        muted: dim_style(),
+        error: error_style(),
+        added: added_style(),
+        removed: removed_style(),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,10 +82,24 @@ struct Group {
     rail: Rail,
     model: Option<String>,
     lines: Vec<RenderedLine>,
+    anchors: Vec<Anchor>,
 }
 
-pub fn transcript(conversation: &Conversation, width: usize) -> Vec<RenderedLine> {
-    let inner = width.saturating_sub(RAIL.width()).max(1);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Anchor {
+    pub id: Box<str>,
+    pub line: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Transcript {
+    pub lines: Vec<RenderedLine>,
+    pub anchors: Vec<Anchor>,
+}
+
+pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
+    let inner = ctx.width.saturating_sub(RAIL.width()).max(1);
+    let ctx = &ctx.narrowed(inner);
     let mut groups: Vec<Group> = Vec::new();
 
     for &id in conversation.thread() {
@@ -77,25 +107,30 @@ pub fn transcript(conversation: &Conversation, width: usize) -> Vec<RenderedLine
         match &node.kind {
             NodeKind::User(record) if record.is_human_turn() && !record.is_compact_summary => {
                 let mut lines = vec![header(HUMAN_LABEL, None, inner)];
-                content(conversation, &record.message.content, inner, &mut lines);
-                groups.push(Group { rail: Rail::Human, model: None, lines });
+                let mut anchors = Vec::new();
+                content(conversation, ctx, &record.message.content, &mut lines, &mut anchors);
+                groups.push(Group { rail: Rail::Human, model: None, lines, anchors });
             }
             NodeKind::Assistant(turn) => {
                 let mut body = Vec::new();
-                blocks(conversation, &turn.content, inner, &mut body);
+                let mut anchors = Vec::new();
+                blocks(conversation, ctx, &turn.content, &mut body, &mut anchors);
                 if body.is_empty() {
                     continue;
                 }
                 match groups.last_mut() {
                     Some(group) if group.rail == Rail::Assistant && group.model == turn.model => {
                         group.lines.push(RenderedLine::blank());
+                        shift(&mut anchors, group.lines.len());
                         group.lines.append(&mut body);
+                        group.anchors.append(&mut anchors);
                     }
                     _ => {
                         let detail = model_label(turn.model.as_deref());
                         let mut lines = vec![header(ASSISTANT_LABEL, detail.as_deref(), inner)];
+                        shift(&mut anchors, lines.len());
                         lines.append(&mut body);
-                        groups.push(Group { rail: Rail::Assistant, model: turn.model.clone(), lines });
+                        groups.push(Group { rail: Rail::Assistant, model: turn.model.clone(), lines, anchors });
                     }
                 }
             }
@@ -103,14 +138,23 @@ pub fn transcript(conversation: &Conversation, width: usize) -> Vec<RenderedLine
         }
     }
 
-    let mut lines: Vec<RenderedLine> = Vec::new();
+    let mut transcript = Transcript::default();
     for group in groups {
-        if !lines.is_empty() {
-            lines.push(RenderedLine::blank());
+        if !transcript.lines.is_empty() {
+            transcript.lines.push(RenderedLine::blank());
         }
-        lines.extend(railed(group.lines, group.rail.style()));
+        let mut anchors = group.anchors;
+        shift(&mut anchors, transcript.lines.len());
+        transcript.anchors.append(&mut anchors);
+        transcript.lines.extend(railed(group.lines, group.rail.style()));
     }
-    lines
+    transcript
+}
+
+fn shift(anchors: &mut [Anchor], by: usize) {
+    for anchor in anchors {
+        anchor.line = anchor.line.saturating_add(by);
+    }
 }
 
 fn railed(lines: Vec<RenderedLine>, style: Style) -> Vec<RenderedLine> {
@@ -139,23 +183,36 @@ fn header(label: &str, detail: Option<&str>, width: usize) -> RenderedLine {
     line
 }
 
-fn content(conversation: &Conversation, content: &Content, width: usize, lines: &mut Vec<RenderedLine>) {
+fn content(
+    conversation: &Conversation,
+    ctx: &Ctx<'_>,
+    content: &Content,
+    lines: &mut Vec<RenderedLine>,
+    anchors: &mut Vec<Anchor>,
+) {
     match content {
-        Content::Text(text) => lines.extend(markdown(text, width)),
-        Content::Blocks(blocks_of) => blocks(conversation, blocks_of, width, lines),
+        Content::Text(text) => lines.extend(markdown(text, ctx.width)),
+        Content::Blocks(blocks_of) => blocks(conversation, ctx, blocks_of, lines, anchors),
     }
 }
 
-fn blocks(conversation: &Conversation, blocks: &[Block], width: usize, lines: &mut Vec<RenderedLine>) {
+fn blocks(
+    conversation: &Conversation,
+    ctx: &Ctx<'_>,
+    blocks: &[Block],
+    lines: &mut Vec<RenderedLine>,
+    anchors: &mut Vec<Anchor>,
+) {
     let styles = tool_styles();
     for block in blocks {
         match block {
-            Block::Text { text } => lines.extend(markdown(text, width)),
-            Block::Thinking { thinking } => lines.push(one(&thinking_summary(thinking), dim_style(), width)),
+            Block::Text { text } => lines.extend(markdown(text, ctx.width)),
+            Block::Thinking { thinking } => lines.push(one(&thinking_summary(thinking), dim_style(), ctx.width)),
             Block::ToolUse { id, name, input } => {
-                lines.push(tool::collapsed(conversation, id, name, input, width, &styles));
+                anchors.push(Anchor { id: Box::from(id.as_str()), line: lines.len() });
+                lines.extend(tool::call(conversation, ctx, id, name, input, &styles));
             }
-            Block::Image { source } => lines.push(one(&image_summary(source), dim_style(), width)),
+            Block::Image { source } => lines.push(one(&image_summary(source), dim_style(), ctx.width)),
             Block::ToolResult { .. } | Block::Other => {}
         }
     }
@@ -222,12 +279,26 @@ mod tests {
     use super::*;
     use crate::domain::thread;
 
+    fn plain(width: usize) -> Ctx<'static> {
+        static EXPANDED: std::sync::OnceLock<crate::render::Expanded> = std::sync::OnceLock::new();
+        static OUTPUTS: std::sync::OnceLock<crate::render::Outputs> = std::sync::OnceLock::new();
+        Ctx {
+            width,
+            expanded: EXPANDED.get_or_init(crate::render::Expanded::new),
+            outputs: OUTPUTS.get_or_init(crate::render::Outputs::new),
+        }
+    }
+
     fn rendered(lines: &[&str]) -> Vec<String> {
+        built(lines).lines.iter().map(RenderedLine::text).collect()
+    }
+
+    fn built(lines: &[&str]) -> Transcript {
         let dir = TempDir::new().expect("a temporary directory");
         let path = dir.path().join("session.jsonl");
         fs::write(&path, lines.join("\n") + "\n").expect("a written transcript");
         let conversation = thread::build(&path).expect("a built conversation");
-        transcript(&conversation, 60).iter().map(RenderedLine::text).collect()
+        transcript(&conversation, &plain(60))
     }
 
     fn headers(lines: &[String]) -> usize {
@@ -365,7 +436,7 @@ mod tests {
         let path = dir.path().join("session.jsonl");
         fs::write(&path, format!("{HUMAN}\n{}\n", assistant("a1", "u1", PARAGRAPHS))).expect("a written transcript");
         let conversation = thread::build(&path).expect("a built conversation");
-        for line in transcript(&conversation, 60) {
+        for line in transcript(&conversation, &plain(60)).lines {
             let expected = match line.text().as_str() {
                 "" => 0,
                 "▎" => 1,
@@ -486,7 +557,7 @@ mod tests {
         let path = dir.path().join("session.jsonl");
         fs::write(&path, format!("{}\n{}\n", HUMAN, assistant("a1", "u1", &block))).expect("a written transcript");
         let conversation = thread::build(&path).expect("a built conversation");
-        for line in transcript(&conversation, 24) {
+        for line in transcript(&conversation, &plain(24)).lines {
             assert!(line.width() <= 24, "{:?}", line.text());
         }
     }

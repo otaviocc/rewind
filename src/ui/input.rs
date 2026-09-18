@@ -19,6 +19,9 @@ pub enum Action {
     Descend,
     Ascend,
     ToggleFocusMode,
+    NextCall { forward: bool },
+    ToggleCall,
+    ToggleAllCalls,
     Resize(Size),
 }
 
@@ -53,6 +56,10 @@ fn key_action(key: KeyEvent) -> Option<Action> {
         KeyCode::Enter => Some(Action::Descend),
         KeyCode::Esc => Some(Action::Ascend),
         KeyCode::Char('f') => Some(Action::ToggleFocusMode),
+        KeyCode::Char('n') => Some(Action::NextCall { forward: true }),
+        KeyCode::Char('N') => Some(Action::NextCall { forward: false }),
+        KeyCode::Char(' ') => Some(Action::ToggleCall),
+        KeyCode::Char('t') => Some(Action::ToggleAllCalls),
         KeyCode::Char('q') => Some(Action::Quit),
         _ => None,
     }
@@ -92,6 +99,10 @@ mod tests {
             (press(KeyCode::Enter), Action::Descend),
             (press(KeyCode::Esc), Action::Ascend),
             (press(KeyCode::Char('f')), Action::ToggleFocusMode),
+            (press(KeyCode::Char('n')), Action::NextCall { forward: true }),
+            (press(KeyCode::Char('N')), Action::NextCall { forward: false }),
+            (press(KeyCode::Char(' ')), Action::ToggleCall),
+            (press(KeyCode::Char('t')), Action::ToggleAllCalls),
             (press(KeyCode::Char('q')), Action::Quit),
             (control('c'), Action::Quit),
         ];

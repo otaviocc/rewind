@@ -13,7 +13,9 @@ use common::fixtures;
 use rewind::domain::thread;
 use rewind::domain::tool::{self, Outcome};
 use rewind::render::line::RenderedLine;
+use rewind::render::message::Transcript;
 use rewind::render::message::transcript;
+use rewind::render::{Ctx, Expanded, Outputs, Overflow};
 use tempfile::TempDir;
 
 const HOLODECK: &str = "-Users-fixture-Developer-holodeck";
@@ -40,22 +42,80 @@ fn session_path(session: &str) -> PathBuf {
     fixtures().join("projects").join(HOLODECK).join(format!("{session}.jsonl"))
 }
 
+#[derive(Default)]
+struct View {
+    expanded: Expanded,
+    outputs: Outputs,
+}
+
+impl View {
+    const fn ctx(&self, width: usize) -> Ctx<'_> {
+        Ctx { width, expanded: &self.expanded, outputs: &self.outputs }
+    }
+
+    fn expanding(path: &Path) -> Self {
+        let conversation = thread::build(path).expect("a built conversation");
+        let mut view = Self::default();
+        for (id, detail) in ids(&conversation) {
+            view.expanded.insert(id.clone());
+            if let Some(found) = detail.as_ref().and_then(tool::overflow) {
+                let read = tool::read_overflow(&tool::overflow_path(path, found.name));
+                let overflow = match read {
+                    Ok(lines) => Overflow::Lines(std::sync::Arc::new(lines)),
+                    Err(error) => Overflow::Failed(error),
+                };
+                view.outputs.insert(id, overflow);
+            }
+        }
+        view
+    }
+}
+
+fn ids(conversation: &rewind::domain::thread::Conversation) -> Vec<(Box<str>, Option<serde_json::Value>)> {
+    let mut found = Vec::new();
+    for &node in conversation.thread() {
+        let Some(node) = conversation.node(node) else { continue };
+        let rewind::domain::thread::NodeKind::Assistant(turn) = &node.kind else { continue };
+        for block in &turn.content {
+            let rewind::domain::block::Block::ToolUse { id, .. } = block else { continue };
+            let detail =
+                conversation.result_of(id).and_then(|node| Outcome::of(node, id)).and_then(|outcome| outcome.detail).cloned();
+            found.push((Box::from(id.as_str()), detail));
+        }
+    }
+    found
+}
+
 fn rendered(session: &str, width: usize) -> String {
     render_file(&session_path(session), width)
 }
 
 fn render_file(path: &Path, width: usize) -> String {
-    let conversation = thread::build(path).expect("a built conversation");
-    lines_of(&transcript(&conversation, width))
+    lines_of(&built(path, width, &View::default()))
 }
 
-fn lines_of(lines: &[RenderedLine]) -> String {
-    lines.iter().map(RenderedLine::text).collect::<Vec<_>>().join("\n")
+fn expanded(session: &str, width: usize) -> String {
+    let path = session_path(session);
+    let view = View::expanding(&path);
+    lines_of(&built(&path, width, &view))
+}
+
+fn built(path: &Path, width: usize, view: &View) -> Transcript {
+    let conversation = thread::build(path).expect("a built conversation");
+    transcript(&conversation, &view.ctx(width))
+}
+
+fn lines_of(transcript: &Transcript) -> String {
+    transcript.lines.iter().map(RenderedLine::text).collect::<Vec<_>>().join("\n")
 }
 
 fn widths(path: &Path, width: usize) -> Vec<usize> {
-    let conversation = thread::build(path).expect("a built conversation");
-    transcript(&conversation, width).iter().map(RenderedLine::width).collect()
+    built(path, width, &View::default()).lines.iter().map(RenderedLine::width).collect()
+}
+
+fn expanded_widths(path: &Path, width: usize) -> Vec<usize> {
+    let view = View::expanding(path);
+    built(path, width, &view).lines.iter().map(RenderedLine::width).collect()
 }
 
 #[test]
@@ -105,7 +165,60 @@ fn every_line_of_the_tool_surface_fits_the_column_it_was_wrapped_for() {
         for line in widths(&path, width) {
             assert!(line <= width, "a line of {line} columns was wrapped for {width}");
         }
+        for line in expanded_widths(&path, width) {
+            assert!(line <= width, "an expanded line of {line} columns was wrapped for {width}");
+        }
     }
+}
+
+#[test]
+fn an_expanded_call_shows_its_input_its_output_and_its_diff() {
+    insta::assert_snapshot!("tools-expanded-80", expanded(TOOLS, 80));
+}
+
+#[test]
+fn an_expanded_call_degrades_rather_than_overflows_a_narrow_column() {
+    insta::assert_snapshot!("tools-expanded-32", expanded(TOOLS, 32));
+}
+
+#[test]
+fn an_overflowed_result_is_read_from_the_sidecar_beside_the_session_and_folded() {
+    let text = expanded(BASELINE, 80);
+    assert!(text.contains("Fresh   memchr"), "the sidecar was not read:\n{text}");
+    assert!(text.contains("more lines"), "a 1 400-line sidecar was not folded:\n{text}");
+    assert!(!text.contains("<persisted-output>"), "the preamble reached the transcript:\n{text}");
+
+    let sidecar = tool::overflow_path(&session_path(BASELINE), "b7k2m9x4q.txt");
+    let whole = tool::read_overflow(&sidecar).expect("the sidecar reads");
+    assert!(whole.len() > 1_000, "the fixture stopped being large enough to fold, at {} lines", whole.len());
+    assert!(text.lines().count() < 60, "a {}-line result must not put {} lines on screen", whole.len(), text.lines().count());
+}
+
+#[test]
+fn an_expanded_call_with_no_sidecar_loaded_says_so_rather_than_showing_the_preamble() {
+    let path = session_path(BASELINE);
+    let mut view = View::default();
+    for (id, _) in ids(&thread::build(&path).expect("a built conversation")) {
+        view.expanded.insert(id);
+    }
+    let text = lines_of(&built(&path, 80, &view));
+    assert!(text.contains("reading b7k2m9x4q.txt …"), "no progress line for an unread sidecar:\n{text}");
+}
+
+#[test]
+fn every_expanded_call_is_anchored_to_the_line_its_header_is_on() {
+    let path = session_path(TOOLS);
+    let view = View::expanding(&path);
+    let transcript = built(&path, 80, &view);
+    assert_eq!(transcript.anchors.len(), 9, "nine calls in the tool surface");
+    for anchor in &transcript.anchors {
+        let line = transcript.lines.get(anchor.line).map(RenderedLine::text).unwrap_or_default();
+        assert!(line.contains("▾ "), "anchor {} does not point at an expanded header: {line:?}", anchor.line);
+    }
+    let lines: Vec<usize> = transcript.anchors.iter().map(|anchor| anchor.line).collect();
+    let mut sorted = lines.clone();
+    sorted.sort_unstable();
+    assert_eq!(lines, sorted, "anchors are in render order");
 }
 
 #[test]
@@ -172,7 +285,8 @@ fn a_ten_megabyte_session_renders_without_decoding_a_byte_of_base64() {
     assert!(fs::metadata(&path).expect("the transcript exists").len() > 10 * 1024 * 1024);
 
     let conversation = thread::build(&path).expect("a built conversation");
-    let lines = transcript(&conversation, 80);
+    let view = View::default();
+    let lines = transcript(&conversation, &view.ctx(80)).lines;
 
     assert!(lines.len() > 8_000, "only {} lines", lines.len());
     assert!(lines.iter().all(|line| line.width() <= 80));

@@ -2,12 +2,22 @@
 //! and the diff a file edit carries with it.
 
 use std::borrow::Cow;
+use std::fs::File;
+use std::io::{BufRead, BufReader, ErrorKind};
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::domain::block::{Block, Content, ToolResultContent};
 use crate::domain::thread::{Node, NodeKind};
+
+pub const OVERFLOW_DIR: &str = "tool-results";
+pub const MAX_OVERFLOW_LINES: usize = 2_000;
+pub const MAX_OVERFLOW_BYTES: usize = 1024 * 1024;
+const MAX_OVERFLOW_LINE: usize = 64 * 1024;
+const PERSISTED_PREAMBLE: &str = "<persisted-output>";
+const PREVIEW_MARKER: &str = "Preview (first ";
 
 const MCP_PREFIX: &str = "mcp__";
 const MCP_SEPARATOR: &str = "__";
@@ -221,6 +231,76 @@ pub fn overflow(detail: &Value) -> Option<Overflow<'_>> {
     Some(Overflow { name, bytes })
 }
 
+pub fn overflow_path(transcript: &Path, name: &str) -> PathBuf {
+    transcript.with_extension("").join(OVERFLOW_DIR).join(name)
+}
+
+pub fn read_overflow(path: &Path) -> Result<Vec<String>, String> {
+    let file = File::open(path).map_err(|error| error.to_string())?;
+    let mut reader = BufReader::new(file);
+    let mut lines: Vec<String> = Vec::new();
+    let mut spent: usize = 0;
+    let mut line: Vec<u8> = Vec::new();
+
+    while lines.len() < MAX_OVERFLOW_LINES && spent < MAX_OVERFLOW_BYTES {
+        line.clear();
+        if !next_line(&mut reader, &mut line).map_err(|error| error.to_string())? {
+            break;
+        }
+        spent = spent.saturating_add(line.len());
+        lines.push(String::from_utf8_lossy(&line).into_owned());
+    }
+    Ok(lines)
+}
+
+fn next_line<R: BufRead>(reader: &mut R, line: &mut Vec<u8>) -> std::io::Result<bool> {
+    let mut any = false;
+    loop {
+        let step = {
+            let available = match reader.fill_buf() {
+                Ok(available) => available,
+                Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error),
+            };
+            if available.is_empty() {
+                return Ok(any);
+            }
+            any = true;
+            if let Some(index) = memchr::memchr(b'\n', available) {
+                let (head, _) = available.split_at_checked(index).unwrap_or((available, &[]));
+                append_capped(line, head);
+                (index.saturating_add(1), true)
+            } else {
+                append_capped(line, available);
+                (available.len(), false)
+            }
+        };
+        let (consumed, done) = step;
+        reader.consume(consumed);
+        if done {
+            return Ok(true);
+        }
+    }
+}
+
+fn append_capped(line: &mut Vec<u8>, bytes: &[u8]) {
+    let room = MAX_OVERFLOW_LINE.saturating_sub(line.len());
+    if room == 0 {
+        return;
+    }
+    let (head, _) = bytes.split_at_checked(room).unwrap_or((bytes, &[]));
+    line.extend_from_slice(head);
+}
+
+pub fn without_preamble(body: &str) -> &str {
+    if !body.starts_with(PERSISTED_PREAMBLE) {
+        return body;
+    }
+    let Some(marker) = body.find(PREVIEW_MARKER) else { return body };
+    let (_, rest) = body.split_at_checked(marker).unwrap_or(("", body));
+    rest.split_once('\n').map_or(rest, |(_, tail)| tail)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -421,5 +501,27 @@ mod tests {
     #[test]
     fn a_result_with_no_overflow_at_all_points_at_no_file() {
         assert_eq!(overflow(&json!({"stdout": "ok"})), None);
+    }
+
+    #[test]
+    fn an_overflow_file_is_located_beside_the_transcript_and_not_where_the_record_says() {
+        let transcript = Path::new("/store/projects/-encoded/11111111.jsonl");
+        assert_eq!(
+            overflow_path(transcript, "b7k2m9x4q.txt"),
+            PathBuf::from("/store/projects/-encoded/11111111/tool-results/b7k2m9x4q.txt")
+        );
+    }
+
+    #[test]
+    fn the_persisted_output_preamble_is_dropped_so_the_preview_reads_as_output() {
+        let body =
+            "<persisted-output>\nOutput too large (48.9KB). Full output saved to: /x/y.txt\n\nPreview (first 2KB):\nFresh memchr";
+        assert_eq!(without_preamble(body), "Fresh memchr");
+    }
+
+    #[test]
+    fn a_body_that_is_not_a_persisted_output_is_left_exactly_as_it_is() {
+        assert_eq!(without_preamble("     212 src/engine/grid.rs"), "     212 src/engine/grid.rs");
+        assert_eq!(without_preamble("<persisted-output>\nno preview marker here"), "<persisted-output>\nno preview marker here");
     }
 }

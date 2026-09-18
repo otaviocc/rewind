@@ -244,11 +244,16 @@ fn conversation_rows(area: Rect, buf: &mut Buffer, app: &App) {
     let lines = app.lines();
     let top = app.pane(Column::Conversation).top;
     let last = lines.len().min(top.saturating_add(usize::from(area.height)));
+    let cursor = app.cursor_line();
 
     for (row_index, index) in (top..last).enumerate() {
         let Some(line) = lines.get(index) else { continue };
         let y = area.y.saturating_add(u16::try_from(row_index).unwrap_or(u16::MAX));
-        painted(Rect { y, height: 1, ..area }, buf, line);
+        let row = Rect { y, height: 1, ..area };
+        painted(row, buf, line);
+        if cursor == Some(index) {
+            buf.set_style(row, cursor_line_style());
+        }
     }
 }
 
