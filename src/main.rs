@@ -8,12 +8,24 @@ use clap::Parser;
 use jiff::Timestamp;
 use rewind::ctx::Ctx;
 use rewind::domain::project::{self, Project, Resolution};
-use rewind::theme::Theme;
+use rewind::theme::loader;
 use rewind::ui;
 use rewind::{cli::Cli, paths};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let config_dir = paths::config_dir();
+
+    if cli.list_themes {
+        print!("{}", loader::list(config_dir.as_deref()));
+        return Ok(());
+    }
+
+    let loaded = loader::load(cli.config.as_deref(), cli.theme.as_deref(), config_dir.as_deref())?;
+    for warning in &loaded.warnings {
+        eprintln!("rewind: {warning}");
+    }
+
     let claude = paths::claude_dir(cli.claude_dir)?;
 
     if std::io::stdout().is_terminal() {
@@ -22,7 +34,7 @@ fn main() -> Result<()> {
             project: cli.project,
             session: cli.session,
             mouse: !cli.no_mouse,
-            theme: Theme::default(),
+            theme: loaded.theme,
         };
         return ui::run(Ctx { now: Timestamp::now() }, &options);
     }

@@ -4,6 +4,7 @@
 //! not say falls through to the base, and past the base to the defaults in Rust.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -109,6 +110,51 @@ impl ThemeFile {
             }
         }
         warnings
+    }
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Listing {
+    pub built_in: Vec<&'static str>,
+    pub user: Vec<String>,
+    pub dir: Option<PathBuf>,
+}
+
+pub fn list(config_dir: Option<&Path>) -> Listing {
+    let built_in = BUILT_INS.iter().map(|(name, _)| *name).collect();
+    let dir = config_dir.map(|dir| dir.join("themes"));
+    let mut user: Vec<String> = dir
+        .as_deref()
+        .and_then(|dir| fs::read_dir(dir).ok())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "toml"))
+        .filter_map(|path| path.file_stem().map(|stem| stem.to_string_lossy().into_owned()))
+        .collect();
+    user.sort();
+    Listing { built_in, user, dir }
+}
+
+impl fmt::Display for Listing {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        writeln!(formatter, "built-in")?;
+        for name in &self.built_in {
+            writeln!(formatter, "  {name}")?;
+        }
+        if let Some(dir) = &self.dir {
+            writeln!(formatter)?;
+            writeln!(formatter, "user  {}", dir.display())?;
+            if self.user.is_empty() {
+                writeln!(formatter, "  none")?;
+            }
+            for name in &self.user {
+                let shadow = if self.built_in.contains(&name.as_str()) { "  shadows the built-in" } else { "" };
+                writeln!(formatter, "  {name}{shadow}")?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -630,6 +676,36 @@ mod tests {
             ("mine", "base = \"base-theme\"\n\n[palette]\naccent = \"red\"\n"),
         ]);
         assert_eq!(loaded(&dir, Some("mine")).theme.palette.accent, Color::Red, "an overridden bad colour was still fatal");
+    }
+
+    #[test]
+    fn the_listing_puts_the_built_ins_first_and_marks_a_user_theme_that_shadows_one() {
+        let dir = config(&[("mine", ""), ("ansi", ""), ("other", "")]);
+        let listing = list(Some(dir.path()));
+        assert_eq!(listing.built_in, vec!["ansi"]);
+        assert_eq!(listing.user, vec!["ansi", "mine", "other"], "the user themes were not sorted");
+
+        let printed = listing.to_string();
+        let built_in = printed.find("built-in").expect("a built-in heading");
+        assert!(built_in < printed.find("user").expect("a user heading"), "{printed}");
+        assert!(printed.contains("ansi  shadows the built-in"), "{printed}");
+        assert!(!printed.contains("mine  shadows"), "{printed}");
+    }
+
+    #[test]
+    fn the_listing_says_nothing_about_user_themes_when_there_is_no_config_directory() {
+        let listing = list(None);
+        assert_eq!(listing.built_in, vec!["ansi"]);
+        assert!(listing.user.is_empty());
+        assert!(!listing.to_string().contains("user"), "{listing:?}");
+    }
+
+    #[test]
+    fn an_unreadable_themes_directory_is_an_empty_listing_rather_than_a_failure() {
+        let dir = tempfile::TempDir::new().expect("a temporary config directory");
+        let listing = list(Some(dir.path()));
+        assert!(listing.user.is_empty());
+        assert!(listing.to_string().contains("none"), "{listing:?}");
     }
 
     #[test]
