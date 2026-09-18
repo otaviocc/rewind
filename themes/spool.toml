@@ -1,0 +1,52 @@
+# Spool — the default theme, and the one written for rewind rather than
+# borrowed from an editor.
+#
+# `background` and `foreground` stay `reset`, so a transcript sits on the
+# reader's own terminal ground and body text is whatever they already read in.
+# Everything else is concrete, which is the point: `ansi` has to trust that
+# `dark_gray` is dark, and on most schemes bright black is a mid grey, so the
+# cursor line came out a heavy washed-out bar.
+#
+# The two gutters carry most of the colour in a transcript, so they are the two
+# decisions that matter: `accent` is a warm amber for the human turn, `notice` a
+# cool teal for the assistant's. They are far enough apart in hue to be told
+# apart at a glance down the left edge, which is the whole job.
+#
+# Tuned against a dark terminal. A light scheme wants `catppuccin-latte` or
+# `solarized-light`; `ansi` remains the only theme that asserts nothing at all.
+name = "spool"
+syntax_theme = "base16-ocean.dark"
+
+[palette]
+background           = "reset"
+foreground           = "reset"
+muted                = "#4f5561"   # dividers, thinking, injections, hints
+muted_text           = "#949cab"   # quoted text, a step up from muted
+subtle               = "#22262e"   # the code band, a shade off a dark ground
+cursor               = "#2e3440"   # a step lighter, so it reads over the band
+selection_background = "#3a4152"
+selection_foreground = "#e8ecf2"
+error                = "#e08a7e"
+success              = "#a3c586"
+warning              = "#dcb173"
+accent               = "#d9a05b"   # the human gutter, and inline code
+chrome               = "#d9a05b"
+highlight            = "#82a9d8"   # links
+notice               = "#9fc7c0"   # the assistant gutter, and the current match
+
+# `subtle` is a real near-background tint rather than ANSI bright black, so code
+# gets its band; the element defaults leave it off for `ansi`'s sake.
+#
+# `code_block` names a foreground as well, which the other elements do not need:
+# it is the colour of a fence no syntax was found for, and `reset` there would
+# put the terminal's own text on a band this theme chose, which is the one place
+# the two can disagree badly.
+[elements.inline_code]
+bg = "subtle"
+
+[elements.code_block]
+fg = "#c7ccd4"
+bg = "subtle"
+
+[elements.code_block_lang]
+bg = "subtle"

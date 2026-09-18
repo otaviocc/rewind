@@ -17,6 +17,7 @@ use crate::theme::elements::{self, ElementFile};
 use crate::theme::palette::PaletteFile;
 use crate::theme::{Element, Palette, Theme};
 
+const SPOOL: &str = include_str!("../../themes/spool.toml");
 const ANSI: &str = include_str!("../../themes/ansi.toml");
 const CATPPUCCIN_LATTE: &str = include_str!("../../themes/catppuccin-latte.toml");
 const CATPPUCCIN_MOCHA: &str = include_str!("../../themes/catppuccin-mocha.toml");
@@ -31,6 +32,7 @@ const TOKYO_NIGHT_DAY: &str = include_str!("../../themes/tokyo-night-day.toml");
 const VESPER: &str = include_str!("../../themes/vesper.toml");
 
 pub const BUILT_INS: &[(&str, &str)] = &[
+    ("spool", SPOOL),
     ("ansi", ANSI),
     ("catppuccin-latte", CATPPUCCIN_LATTE),
     ("catppuccin-mocha", CATPPUCCIN_MOCHA),
@@ -46,6 +48,8 @@ pub const BUILT_INS: &[(&str, &str)] = &[
 ];
 
 pub const IMPLICIT_BASE: &str = "ansi";
+
+pub const DEFAULT: &str = "spool";
 
 #[derive(Debug, Error)]
 pub enum ThemeError {
@@ -247,27 +251,25 @@ fn find(name: &str, config_dir: Option<&Path>) -> Result<Source, ThemeError> {
         .ok_or_else(|| ThemeError::Unknown(name.to_owned()))
 }
 
-fn head(config: Option<&Path>, name: Option<&str>, config_dir: Option<&Path>) -> Result<Option<(Source, String)>, ThemeError> {
+fn head(config: Option<&Path>, name: Option<&str>, config_dir: Option<&Path>) -> Result<(Source, String), ThemeError> {
     if let Some(path) = config {
         let label = path.file_stem().map_or_else(|| String::from("theme"), |stem| stem.to_string_lossy().into_owned());
-        return Ok(Some((Source::File(path.to_path_buf()), label)));
+        return Ok((Source::File(path.to_path_buf()), label));
     }
     if let Some(name) = name {
-        return Ok(Some((find(name, config_dir)?, name.to_owned())));
+        return Ok((find(name, config_dir)?, name.to_owned()));
     }
     if let Some(dir) = config_dir {
         let path = dir.join("theme.toml");
         if path.is_file() {
-            return Ok(Some((Source::File(path), String::from("theme"))));
+            return Ok((Source::File(path), String::from("theme")));
         }
     }
-    Ok(None)
+    Ok((find(DEFAULT, config_dir)?, DEFAULT.to_owned()))
 }
 
 pub fn load(config: Option<&Path>, name: Option<&str>, config_dir: Option<&Path>) -> Result<Loaded, ThemeError> {
-    let Some((source, label)) = head(config, name, config_dir)? else {
-        return Ok(Loaded { theme: Theme::default(), warnings: Vec::new() });
-    };
+    let (source, label) = head(config, name, config_dir)?;
 
     let mut warnings = Vec::new();
     let mut seen = BTreeSet::new();
@@ -567,8 +569,17 @@ mod tests {
     #[test]
     fn nothing_at_all_loads_the_built_in_default() {
         let loaded = load(None, None, None).expect("no configuration is not a failure");
-        assert_eq!(loaded.theme, Theme::default());
+        assert_eq!(loaded.theme.name, DEFAULT, "an unconfigured run did not land on the default theme");
         assert!(loaded.warnings.is_empty());
+        assert_ne!(loaded.theme.palette, Palette::default(), "the default theme asserts nothing, so it is not a theme");
+        assert_eq!(loaded.theme.palette.background, Palette::default().background, "the default repainted the terminal's ground");
+    }
+
+    #[test]
+    fn a_reader_can_shadow_the_default_without_naming_it() {
+        let dir = config(&[(DEFAULT, "[palette]\naccent = \"red\"\n")]);
+        let theme = loaded(&dir, None).theme;
+        assert_eq!(theme.palette.accent, Color::Red, "a user file named after the default did not replace it");
     }
 
     #[test]
@@ -678,7 +689,7 @@ mod tests {
     #[test]
     fn a_missing_config_directory_theme_file_is_not_an_error_at_all() {
         let dir = config(&[]);
-        assert_eq!(loaded(&dir, None).theme, Theme::default());
+        assert_eq!(loaded(&dir, None).theme.name, DEFAULT, "an absent theme.toml did not fall through to the default");
     }
 
     #[test]
@@ -706,7 +717,8 @@ mod tests {
     fn the_listing_puts_the_built_ins_first_and_marks_a_user_theme_that_shadows_one() {
         let dir = config(&[("mine", ""), ("ansi", ""), ("other", "")]);
         let listing = list(Some(dir.path()));
-        assert_eq!(listing.built_in.first(), Some(&"ansi"), "{:?}", listing.built_in);
+        assert_eq!(listing.built_in.first(), Some(&DEFAULT), "{:?}", listing.built_in);
+        assert_eq!(listing.built_in.get(1), Some(&IMPLICIT_BASE), "{:?}", listing.built_in);
         assert_eq!(listing.user, vec!["ansi", "mine", "other"], "the user themes were not sorted");
 
         let printed = listing.to_string();
