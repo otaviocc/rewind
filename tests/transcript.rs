@@ -27,6 +27,7 @@ const MARKDOWN: &str = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const TOOLS: &str = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 const COMPACTED: &str = "22222222-2222-4222-8222-222222222222";
 const SEVERED: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const FORKED: &str = "33333333-3333-4333-8333-333333333333";
 const LEGACY: &str = "44444444-4444-4444-8444-444444444444";
 
 fn collect(dir: &Path, found: &mut Vec<PathBuf>) {
@@ -51,11 +52,21 @@ struct View {
     outputs: Outputs,
     agents: Agents,
     root: Option<rewind::domain::thread::NodeId>,
+    branches: rewind::render::Branches,
+    injections: bool,
 }
 
 impl View {
     const fn ctx(&self, width: usize) -> Ctx<'_> {
-        Ctx { width, expanded: &self.expanded, outputs: &self.outputs, agents: &self.agents, root: self.root }
+        Ctx {
+            width,
+            expanded: &self.expanded,
+            outputs: &self.outputs,
+            agents: &self.agents,
+            root: self.root,
+            branches: &self.branches,
+            injections: self.injections,
+        }
     }
 
     fn expanding(path: &Path) -> Self {
@@ -97,6 +108,12 @@ fn rendered(session: &str, width: usize) -> String {
 
 fn render_file(path: &Path, width: usize) -> String {
     lines_of(&built(path, width, &View { agents: subagent::discover(path), ..View::default() }))
+}
+
+fn revealed(session: &str, width: usize) -> String {
+    let path = session_path(session);
+    let view = View { agents: subagent::discover(&path), injections: true, ..View::default() };
+    lines_of(&built(&path, width, &view))
 }
 
 fn expanded(session: &str, width: usize) -> String {
@@ -172,6 +189,36 @@ fn a_compacted_session_renders_one_thread_with_a_labelled_seam_in_it() {
 #[test]
 fn a_compacted_session_keeps_its_seam_at_a_narrow_column() {
     insta::assert_snapshot!("compacted-32", rendered(COMPACTED, 32));
+}
+
+#[test]
+fn revealing_the_injections_collapses_each_run_to_one_line() {
+    insta::assert_snapshot!("injections-80", revealed(BASELINE, 80));
+}
+
+#[test]
+fn a_forked_session_marks_every_place_it_could_have_gone_another_way() {
+    insta::assert_snapshot!("forked-80", rendered(FORKED, 80));
+}
+
+#[test]
+fn a_parallel_tool_call_is_not_a_branch() {
+    let text = rendered(TOOLS, 80);
+    assert!(!text.contains("alternate branches"), "the tool surface forks only on tool results:\n{text}");
+}
+
+#[test]
+fn every_line_of_a_forked_session_fits_the_column_it_was_wrapped_for() {
+    let path = session_path(FORKED);
+    for width in [8, 12, 20, 32, 40, 80, 120, 200] {
+        for line in widths(&path, width) {
+            assert!(line <= width, "a line of {line} columns was wrapped for {width}");
+        }
+        let view = View { agents: subagent::discover(&path), injections: true, ..View::default() };
+        for line in built(&path, width, &view).lines.iter().map(RenderedLine::width) {
+            assert!(line <= width, "a revealed line of {line} columns was wrapped for {width}");
+        }
+    }
 }
 
 #[test]
@@ -407,4 +454,50 @@ fn every_tool_name_in_the_real_store_digests_to_something_when_it_was_given_an_i
     println!("no input at all, so nothing to summarise: {inputless:?}");
     let blank: Vec<&String> = digested.iter().filter(|(_, found)| !**found).map(|(name, _)| name).collect();
     assert!(blank.is_empty(), "these tool names were given an input and digested to nothing: {blank:#?}");
+}
+
+#[test]
+#[ignore = "reads the developer's real ~/.claude, not the fixture tree"]
+fn every_branch_and_injection_in_the_real_store_renders_and_cycles() {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return };
+    let projects = home.join(".claude").join("projects");
+    if !projects.is_dir() {
+        return;
+    }
+
+    let mut sessions = Vec::new();
+    collect(&projects, &mut sessions);
+
+    let (mut forks, mut widest, mut runs) = (0_usize, 0_usize, 0_usize);
+    let mut kinds: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut blank: Vec<String> = Vec::new();
+    for session in sessions {
+        let Ok(conversation) = thread::build(&session) else { continue };
+        for &node in conversation.thread() {
+            let alternates = conversation.alternates(node);
+            if alternates.len() > 1 {
+                forks = forks.saturating_add(1);
+                widest = widest.max(alternates.len());
+            }
+        }
+        let view = View { agents: subagent::discover(&session), injections: true, ..View::default() };
+        for line in built(&session, 100, &view).lines.iter().map(RenderedLine::text) {
+            let Some(rest) = line.trim_start_matches(['▎', ' ']).strip_prefix("· ") else { continue };
+            let Some((count, named)) = rest.split_once(" injection") else { continue };
+            if count.parse::<usize>().is_err() {
+                continue;
+            }
+            runs = runs.saturating_add(1);
+            let Some(named) = named.strip_prefix("s · ").or_else(|| named.strip_prefix(" · ")) else {
+                blank.push(line.clone());
+                continue;
+            };
+            kinds.extend(named.split(" +").next().unwrap_or(named).split(", ").map(str::to_owned));
+        }
+    }
+
+    println!("{forks} forks worth a marker, widest {widest}; {runs} injection runs across {} kinds", kinds.len());
+    println!("kinds: {kinds:?}");
+    assert!(runs > 0, "no injection run was rendered from the real store at all");
+    assert!(blank.is_empty(), "these injection runs named no kind at all: {blank:#?}");
 }

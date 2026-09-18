@@ -66,7 +66,13 @@ invertible, which is the whole reason `.claude.json` exists.
 ### `11111111-….jsonl` — the readable baseline
 
 A human prompt turn, assistant prose with a `thinking` block, `Bash` / `Agent` / `Read` tool
-calls with their results, three `attachment` subtypes, and two `system` subtypes. The second
+calls with their results, six `attachment` subtypes in two runs, and two `system` subtypes.
+
+The injections are deliberately a **run of five then a run of one**. Two of the five are the
+same `total_tokens_reminder`, because that subtype plus `output_style` are 79% of the 28 307
+attachments in a real store — a renderer that names every kind in a run would print the same
+two words sixteen thousand times. Collapsed, a repeat is named once; expanded, it is shown
+every time it happened. The second
 `Agent` call exists to be reached by its result's `agentId` alone — see `subagents/` below.
 
 Its tail is the **latch family**: records carrying only `sessionId` and no envelope at all.
@@ -93,6 +99,9 @@ so the interesting field names sit one level down — `state` and `writtenAtMs` 
 `savedAt` and `stampHighWater` for the ledger. The ledger's `turnTimestamps` and `threads` are
 `[]` here because they were `[]` in **every** real sample: their *element* shape is
 **unobserved**, so do not read an empty array as proof the elements are scalars.
+
+A record after the compaction boundary carries `isCompactSummary: true` — see
+`22222222-….jsonl`.
 
 `custom-title.json` says something different from the `custom-title` record on purpose: the
 record outranks the file, and the values differ so you can see which one was used.
@@ -140,6 +149,12 @@ The boundary is `type: "system"` with `subtype: "compact_boundary"` — **not** 
 type. Its `parentUuid` is `null`, and `logicalParentUuid` is the only thing joining it to the
 tail above it.
 
+The record **after** the boundary carries `isCompactSummary: true`: the summary the compaction
+wrote, which passes `is_human_turn()` and must not render as one. `compactMetadata` carries
+eight keys, not the five the numbers on the divider come from — `preservedSegment` and
+`preservedMessages` name by uuid exactly which messages survived. Only **one** compact boundary
+exists in 238 real sessions, so this file is effectively the specification.
+
 ### `33333333-….jsonl` — fragmentation, retry, fork, base64
 
 - **One** assistant message across three records sharing `message.id` *and* `requestId`,
@@ -150,7 +165,12 @@ tail above it.
 - A **retry** reusing the same `message.id` under a *different* `requestId`, on its own
   branch. Coalescing on `message.id` alone fuses it into the message above; the key is the
   pair.
-- A **fork**: one `parentUuid` with two `user` children, as a rewind produces.
+- A **fork**: one `parentUuid` with **three** `user` children, as repeated rewinds produce. Three
+  rather than two so that cycling with `b` is distinguishable from toggling — a two-way fork
+  cannot tell the difference. Observed on 2026-09-18: 9 forks in the main sessions of a real
+  store have more than one child that *renders*, and 81 more inside `subagents/`; the other 672
+  are an assistant turn making several tool calls in parallel, whose results all parent off the
+  same coalesced node and must **not** be offered as branches.
 - An assistant record with **no `apiBlockIndex`**, which must read as a single fragment
   rather than as block zero.
 - An inline base64 `image` of ~5 KB, enough that redacting before `serde_json` sees the line

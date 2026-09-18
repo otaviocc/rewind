@@ -22,6 +22,8 @@ pub enum Action {
     NextCall { forward: bool },
     ToggleCall,
     ToggleAllCalls,
+    CycleBranch,
+    ToggleInjections,
     Resize(Size),
 }
 
@@ -60,6 +62,8 @@ fn key_action(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('N') => Some(Action::NextCall { forward: false }),
         KeyCode::Char(' ') => Some(Action::ToggleCall),
         KeyCode::Char('t') => Some(Action::ToggleAllCalls),
+        KeyCode::Char('b') => Some(Action::CycleBranch),
+        KeyCode::Char('i') => Some(Action::ToggleInjections),
         KeyCode::Char('q') => Some(Action::Quit),
         _ => None,
     }
@@ -103,6 +107,8 @@ mod tests {
             (press(KeyCode::Char('N')), Action::NextCall { forward: false }),
             (press(KeyCode::Char(' ')), Action::ToggleCall),
             (press(KeyCode::Char('t')), Action::ToggleAllCalls),
+            (press(KeyCode::Char('b')), Action::CycleBranch),
+            (press(KeyCode::Char('i')), Action::ToggleInjections),
             (press(KeyCode::Char('q')), Action::Quit),
             (control('c'), Action::Quit),
         ];

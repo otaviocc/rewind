@@ -15,7 +15,7 @@ use crate::domain::thread::{Conversation, NodeId, NodeKind, ThreadError};
 use crate::domain::tool;
 use crate::render::line::RenderedLine;
 use crate::render::message::{self, Anchor, Position, Transcript};
-use crate::render::{Ctx as RenderCtx, Expanded, Outputs, Overflow};
+use crate::render::{Branches, Ctx as RenderCtx, Expanded, Outputs, Overflow};
 use crate::ui::input::{Action, Motion};
 use crate::ui::{Options, columns, listing};
 
@@ -103,6 +103,10 @@ impl Rendered {
         &self.agents
     }
 
+    fn walk(&self, branches: &Branches) -> Vec<NodeId> {
+        self.root.map_or_else(|| self.conversation.thread_with(branches), |root| self.conversation.path_from_with(root, branches))
+    }
+
     pub fn turns(&self) -> usize {
         let walk = self.root.map_or_else(|| self.conversation.thread().to_vec(), |root| self.conversation.path_from(root));
         walk.iter()
@@ -120,12 +124,22 @@ impl Rendered {
 struct View {
     expanded: Expanded,
     outputs: Outputs,
+    branches: Branches,
+    injections: bool,
     revision: u64,
 }
 
 impl View {
     const fn ctx<'a>(&'a self, width: usize, agents: &'a Agents, root: Option<NodeId>) -> RenderCtx<'a> {
-        RenderCtx { width, expanded: &self.expanded, outputs: &self.outputs, agents, root }
+        RenderCtx {
+            width,
+            expanded: &self.expanded,
+            outputs: &self.outputs,
+            agents,
+            root,
+            branches: &self.branches,
+            injections: self.injections,
+        }
     }
 
     const fn bump(&mut self) {
@@ -465,7 +479,38 @@ impl App {
             Action::NextCall { forward } => self.move_call_cursor(forward),
             Action::ToggleCall => self.toggle_call(),
             Action::ToggleAllCalls => self.toggle_all_calls(),
+            Action::CycleBranch => self.cycle_branch(),
+            Action::ToggleInjections => self.toggle_injections(),
         }
+    }
+
+    fn toggle_injections(&mut self) {
+        self.view.injections = !self.view.injections;
+        self.view.bump();
+        self.rerender();
+    }
+
+    fn cycle_branch(&mut self) {
+        let Some(key) = self.call_cursor.and_then(|cursor| self.anchors().get(cursor)).map(|anchor| anchor.id.clone()) else {
+            return;
+        };
+        let Loadable::Ready(rendered) = &self.conversation else { return };
+        let conversation = rendered.conversation();
+        let Some(fork) = conversation.id_of(&key) else { return };
+        let alternates = conversation.alternates(fork);
+        if alternates.len() < 2 {
+            return;
+        }
+        let showing = rendered
+            .walk(&self.view.branches)
+            .iter()
+            .find_map(|on| alternates.iter().position(|alternate| alternate == on))
+            .unwrap_or(0);
+        let next = showing.saturating_add(1).checked_rem(alternates.len()).unwrap_or(0);
+        let Some(&child) = alternates.get(next) else { return };
+        self.view.branches.insert(fork, child);
+        self.view.bump();
+        self.rerender();
     }
 
     fn clamp_call_cursor(&mut self) {
@@ -1071,6 +1116,125 @@ mod tests {
         app.reflow();
         let cursor = app.call_cursor().expect("a cursor");
         assert_eq!(app.anchors().get(cursor).map(|anchor| anchor.id.clone()), Some(key), "the same call, not the same index");
+    }
+
+    fn fixture_session(name: &str, area: Size) -> App {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("data")
+            .join("claude")
+            .join("projects")
+            .join("-Users-fixture-Developer-holodeck")
+            .join(format!("{name}.jsonl"));
+        let conversation = crate::domain::thread::build(&path).expect("a built conversation");
+        let agents = crate::domain::subagent::discover(&path);
+        let mut app = app(area);
+        app.pending_conversation_path = Some(path);
+        app.set_conversation(app.conversation_generation(), Ok(Box::new(conversation)), agents);
+        app.apply(Action::ToggleFocusMode);
+        app.reflow();
+        app
+    }
+
+    fn text_of(app: &App) -> Vec<String> {
+        app.lines().iter().map(RenderedLine::text).collect()
+    }
+
+    fn on_marker(app: &mut App, wanted: &str) {
+        for _ in 0..app.anchors().len().saturating_add(1) {
+            if app.cursor_line().and_then(|line| app.lines().get(line)).is_some_and(|line| line.text().contains(wanted)) {
+                return;
+            }
+            app.apply(Action::NextCall { forward: true });
+        }
+        panic!("no branch marker matching {wanted:?} to land on");
+    }
+
+    #[test]
+    fn a_marker_appears_only_where_more_than_one_child_actually_renders() {
+        let app = fixture_session("33333333-3333-4333-8333-333333333333", Size::new(120, 40));
+        let markers = text_of(&app).iter().filter(|line| line.contains("alternate branches here")).count();
+        assert_eq!(markers, 2, "the two genuine forks, and nothing on the parallel tool results");
+
+        let quiet = fixture_session("11111111-1111-4111-8111-111111111111", Size::new(120, 40));
+        assert!(!text_of(&quiet).iter().any(|line| line.contains("alternate branches")), "a linear session has no markers");
+    }
+
+    #[test]
+    fn b_cycles_through_every_alternate_and_back_to_where_it_started() {
+        let mut app = fixture_session("33333333-3333-4333-8333-333333333333", Size::new(120, 40));
+        on_marker(&mut app, "3 alternate branches");
+        let start = text_of(&app);
+        assert!(
+            text_of(&app).iter().any(|line| line.contains("3 alternate branches")),
+            "the three-way fork is the one being cycled: {start:?}"
+        );
+
+        app.apply(Action::CycleBranch);
+        assert_ne!(text_of(&app), start, "switching a branch must change what is on screen");
+        app.apply(Action::CycleBranch);
+        assert_ne!(text_of(&app), start);
+        app.apply(Action::CycleBranch);
+        assert_eq!(text_of(&app), start, "three presses on a three-way fork come back to the start");
+    }
+
+    #[test]
+    fn b_on_something_that_is_not_a_marker_does_nothing() {
+        let mut app = fixture_session("11111111-1111-4111-8111-111111111111", Size::new(120, 40));
+        app.apply(Action::NextCall { forward: true });
+        let before = text_of(&app);
+        app.apply(Action::CycleBranch);
+        assert_eq!(text_of(&app), before, "the cursor is on a Bash call, not a fork");
+    }
+
+    #[test]
+    fn i_reveals_the_injections_and_hides_them_again() {
+        let mut app = fixture_session("11111111-1111-4111-8111-111111111111", Size::new(120, 40));
+        let hidden = text_of(&app);
+        assert!(!hidden.iter().any(|line| line.contains("injections")), "off by default");
+
+        app.apply(Action::ToggleInjections);
+        let shown = text_of(&app);
+        assert!(shown.iter().any(|line| line.contains("5 injections")), "a run collapses to one line: {shown:?}");
+        assert!(
+            shown.iter().any(|line| line.contains("date, instructions, total_tokens_reminder +1")),
+            "three kinds named and the rest counted: {shown:?}"
+        );
+
+        app.apply(Action::ToggleInjections);
+        assert_eq!(text_of(&app), hidden, "and back to exactly where it was");
+    }
+
+    #[test]
+    fn revealing_injections_does_not_move_the_reading_position() {
+        let mut app = fixture_session("11111111-1111-4111-8111-111111111111", Size::new(120, 12));
+        app.apply(Action::Move(Motion::HalfPage(1)));
+        app.apply(Action::Move(Motion::HalfPage(1)));
+        let before = node_at_top(&app).expect("a node at the top");
+
+        app.apply(Action::ToggleInjections);
+        assert_eq!(node_at_top(&app).map(|position| position.node), Some(before.node), "the same node is still being read");
+
+        app.apply(Action::ToggleInjections);
+        assert_eq!(node_at_top(&app).map(|position| position.node), Some(before.node));
+    }
+
+    #[test]
+    fn revealing_injections_does_not_renumber_the_selected_tool_call() {
+        let mut app = fixture_session("11111111-1111-4111-8111-111111111111", Size::new(120, 40));
+        app.apply(Action::NextCall { forward: true });
+        app.apply(Action::NextCall { forward: true });
+        let Some(key) = app.call_cursor().and_then(|cursor| app.anchors().get(cursor)).map(|anchor| anchor.id.clone()) else {
+            panic!("a selected call")
+        };
+
+        app.apply(Action::ToggleInjections);
+        let cursor = app.call_cursor().expect("still a cursor");
+        assert_eq!(
+            app.anchors().get(cursor).map(|anchor| anchor.id.clone()),
+            Some(key),
+            "the injection run inserts an anchor above; the cursor must follow the call, not the index"
+        );
     }
 
     #[test]

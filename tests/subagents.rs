@@ -144,7 +144,16 @@ fn visible(session: &std::path::Path, agents: &Agents) -> std::collections::BTre
     let Ok(conversation) = thread::build(session) else { return std::collections::BTreeSet::new() };
     let expanded = rewind::render::Expanded::new();
     let outputs = rewind::render::Outputs::new();
-    let ctx = rewind::render::Ctx { width: 100, expanded: &expanded, outputs: &outputs, agents, root: None };
+    let branches = rewind::render::Branches::new();
+    let ctx = rewind::render::Ctx {
+        width: 100,
+        expanded: &expanded,
+        outputs: &outputs,
+        agents,
+        root: None,
+        branches: &branches,
+        injections: false,
+    };
     rewind::render::message::transcript(&conversation, &ctx)
         .anchors
         .iter()

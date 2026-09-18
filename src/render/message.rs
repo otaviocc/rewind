@@ -10,7 +10,7 @@ use crate::domain::record::CompactMetadata;
 use crate::domain::thread::{Conversation, Node, NodeId, NodeKind};
 use crate::render::line::{RenderedLine, StyledSpan, truncate};
 use crate::render::prose;
-use crate::render::{Ctx, divider, tool};
+use crate::render::{Ctx, divider, injection, tool};
 use unicode_width::UnicodeWidthStr;
 
 const RAIL: &str = "▎ ";
@@ -142,9 +142,16 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
 
     let sidechain = ctx.root.is_some() || conversation.is_sidechain();
     let human = if sidechain { PROMPT_LABEL } else { HUMAN_LABEL };
-    let walk = ctx.root.map_or_else(|| conversation.thread().to_vec(), |root| conversation.path_from(root));
+    let walk =
+        ctx.root.map_or_else(|| conversation.thread_with(ctx.branches), |root| conversation.path_from_with(root, ctx.branches));
 
-    for &id in &walk {
+    let mut injections: Vec<NodeId> = Vec::new();
+    for (index, &id) in walk.iter().enumerate() {
+        if matches!(conversation.node(id).map(|node| &node.kind), Some(NodeKind::Attachment(_))) {
+            injections.push(id);
+            continue;
+        }
+        flush(conversation, ctx, &mut injections, &mut groups, inner);
         let Some(node) = conversation.node(id) else { continue };
         let seam = seam(node, sidechain, inner);
         match &node.kind {
@@ -201,7 +208,10 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
                 }
             }
         }
+        let on = walk.get(index.saturating_add(1)).copied();
+        marker(conversation, id, on, &mut groups, inner);
     }
+    flush(conversation, ctx, &mut injections, &mut groups, inner);
 
     if sidechain {
         return flatten(groups);
@@ -214,6 +224,41 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
     }
 
     flatten(groups)
+}
+
+fn marker(conversation: &Conversation, id: NodeId, on: Option<NodeId>, groups: &mut [Group], width: usize) {
+    let alternates = conversation.alternates(id);
+    if alternates.len() < 2 {
+        return;
+    }
+    let Some(node) = conversation.node(id) else { return };
+    let Some(group) = groups.last_mut() else { return };
+    let showing = on.and_then(|on| alternates.iter().position(|alternate| *alternate == on)).map_or(1, |at| at.saturating_add(1));
+    let text = format!("{} alternate branches here{SEPARATOR}showing {showing}{SEPARATOR}[b] to switch", alternates.len());
+    group.anchors.push(Anchor { id: Box::from(node.uuid()), line: group.lines.len(), agent: None });
+    group.lines.push(divider::line(&text, width, dim_style()));
+}
+
+fn flush(conversation: &Conversation, ctx: &Ctx<'_>, pending: &mut Vec<NodeId>, groups: &mut Vec<Group>, width: usize) {
+    let run = std::mem::take(pending);
+    if run.is_empty() || !ctx.injections {
+        return;
+    }
+    let Some(first) = run.first().copied() else { return };
+    let Some(key) = conversation.node(first).map(|node| Box::<str>::from(node.uuid())) else { return };
+    let expanded = ctx.is_expanded(&key);
+    let mut lines = vec![injection::run(conversation, &run, expanded, width, dim_style())];
+    if expanded {
+        lines.extend(injection::each(conversation, &run, width, dim_style()));
+    }
+    if let Some(group) = groups.last_mut() {
+        group.anchors.push(Anchor { id: key, line: group.lines.len(), agent: None });
+        group.lines.extend(lines);
+        return;
+    }
+    let anchors = vec![Anchor { id: key, line: 0, agent: None }];
+    let spans = vec![Span { node: first, line: 0 }];
+    groups.push(Group { rail: Rail::Seam, model: None, lines, anchors, spans });
 }
 
 fn seam(node: &Node, sidechain: bool, width: usize) -> Option<RenderedLine> {
@@ -399,13 +444,20 @@ mod tests {
         static EXPANDED: std::sync::OnceLock<crate::render::Expanded> = std::sync::OnceLock::new();
         static OUTPUTS: std::sync::OnceLock<crate::render::Outputs> = std::sync::OnceLock::new();
         static AGENTS: std::sync::OnceLock<crate::domain::subagent::Agents> = std::sync::OnceLock::new();
+        static BRANCHES: std::sync::OnceLock<crate::render::Branches> = std::sync::OnceLock::new();
         Ctx {
             width,
             expanded: EXPANDED.get_or_init(crate::render::Expanded::new),
             outputs: OUTPUTS.get_or_init(crate::render::Outputs::new),
             agents: AGENTS.get_or_init(crate::domain::subagent::Agents::default),
             root: None,
+            branches: BRANCHES.get_or_init(crate::render::Branches::new),
+            injections: false,
         }
+    }
+
+    fn revealing(width: usize) -> Ctx<'static> {
+        Ctx { injections: true, ..plain(width) }
     }
 
     fn rendered(lines: &[&str]) -> Vec<String> {
@@ -584,6 +636,23 @@ mod tests {
         assert!(lines.first().is_some_and(|line| line.contains(SUMMARY_LABEL)), "{lines:?}");
         assert!(!lines.iter().any(|line| line.contains(HUMAN_LABEL)), "never under a you rail: {lines:?}");
         assert!(lines.iter().any(|line| line.contains("this session is being continued")), "{lines:?}");
+    }
+
+    #[test]
+    fn an_attachment_run_appears_only_once_the_injections_are_revealed() {
+        let dir = TempDir::new().expect("a temporary directory");
+        let path = dir.path().join("session.jsonl");
+        let attachment = r#"{"type":"attachment","uuid":"x1","parentUuid":"u1","sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:02Z","attachment":{"type":"date","date":"2026-01-05"}}"#;
+        fs::write(&path, [HUMAN, attachment].join("\n") + "\n").expect("a written transcript");
+        let conversation = thread::build(&path).expect("a built conversation");
+
+        let hidden = transcript(&conversation, &plain(60));
+        assert!(!hidden.lines.iter().any(|line| line.text().contains("injection")), "hidden by default");
+
+        let shown = transcript(&conversation, &revealing(60));
+        let lines: Vec<String> = shown.lines.iter().map(RenderedLine::text).collect();
+        assert!(lines.iter().any(|line| line.contains("· 1 injection · date")), "{lines:?}");
+        assert_eq!(shown.anchors.len(), 1, "the run is reachable with n and expandable with Space");
     }
 
     #[test]

@@ -1,0 +1,26 @@
+---
+source: tests/transcript.rs
+expression: "rendered(FORKED, 80)"
+---
+▎ you
+▎ why does the interlock fall back to the wrong level
+▎ ─────────── 2 alternate branches here · showing 1 · [b] to switch ────────────
+
+▎ claude · opus-5
+▎ thinking · 1 line
+▎ Right — merge is folding the base in the wrong direction.
+▎ ▸ Grep  base.or\(user\) · src/safety                                        ok
+▎ ─────────── 3 alternate branches here · showing 2 · [b] to switch ────────────
+
+▎ you
+▎ no — show me the fixture instead
+
+▎ claude · opus-5
+▎ The fixture is tests/data/claude, and it has no interlock in it.
+
+▎ you
+▎ here is the frame
+▎ [image · png · 4.9 KB]
+
+▎ claude · opus-5
+▎ The gutter is one cell narrow on the right.

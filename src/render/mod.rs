@@ -2,6 +2,7 @@
 
 pub mod code;
 pub mod divider;
+pub mod injection;
 pub mod line;
 pub mod message;
 pub mod prose;
@@ -15,6 +16,7 @@ use crate::domain::thread::NodeId;
 
 pub type Expanded = HashSet<Box<str>>;
 pub type Outputs = HashMap<Box<str>, Overflow>;
+pub type Branches = HashMap<NodeId, NodeId>;
 
 #[derive(Debug, Clone)]
 pub enum Overflow {
@@ -29,6 +31,8 @@ pub struct Ctx<'a> {
     pub outputs: &'a Outputs,
     pub agents: &'a Agents,
     pub root: Option<NodeId>,
+    pub branches: &'a Branches,
+    pub injections: bool,
 }
 
 impl Ctx<'_> {
@@ -37,6 +41,14 @@ impl Ctx<'_> {
     }
 
     pub const fn narrowed(&self, width: usize) -> Ctx<'_> {
-        Ctx { width, expanded: self.expanded, outputs: self.outputs, agents: self.agents, root: self.root }
+        Ctx {
+            width,
+            expanded: self.expanded,
+            outputs: self.outputs,
+            agents: self.agents,
+            root: self.root,
+            branches: self.branches,
+            injections: self.injections,
+        }
     }
 }

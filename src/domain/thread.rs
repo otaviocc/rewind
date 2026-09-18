@@ -157,10 +157,58 @@ impl Conversation {
         self.roots.first().and_then(|root| self.node(*root)).is_some_and(Node::is_sidechain)
     }
 
+    pub fn is_turn(&self, id: NodeId) -> bool {
+        self.node(id).is_some_and(|node| match &node.kind {
+            NodeKind::Assistant(_) => true,
+            NodeKind::User(record) => record.is_human_turn() || record.is_compact_summary,
+            NodeKind::System(_) | NodeKind::Attachment(_) => false,
+        })
+    }
+
+    pub fn alternates(&self, id: NodeId) -> Vec<NodeId> {
+        let Some(node) = self.node(id) else { return Vec::new() };
+        if node.children.len() < 2 {
+            return Vec::new();
+        }
+        let turns: Vec<NodeId> = node.children.iter().copied().filter(|child| self.is_turn(*child)).collect();
+        if turns.len() < 2 { Vec::new() } else { turns }
+    }
+
+    pub fn thread_with(&self, overrides: &HashMap<NodeId, NodeId>) -> Vec<NodeId> {
+        if overrides.is_empty() {
+            return self.thread.clone();
+        }
+        self.roots.iter().flat_map(|&root| self.descend(root, overrides)).collect()
+    }
+
+    fn descend(&self, from: NodeId, overrides: &HashMap<NodeId, NodeId>) -> Vec<NodeId> {
+        let mut path = vec![from];
+        let mut current = from;
+        while let Some(node) = self.node(current) {
+            let next = overrides
+                .get(&current)
+                .copied()
+                .filter(|next| node.children.contains(next))
+                .or_else(|| self.chosen.get(&current).copied())
+                .or_else(|| newest_child(&self.nodes, node));
+            let Some(next) = next else { break };
+            path.push(next);
+            current = next;
+        }
+        path
+    }
+
     pub fn path_from(&self, root: NodeId) -> Vec<NodeId> {
-        let mut chosen = HashMap::new();
-        let target = newest_childless(&self.nodes, root);
-        walk_up(&self.nodes, target, root, &mut chosen)
+        self.path_from_with(root, &HashMap::new())
+    }
+
+    pub fn path_from_with(&self, root: NodeId, overrides: &HashMap<NodeId, NodeId>) -> Vec<NodeId> {
+        if overrides.is_empty() {
+            let mut chosen = HashMap::new();
+            let target = newest_childless(&self.nodes, root);
+            return walk_up(&self.nodes, target, root, &mut chosen);
+        }
+        self.descend(root, overrides)
     }
 }
 
@@ -616,6 +664,10 @@ fn ancestor_chain_includes(nodes: &[Node], leaf: NodeId, root: NodeId) -> bool {
         let Some(parent) = nodes.get(current.index()).and_then(|node| node.parent) else { return false };
         current = parent;
     }
+}
+
+fn newest_child(nodes: &[Node], node: &Node) -> Option<NodeId> {
+    node.children.iter().copied().max_by_key(|id| nodes.get(id.index()).and_then(|child| child.timestamp))
 }
 
 fn newest_childless(nodes: &[Node], root: NodeId) -> NodeId {
