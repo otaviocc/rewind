@@ -1,5 +1,5 @@
-//! One conversation becomes styled lines: role headers, prose, and a one-line stand-in for
-//! everything M2 will make expandable.
+//! One conversation becomes styled lines: a role rail, one header per run of replies, prose, and
+//! a one-line stand-in for everything M2 will make expandable.
 
 use ratatui::style::{Color, Modifier, Style};
 use serde_json::Value;
@@ -10,12 +10,13 @@ use crate::render::line::{RenderedLine, StyledSpan, truncate};
 use crate::render::prose;
 use unicode_width::UnicodeWidthStr;
 
-const GUTTER: &str = "▎";
+const RAIL: &str = "▎ ";
+const RAIL_BLANK: &str = "▎";
 const HUMAN_LABEL: &str = "you";
 const ASSISTANT_LABEL: &str = "claude";
+const MODEL_PREFIX: &str = "claude-";
 const TOOL_MARKER: &str = "▸ ";
 const SEPARATOR: &str = " · ";
-const LABEL_GAP: usize = 2;
 const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
 const UNIT: usize = 1024;
 
@@ -31,41 +32,99 @@ const fn body_style() -> Style {
     Style::new()
 }
 
+const fn human_rail_style() -> Style {
+    Style::new()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Rail {
+    Human,
+    Assistant,
+}
+
+impl Rail {
+    const fn style(self) -> Style {
+        match self {
+            Self::Human => human_rail_style(),
+            Self::Assistant => dim_style(),
+        }
+    }
+}
+
+struct Group {
+    rail: Rail,
+    model: Option<String>,
+    lines: Vec<RenderedLine>,
+}
+
 pub fn transcript(conversation: &Conversation, width: usize) -> Vec<RenderedLine> {
-    let mut lines = Vec::new();
+    let inner = width.saturating_sub(RAIL.width()).max(1);
+    let mut groups: Vec<Group> = Vec::new();
+
     for &id in conversation.thread() {
         let Some(node) = conversation.node(id) else { continue };
-        let before = lines.len();
         match &node.kind {
             NodeKind::User(record) if record.is_human_turn() && !record.is_compact_summary => {
-                lines.push(header(HUMAN_LABEL, None, width));
-                content(&record.message.content, width, &mut lines);
+                let mut lines = vec![header(HUMAN_LABEL, None, inner)];
+                content(&record.message.content, inner, &mut lines);
+                groups.push(Group { rail: Rail::Human, model: None, lines });
             }
             NodeKind::Assistant(turn) => {
-                lines.push(header(ASSISTANT_LABEL, turn.model.as_deref(), width));
-                blocks(&turn.content, width, &mut lines);
+                let mut body = Vec::new();
+                blocks(&turn.content, inner, &mut body);
+                if body.is_empty() {
+                    continue;
+                }
+                match groups.last_mut() {
+                    Some(group) if group.rail == Rail::Assistant && group.model == turn.model => {
+                        group.lines.push(RenderedLine::blank());
+                        group.lines.append(&mut body);
+                    }
+                    _ => {
+                        let detail = model_label(turn.model.as_deref());
+                        let mut lines = vec![header(ASSISTANT_LABEL, detail.as_deref(), inner)];
+                        lines.append(&mut body);
+                        groups.push(Group { rail: Rail::Assistant, model: turn.model.clone(), lines });
+                    }
+                }
             }
             NodeKind::User(_) | NodeKind::System(_) | NodeKind::Attachment(_) => {}
         }
-        if lines.len() > before {
+    }
+
+    let mut lines: Vec<RenderedLine> = Vec::new();
+    for group in groups {
+        if !lines.is_empty() {
             lines.push(RenderedLine::blank());
         }
-    }
-    while lines.last().is_some_and(RenderedLine::is_blank) {
-        lines.pop();
+        lines.extend(railed(group.lines, group.rail.style()));
     }
     lines
 }
 
+fn railed(lines: Vec<RenderedLine>, style: Style) -> Vec<RenderedLine> {
+    lines
+        .into_iter()
+        .map(|mut line| {
+            let glyph = if line.is_blank() { RAIL_BLANK } else { RAIL };
+            line.prefix(StyledSpan::new(glyph, style));
+            line
+        })
+        .collect()
+}
+
+fn model_label(model: Option<&str>) -> Option<String> {
+    let model = model.map(str::trim).filter(|model| !model.is_empty())?;
+    Some(model.strip_prefix(MODEL_PREFIX).unwrap_or(model).to_owned())
+}
+
 fn header(label: &str, detail: Option<&str>, width: usize) -> RenderedLine {
     let mut line = RenderedLine::blank();
-    let room = width.saturating_sub(GUTTER.width());
-    line.push(StyledSpan::new(truncate(label, room), label_style()));
-    let left = room.saturating_sub(label.width()).saturating_sub(LABEL_GAP);
+    line.push(StyledSpan::new(truncate(label, width), label_style()));
+    let left = width.saturating_sub(label.width()).saturating_sub(SEPARATOR.width());
     if let Some(detail) = detail.filter(|_| left > 0) {
-        line.push(StyledSpan::new(format!("{:LABEL_GAP$}{}", "", truncate(detail, left)), dim_style()));
+        line.push(StyledSpan::new(format!("{SEPARATOR}{}", truncate(detail, left)), dim_style()));
     }
-    line.prefix(StyledSpan::new(GUTTER, dim_style()));
     line
 }
 
@@ -167,6 +226,12 @@ mod tests {
         transcript(&conversation, 60).iter().map(RenderedLine::text).collect()
     }
 
+    fn headers(lines: &[String]) -> usize {
+        lines.iter().filter(|line| line.contains(ASSISTANT_LABEL)).count()
+    }
+
+    const PARAGRAPHS: &str = r#"[{"type":"text","text":"one\n\ntwo"}]"#;
+
     const HUMAN: &str = r#"{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:00Z","origin":{"kind":"human"},"message":{"role":"user","content":"read the grid scanner back to me"}}"#;
 
     fn assistant(uuid: &str, parent: &str, content: &str) -> String {
@@ -176,18 +241,126 @@ mod tests {
     }
 
     #[test]
-    fn a_human_turn_and_an_assistant_turn_each_get_a_gutter_and_a_label() {
+    fn a_human_turn_and_an_assistant_turn_each_get_a_rail_and_a_header() {
         let lines = rendered(&[HUMAN, &assistant("a1", "u1", r#"[{"type":"text","text":"the array reads clean"}]"#)]);
         assert_eq!(
             lines,
             vec![
-                "▎you".to_owned(),
-                "read the grid scanner back to me".to_owned(),
+                "▎ you".to_owned(),
+                "▎ read the grid scanner back to me".to_owned(),
                 String::new(),
-                "▎claude  opus-5".to_owned(),
-                "the array reads clean".to_owned(),
+                "▎ claude · opus-5".to_owned(),
+                "▎ the array reads clean".to_owned(),
             ]
         );
+    }
+
+    #[test]
+    fn a_run_of_consecutive_replies_gets_one_header() {
+        let lines = rendered(&[
+            HUMAN,
+            &assistant("a1", "u1", r#"[{"type":"text","text":"first"}]"#),
+            &assistant("a2", "a1", r#"[{"type":"text","text":"second"}]"#),
+            &assistant("a3", "a2", r#"[{"type":"text","text":"third"}]"#),
+        ]);
+        assert_eq!(
+            lines,
+            vec![
+                "▎ you".to_owned(),
+                "▎ read the grid scanner back to me".to_owned(),
+                String::new(),
+                "▎ claude · opus-5".to_owned(),
+                "▎ first".to_owned(),
+                "▎".to_owned(),
+                "▎ second".to_owned(),
+                "▎".to_owned(),
+                "▎ third".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_attachment_between_two_replies_does_not_break_the_run() {
+        let attachment = r#"{"type":"attachment","uuid":"x1","parentUuid":"a1","sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:02Z","attachment":{"type":"date","date":"2026-01-05"}}"#;
+        let lines = rendered(&[
+            HUMAN,
+            &assistant("a1", "u1", r#"[{"type":"text","text":"first"}]"#),
+            attachment,
+            &assistant("a2", "x1", r#"[{"type":"text","text":"second"}]"#),
+        ]);
+        assert_eq!(headers(&lines), 1, "{lines:?}");
+    }
+
+    #[test]
+    fn a_reply_that_renders_nothing_at_all_does_not_break_the_run_either() {
+        let nothing = r#"[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]"#;
+        let lines = rendered(&[
+            HUMAN,
+            &assistant("a1", "u1", r#"[{"type":"text","text":"first"}]"#),
+            &assistant("a2", "a1", nothing),
+            &assistant("a3", "a2", r#"[{"type":"text","text":"second"}]"#),
+        ]);
+        assert_eq!(headers(&lines), 1, "{lines:?}");
+    }
+
+    #[test]
+    fn a_change_of_model_starts_a_new_header() {
+        let second = r#"{"type":"assistant","uuid":"a2","parentUuid":"a1","sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:02Z","message":{"id":"msg_a2","model":"haiku-4-5","role":"assistant","content":[{"type":"text","text":"second"}]}}"#;
+        let lines = rendered(&[HUMAN, &assistant("a1", "u1", r#"[{"type":"text","text":"first"}]"#), second]);
+        assert_eq!(headers(&lines), 2, "{lines:?}");
+        assert!(lines.contains(&"▎ claude · opus-5".to_owned()), "{lines:?}");
+        assert!(lines.contains(&"▎ claude · haiku-4-5".to_owned()), "{lines:?}");
+    }
+
+    #[test]
+    fn the_claude_prefix_is_dropped_from_a_model_name_it_would_only_repeat() {
+        assert_eq!(model_label(Some("claude-opus-5")).as_deref(), Some("opus-5"));
+        assert_eq!(model_label(Some("opus-5")).as_deref(), Some("opus-5"));
+        assert_eq!(model_label(Some("  ")), None);
+        assert_eq!(model_label(None), None);
+    }
+
+    #[test]
+    fn the_rail_reaches_every_line_of_a_turn_including_the_blank_ones() {
+        let lines = rendered(&[HUMAN, &assistant("a1", "u1", PARAGRAPHS)]);
+        assert!(lines.contains(&"▎".to_owned()), "no railed blank line in {lines:?}");
+        assert!(
+            lines.iter().all(|line| line.is_empty() || line.starts_with('▎')),
+            "a line of a turn is missing its rail: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn a_railed_blank_line_carries_no_trailing_space() {
+        let lines = rendered(&[HUMAN, &assistant("a1", "u1", PARAGRAPHS)]);
+        assert!(lines.iter().all(|line| line.trim_end() == *line), "{lines:?}");
+    }
+
+    #[test]
+    fn the_gap_between_turns_carries_no_rail_and_is_the_only_unrailed_line() {
+        let lines = rendered(&[HUMAN, &assistant("a1", "u1", PARAGRAPHS)]);
+        assert_eq!(lines.iter().filter(|line| line.is_empty()).count(), 1, "{lines:?}");
+    }
+
+    #[test]
+    fn a_human_rail_and_an_assistant_rail_are_two_different_styles() {
+        assert_ne!(Rail::Human.style(), Rail::Assistant.style());
+    }
+
+    #[test]
+    fn the_inset_counts_the_rail_a_line_actually_carries() {
+        let dir = TempDir::new().expect("a temporary directory");
+        let path = dir.path().join("session.jsonl");
+        fs::write(&path, format!("{HUMAN}\n{}\n", assistant("a1", "u1", PARAGRAPHS))).expect("a written transcript");
+        let conversation = thread::build(&path).expect("a built conversation");
+        for line in transcript(&conversation, 60) {
+            let expected = match line.text().as_str() {
+                "" => 0,
+                "▎" => 1,
+                _ => 2,
+            };
+            assert_eq!(line.inset, expected, "{:?}", line.text());
+        }
     }
 
     #[test]
@@ -208,14 +381,14 @@ mod tests {
     fn an_attachment_is_excluded_from_the_transcript() {
         let attachment = r#"{"type":"attachment","uuid":"x1","parentUuid":"u1","sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:02Z","attachment":{"type":"date","date":"2026-01-05"}}"#;
         let lines = rendered(&[HUMAN, attachment]);
-        assert_eq!(lines, vec!["▎you".to_owned(), "read the grid scanner back to me".to_owned()]);
+        assert_eq!(lines, vec!["▎ you".to_owned(), "▎ read the grid scanner back to me".to_owned()]);
     }
 
     #[test]
     fn a_thinking_block_collapses_to_one_dim_line_and_never_shows_its_signature() {
         let block = r#"[{"type":"thinking","thinking":"one\ntwo\nthree","signature":"EqoBCkgIBRABGAI..."}]"#;
         let lines = rendered(&[HUMAN, &assistant("a1", "u1", block)]);
-        assert!(lines.contains(&"thinking · 3 lines".to_owned()), "{lines:?}");
+        assert!(lines.contains(&"▎ thinking · 3 lines".to_owned()), "{lines:?}");
         assert!(!lines.iter().any(|line| line.contains("EqoBCkgI")), "the signature leaked: {lines:?}");
     }
 
@@ -223,15 +396,15 @@ mod tests {
     fn a_tool_call_is_one_line_of_its_name_and_a_summary() {
         let block = r#"[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls -la"}}]"#;
         let lines = rendered(&[HUMAN, &assistant("a1", "u1", block)]);
-        let call = lines.iter().find(|line| line.starts_with("▸ Bash")).expect("a tool call line");
-        assert_eq!(call, r#"▸ Bash  {"command":"ls -la"}"#);
+        let call = lines.iter().find(|line| line.contains("▸ Bash")).expect("a tool call line");
+        assert_eq!(call, r#"▎ ▸ Bash  {"command":"ls -la"}"#);
     }
 
     #[test]
     fn a_tool_call_summary_never_breaks_across_lines() {
         let block = r#"[{"type":"tool_use","id":"t1","name":"Write","input":{"content":"first\nsecond\nthird and a great deal more prose besides"}}]"#;
         let lines = rendered(&[HUMAN, &assistant("a1", "u1", block)]);
-        let calls = lines.iter().filter(|line| line.starts_with("▸ ")).count();
+        let calls = lines.iter().filter(|line| line.contains("▸ ")).count();
         assert_eq!(calls, 1);
         assert!(lines.iter().all(|line| line.chars().count() <= 60), "{lines:?}");
     }
@@ -240,7 +413,7 @@ mod tests {
     fn an_image_names_its_type_and_decoded_size_without_decoding_anything() {
         let block = r#"[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"","redactedBytes":1960000}}]"#;
         let lines = rendered(&[HUMAN, &assistant("a1", "u1", block)]);
-        assert!(lines.contains(&"[image · png · 1.4 MB]".to_owned()), "{lines:?}");
+        assert!(lines.contains(&"▎ [image · png · 1.4 MB]".to_owned()), "{lines:?}");
     }
 
     #[test]
@@ -253,7 +426,7 @@ mod tests {
     fn a_pasted_image_in_a_human_turn_is_named_too() {
         let human = r#"{"type":"user","uuid":"u9","parentUuid":null,"sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:00Z","origin":{"kind":"human"},"message":{"role":"user","content":[{"type":"text","text":"look at this"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"","redactedBytes":6000}}]}}"#;
         let lines = rendered(&[human]);
-        assert_eq!(lines, vec!["▎you".to_owned(), "look at this".to_owned(), "[image · png · 4.3 KB]".to_owned()]);
+        assert_eq!(lines, vec!["▎ you".to_owned(), "▎ look at this".to_owned(), "▎ [image · png · 4.3 KB]".to_owned()]);
     }
 
     #[test]

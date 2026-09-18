@@ -53,6 +53,11 @@ fn the_baseline_session_rewraps_for_a_narrow_column() {
 }
 
 #[test]
+fn the_baseline_session_rewraps_for_a_forty_column_pane() {
+    insta::assert_snapshot!("baseline-40", rendered(BASELINE, 40));
+}
+
+#[test]
 fn a_session_of_wide_glyphs_renders_and_wraps_by_display_width() {
     insta::assert_snapshot!("wide-glyphs-40", rendered(WIDE, 40));
 }
@@ -128,5 +133,5 @@ fn a_ten_megabyte_session_renders_without_decoding_a_byte_of_base64() {
     assert!(lines.len() > 8_000, "only {} lines", lines.len());
     assert!(lines.iter().all(|line| line.width() <= 80));
     assert!(!lines.iter().any(|line| line.text().contains("AAAAAAAAAAAAAAAA")), "a base64 payload reached the transcript");
-    assert!(lines.iter().any(|line| line.text().starts_with("[image · png · ")), "the image was not named");
+    assert!(lines.iter().any(|line| line.text().contains("[image · png · ")), "the image was not named");
 }

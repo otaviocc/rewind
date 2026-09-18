@@ -475,8 +475,8 @@ mod tests {
         with_conversation(&mut app, "read the grid scanner back to me");
 
         let buffer = frame(&app, Size::new(120, 24));
-        assert!(text_row(&buffer, 3).contains("▎you"), "{}", text_row(&buffer, 3));
-        assert!(text_row(&buffer, 4).contains("read the grid scanner"), "{}", text_row(&buffer, 4));
+        assert!(text_row(&buffer, 3).contains("▎ you"), "{}", text_row(&buffer, 3));
+        assert!(text_row(&buffer, 4).contains("▎ read the grid scanner"), "{}", text_row(&buffer, 4));
     }
 
     #[test]

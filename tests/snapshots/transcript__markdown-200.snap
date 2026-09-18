@@ -2,67 +2,67 @@
 source: tests/transcript.rs
 expression: "rendered(MARKDOWN, 200)"
 ---
-▎you
-Read the safety interlocks back to me, and say for each one:
+▎ you
+▎ Read the safety interlocks back to me, and say for each one:
+▎
+▎ • which deck it lives on
+▎ • what arch does to it
+▎
+▎ A table would help.
 
-• which deck it lives on
-• what arch does to it
-
-A table would help.
-
-▎claude  claude-opus-5
-Safety interlocks
-
-The holodeck carries three interlocks, and the third is manual. The fourth came out in 2.1.0; see the runbook (https://holodeck.invalid/runbook) for why.
-
-Where they live
-
-┌───────────┬──────┬───────┐
-│ Interlock │ Deck │ Drift │
-├───────────┼──────┼───────┤
-│ primary   │  11  │  0.02 │
-│ secondary │  11  │  0.40 │
-│ manual    │  12  │ 11.75 │
-└───────────┴──────┴───────┘
-
-What to check, in order
-
-• the primary emitter
-  ◦ its coil temperature
-  ◦ its field harmonics
-    1. inner band
-    2. outer band
-• the secondary emitter
-• the manual lever, which is on the wall and not in software
-
-And what is still open:
-
-☑ recalibrate the grid
-☐ purge the pattern buffer
-
-┃ arch bypasses the first two interlocks and nothing at all bypasses the third, which is the entire reason the third one is a lever.
-
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-
-The scanner's own reading, in a language syntect bundles:
-
-rust ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- fn interlocks(deck: u8) -> Vec<Interlock> {
-     Interlock::all().into_iter().filter(|lock| lock.deck == deck).collect()
- }
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-
-The console's, in one only the bundled pack knows:
-
-swift ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- func interlocks(on deck: Int) -> [Interlock] {
-     Interlock.all.filter { $0.deck == deck }
- }
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-
-And the lever itself, which no grammar anywhere describes:
-
-lcars ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- ENGAGE SAFETY 3
- DISENGAGE ARCH
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+▎ claude · opus-5
+▎ Safety interlocks
+▎
+▎ The holodeck carries three interlocks, and the third is manual. The fourth came out in 2.1.0; see the runbook (https://holodeck.invalid/runbook) for why.
+▎
+▎ Where they live
+▎
+▎ ┌───────────┬──────┬───────┐
+▎ │ Interlock │ Deck │ Drift │
+▎ ├───────────┼──────┼───────┤
+▎ │ primary   │  11  │  0.02 │
+▎ │ secondary │  11  │  0.40 │
+▎ │ manual    │  12  │ 11.75 │
+▎ └───────────┴──────┴───────┘
+▎
+▎ What to check, in order
+▎
+▎ • the primary emitter
+▎   ◦ its coil temperature
+▎   ◦ its field harmonics
+▎     1. inner band
+▎     2. outer band
+▎ • the secondary emitter
+▎ • the manual lever, which is on the wall and not in software
+▎
+▎ And what is still open:
+▎
+▎ ☑ recalibrate the grid
+▎ ☐ purge the pattern buffer
+▎
+▎ ┃ arch bypasses the first two interlocks and nothing at all bypasses the third, which is the entire reason the third one is a lever.
+▎
+▎ ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+▎
+▎ The scanner's own reading, in a language syntect bundles:
+▎
+▎ rust ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+▎  fn interlocks(deck: u8) -> Vec<Interlock> {
+▎      Interlock::all().into_iter().filter(|lock| lock.deck == deck).collect()
+▎  }
+▎ ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+▎
+▎ The console's, in one only the bundled pack knows:
+▎
+▎ swift ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+▎  func interlocks(on deck: Int) -> [Interlock] {
+▎      Interlock.all.filter { $0.deck == deck }
+▎  }
+▎ ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+▎
+▎ And the lever itself, which no grammar anywhere describes:
+▎
+▎ lcars ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+▎  ENGAGE SAFETY 3
+▎  DISENGAGE ARCH
+▎ ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
