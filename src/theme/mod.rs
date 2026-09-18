@@ -2,6 +2,7 @@
 
 pub mod color;
 pub mod elements;
+pub mod loader;
 pub mod palette;
 
 use ratatui::style::Style;
@@ -25,6 +26,12 @@ impl Theme {
 
     pub fn style(&self, element: Element) -> Style {
         self.styles.get(element.index()).copied().unwrap_or_default()
+    }
+
+    pub fn set_style(&mut self, element: Element, style: Style) {
+        if let Some(slot) = self.styles.get_mut(element.index()) {
+            *slot = style;
+        }
     }
 }
 
@@ -68,6 +75,15 @@ mod tests {
     fn the_human_and_assistant_gutters_are_two_different_colours() {
         let theme = Theme::default();
         assert_ne!(theme.style(Element::HumanGutter).fg, theme.style(Element::AssistantGutter).fg);
+    }
+
+    #[test]
+    fn a_style_can_be_replaced_without_disturbing_its_neighbours() {
+        let mut theme = Theme::default();
+        let before = theme.style(Element::Muted);
+        theme.set_style(Element::Body, Style::default().fg(Color::Rgb(9, 9, 9)));
+        assert_eq!(theme.style(Element::Body).fg, Some(Color::Rgb(9, 9, 9)));
+        assert_eq!(theme.style(Element::Muted), before, "replacing one style moved another");
     }
 
     #[test]
