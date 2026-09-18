@@ -1,6 +1,6 @@
 //! The shell's state, and the reducer that is the only way to change it.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use ratatui::layout::Size;
 
 use crate::ctx::Ctx;
+use crate::domain::diagnostics::Diagnostics;
 use crate::domain::project::{Project, ProjectError};
 use crate::domain::session::Session;
 use crate::domain::subagent::{Agent, Agents};
@@ -197,6 +198,7 @@ pub struct App {
     stack: Vec<Frame>,
     label: Option<Box<str>>,
     pending_subagent_load: Option<(Box<str>, PathBuf, u64)>,
+    drift: BTreeMap<PathBuf, Diagnostics>,
 }
 
 impl App {
@@ -229,6 +231,7 @@ impl App {
             stack: Vec::new(),
             label: None,
             pending_subagent_load: None,
+            drift: BTreeMap::new(),
         }
     }
 
@@ -367,9 +370,29 @@ impl App {
         let width = columns::conversation_width(self.area, self.mode);
         let agents = self.inherited_agents();
         self.conversation = match result {
-            Ok(conversation) => Loadable::Ready(Rendered::new(*conversation, path, agents, width, &self.view)),
+            Ok(conversation) => {
+                self.record_drift(&conversation);
+                Loadable::Ready(Rendered::new(*conversation, path, agents, width, &self.view))
+            }
             Err(error) => Loadable::Failed(error.to_string()),
         };
+    }
+
+    fn record_drift(&mut self, conversation: &Conversation) {
+        let diagnostics = conversation.diagnostics();
+        if diagnostics.count() > 0 {
+            self.drift.insert(diagnostics.path().to_path_buf(), diagnostics.clone());
+        } else {
+            self.drift.remove(diagnostics.path());
+        }
+    }
+
+    pub const fn drift(&self) -> &BTreeMap<PathBuf, Diagnostics> {
+        &self.drift
+    }
+
+    pub fn unreadable(&self) -> usize {
+        self.drift.values().map(Diagnostics::count).fold(0, usize::saturating_add)
     }
 
     fn inherited_agents(&self) -> Agents {
@@ -418,7 +441,10 @@ impl App {
         let width = columns::conversation_width(self.area, self.mode);
         let path = self.pending_conversation_path.take().unwrap_or_default();
         self.conversation = match result {
-            Ok(conversation) => Loadable::Ready(Rendered::new(*conversation, path, agents, width, &self.view)),
+            Ok(conversation) => {
+                self.record_drift(&conversation);
+                Loadable::Ready(Rendered::new(*conversation, path, agents, width, &self.view))
+            }
             Err(error) => Loadable::Failed(error.to_string()),
         };
     }
@@ -463,6 +489,11 @@ impl App {
         {
             self.sessions_pane.selected = index;
         }
+        self.drift = sessions
+            .iter()
+            .filter(|session| session.diagnostics.count() > 0)
+            .map(|session| (session.path.clone(), session.diagnostics.clone()))
+            .collect();
         self.sessions = Loadable::Ready(sessions);
         self.request_conversation_for_selection();
     }

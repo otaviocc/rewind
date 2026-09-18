@@ -38,6 +38,10 @@ const fn scroll_progress_color() -> Color {
     Color::Cyan
 }
 
+const fn unreadable_style() -> Style {
+    Style::new().fg(Color::Yellow)
+}
+
 pub fn draw(frame: &mut Frame, app: &App) {
     frame.render_widget(Screen { app }, frame.area());
 }
@@ -309,6 +313,7 @@ fn statusbar(area: Rect, buf: &mut Buffer, app: &App) {
     let area = padded(area);
     if let Some(status) = app.subagent_status() {
         row(area, buf, area.x, &status, Style::new());
+        unreadable(area, buf, app, status.width());
         return;
     }
     let Some(session) = app.selected_session() else { return };
@@ -317,6 +322,17 @@ fn statusbar(area: Rect, buf: &mut Buffer, app: &App) {
     let age = session.last_activity.map_or_else(|| "-".to_owned(), |at| age::relative(app.ctx.now, at));
     let text = format!("{} · {} {plural} · {branch} · {age}", session.id, session.messages);
     row(area, buf, area.x, &text, Style::new());
+    unreadable(area, buf, app, text.width());
+}
+
+fn unreadable(area: Rect, buf: &mut Buffer, app: &App, used: usize) {
+    let count = app.unreadable();
+    if count == 0 {
+        return;
+    }
+    let text = format!("{SEPARATOR}{count} unreadable");
+    let x = area.x.saturating_add(u16::try_from(used).unwrap_or(area.width));
+    row(area, buf, x, &text, unreadable_style());
 }
 
 #[cfg(test)]
@@ -330,7 +346,7 @@ mod tests {
 
     use super::*;
     use crate::ctx::Ctx;
-    use crate::domain::diagnostics::Diagnostics;
+    use crate::domain::diagnostics::{Defect, Diagnostics};
     use crate::domain::project::{Project, Resolution};
     use crate::domain::session::{Session, TitleSource};
     use crate::ui::Options;
@@ -464,6 +480,40 @@ mod tests {
         assert!(status.contains("s1"), "{status}");
         assert!(status.contains("6 msgs"), "{status}");
         assert!(status.contains("main"), "{status}");
+    }
+
+    fn drifting_session(id: &str) -> Session {
+        let mut session = session(id, "a session that will not read cleanly");
+        let mut diagnostics = Diagnostics::new(&session.path);
+        diagnostics.push(Defect::UnknownBlock { line: 12, kind: "server_tool_use".to_owned() });
+        diagnostics.push(Defect::UnknownRecord { line: 7, kind: "telemetry-latch".to_owned() });
+        diagnostics.push(Defect::Truncated { line: 31 });
+        session.diagnostics = diagnostics;
+        session
+    }
+
+    #[test]
+    fn the_statusbar_ends_with_what_could_not_be_read() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("a", true)]));
+        let generation = app.generation();
+        app.set_sessions(generation, vec![drifting_session("s1")]);
+        let buffer = frame(&app, Size::new(120, 24));
+        let status = text_row(&buffer, 23);
+        assert!(status.ends_with("· 3 unreadable"), "{status}");
+        let tinted = (0..120).filter(|&x| buffer[(x, 23)].fg == Color::Yellow).count();
+        assert!(tinted > 0, "the count is styled apart from the rest of the line");
+    }
+
+    #[test]
+    fn a_session_that_reads_cleanly_says_nothing_about_being_unreadable() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("a", true)]));
+        let generation = app.generation();
+        app.set_sessions(generation, vec![session("s1", "a session")]);
+        let buffer = frame(&app, Size::new(120, 24));
+        let status = text_row(&buffer, 23);
+        assert!(!status.contains("unreadable"), "{status}");
     }
 
     #[test]
