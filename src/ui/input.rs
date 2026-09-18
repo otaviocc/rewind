@@ -1,7 +1,12 @@
 //! Terminal events → actions.
 
-use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Size;
+
+use crate::ui::app::{Column, Mode};
+use crate::ui::columns;
+
+const WHEEL_LINES: isize = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Motion {
@@ -26,12 +31,33 @@ pub enum Action {
     ToggleInjections,
     ToggleDiagnostics,
     Resize(Size),
+    Scroll { column: Column, delta: isize },
+    Click { column: Column, row: u16 },
 }
 
-pub fn action(event: &Event) -> Option<Action> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Viewport {
+    pub area: Size,
+    pub mode: Mode,
+}
+
+pub fn action(event: &Event, viewport: Viewport) -> Option<Action> {
     match event {
         Event::Key(key) if key.kind == KeyEventKind::Press => key_action(*key),
         Event::Resize(columns, rows) => Some(Action::Resize(Size::new(*columns, *rows))),
+        Event::Mouse(mouse) => mouse_action(*mouse, viewport),
+        _ => None,
+    }
+}
+
+fn mouse_action(mouse: MouseEvent, viewport: Viewport) -> Option<Action> {
+    let hit = columns::hit(viewport.area, viewport.mode, mouse.column, mouse.row);
+    match mouse.kind {
+        MouseEventKind::ScrollDown => hit.map(|hit| Action::Scroll { column: hit.column, delta: WHEEL_LINES }),
+        MouseEventKind::ScrollUp => hit.map(|hit| Action::Scroll { column: hit.column, delta: -WHEEL_LINES }),
+        MouseEventKind::Down(MouseButton::Left) => {
+            hit.and_then(|hit| Some(Action::Click { column: hit.column, row: u16::try_from(hit.row).ok()? }))
+        }
         _ => None,
     }
 }
@@ -83,6 +109,14 @@ mod tests {
         Event::Key(KeyEvent::new(KeyCode::Char(code), KeyModifiers::CONTROL))
     }
 
+    fn viewport() -> Viewport {
+        Viewport { area: Size::new(120, 24), mode: Mode::Browse }
+    }
+
+    fn mouse(kind: MouseEventKind, column: u16, row: u16) -> Event {
+        Event::Mouse(MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE })
+    }
+
     #[test]
     fn every_documented_key_maps_to_its_action() {
         let table = [
@@ -116,48 +150,92 @@ mod tests {
             (control('c'), Action::Quit),
         ];
         for (event, expected) in table {
-            assert_eq!(action(&event), Some(expected), "{event:?}");
+            assert_eq!(action(&event, viewport()), Some(expected), "{event:?}");
         }
     }
 
     #[test]
     fn a_shifted_capital_still_reaches_its_binding() {
         let shifted = Event::Key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT));
-        assert_eq!(action(&shifted), Some(Action::Move(Motion::Bottom)));
+        assert_eq!(action(&shifted, viewport()), Some(Action::Move(Motion::Bottom)));
     }
 
     #[test]
     fn a_release_is_not_a_second_press() {
         let mut key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
         key.kind = KeyEventKind::Release;
-        assert_eq!(action(&Event::Key(key)), None);
+        assert_eq!(action(&Event::Key(key), viewport()), None);
     }
 
     #[test]
     fn a_control_binding_does_not_answer_to_its_bare_letter_twice_over() {
-        assert_eq!(action(&control('q')), None);
-        assert_eq!(action(&control('f')), None);
+        assert_eq!(action(&control('q'), viewport()), None);
+        assert_eq!(action(&control('f'), viewport()), None);
     }
 
     #[test]
     fn control_d_still_pages_rather_than_opening_the_diagnostics() {
-        assert_eq!(action(&control('d')), Some(Action::Move(Motion::HalfPage(1))));
+        assert_eq!(action(&control('d'), viewport()), Some(Action::Move(Motion::HalfPage(1))));
     }
 
     #[test]
     fn alt_disqualifies_a_key() {
         let alt = Event::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::ALT));
-        assert_eq!(action(&alt), None);
+        assert_eq!(action(&alt, viewport()), None);
     }
 
     #[test]
     fn a_resize_reaches_the_shell() {
-        assert_eq!(action(&Event::Resize(80, 24)), Some(Action::Resize(Size::new(80, 24))));
+        assert_eq!(action(&Event::Resize(80, 24), viewport()), Some(Action::Resize(Size::new(80, 24))));
     }
 
     #[test]
     fn an_unbound_key_is_ignored_rather_than_guessed_at() {
-        assert_eq!(action(&press(KeyCode::Char('z'))), None);
-        assert_eq!(action(&press(KeyCode::Insert)), None);
+        assert_eq!(action(&press(KeyCode::Char('z')), viewport()), None);
+        assert_eq!(action(&press(KeyCode::Insert), viewport()), None);
+    }
+
+    #[test]
+    fn the_wheel_scrolls_the_column_under_the_pointer() {
+        assert_eq!(
+            action(&mouse(MouseEventKind::ScrollDown, 5, 5), viewport()),
+            Some(Action::Scroll { column: Column::Projects, delta: WHEEL_LINES })
+        );
+        assert_eq!(
+            action(&mouse(MouseEventKind::ScrollUp, 5, 5), viewport()),
+            Some(Action::Scroll { column: Column::Projects, delta: -WHEEL_LINES })
+        );
+    }
+
+    #[test]
+    fn a_left_click_resolves_to_the_column_and_row_under_the_pointer() {
+        assert_eq!(
+            action(&mouse(MouseEventKind::Down(MouseButton::Left), 5, 5), viewport()),
+            Some(Action::Click { column: Column::Projects, row: 2 })
+        );
+    }
+
+    #[test]
+    fn a_click_or_scroll_outside_any_column_does_nothing() {
+        assert_eq!(action(&mouse(MouseEventKind::Down(MouseButton::Left), 5, 0), viewport()), None);
+        assert_eq!(action(&mouse(MouseEventKind::ScrollDown, 5, 0), viewport()), None);
+    }
+
+    #[test]
+    fn the_right_and_middle_buttons_are_ignored() {
+        assert_eq!(action(&mouse(MouseEventKind::Down(MouseButton::Right), 5, 5), viewport()), None);
+        assert_eq!(action(&mouse(MouseEventKind::Down(MouseButton::Middle), 5, 5), viewport()), None);
+        assert_eq!(action(&mouse(MouseEventKind::Up(MouseButton::Left), 5, 5), viewport()), None);
+        assert_eq!(action(&mouse(MouseEventKind::Drag(MouseButton::Left), 5, 5), viewport()), None);
+        assert_eq!(action(&mouse(MouseEventKind::Moved, 5, 5), viewport()), None);
+    }
+
+    #[test]
+    fn a_click_in_focus_mode_always_hits_the_conversation() {
+        let focused = Viewport { area: Size::new(120, 24), mode: Mode::Focus };
+        assert_eq!(
+            action(&mouse(MouseEventKind::Down(MouseButton::Left), 5, 5), focused),
+            Some(Action::Click { column: Column::Conversation, row: 2 })
+        );
     }
 }

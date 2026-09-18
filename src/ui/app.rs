@@ -543,7 +543,9 @@ impl App {
                 | Action::ToggleCall
                 | Action::ToggleAllCalls
                 | Action::CycleBranch
-                | Action::ToggleInjections => {}
+                | Action::ToggleInjections
+                | Action::Scroll { .. }
+                | Action::Click { .. } => {}
             }
             return;
         }
@@ -561,6 +563,8 @@ impl App {
             Action::CycleBranch => self.cycle_branch(),
             Action::ToggleInjections => self.toggle_injections(),
             Action::ToggleDiagnostics => self.toggle_diagnostics(),
+            Action::Scroll { column, delta } => self.scroll_column(column, delta),
+            Action::Click { column, row } => self.click(column, row),
         }
     }
 
@@ -837,6 +841,57 @@ impl App {
         let last = self.last(Column::Conversation);
         let height = columns::conversation_height(self.area);
         self.conversation_pane.top = listing::scroll_target(motion, self.conversation_pane.top, last, height);
+    }
+
+    fn scroll_column(&mut self, column: Column, delta: isize) {
+        if column == Column::Conversation {
+            self.scroll_conversation(Motion::Line(delta));
+            return;
+        }
+        let last = self.last(column);
+        let height = self.pane_height();
+        let pane = self.pane_mut(column);
+        pane.top = listing::scrolled(pane.top, delta, last, height);
+        let selected = listing::snapped(pane.selected, pane.top, last, height);
+        if selected == pane.selected {
+            return;
+        }
+        pane.selected = selected;
+        match column {
+            Column::Projects => self.request_sessions_for_selection(),
+            Column::Sessions => self.request_conversation_for_selection(),
+            Column::Conversation => {}
+        }
+    }
+
+    fn click(&mut self, column: Column, row: u16) {
+        self.focused = column;
+        match column {
+            Column::Projects | Column::Sessions => self.click_list(column, row),
+            Column::Conversation => self.click_conversation(row),
+        }
+    }
+
+    fn click_list(&mut self, column: Column, row: u16) {
+        let last = self.last(column);
+        let pane = self.pane(column);
+        let Some(index) = listing::picked(pane.top, usize::from(row), last) else { return };
+        if index == pane.selected {
+            return;
+        }
+        self.pane_mut(column).selected = index;
+        match column {
+            Column::Projects => self.request_sessions_for_selection(),
+            Column::Sessions => self.request_conversation_for_selection(),
+            Column::Conversation => {}
+        }
+    }
+
+    fn click_conversation(&mut self, row: u16) {
+        let line = self.conversation_pane.top.saturating_add(usize::from(row));
+        let Some(cursor) = self.anchors().iter().position(|anchor| anchor.line == line) else { return };
+        self.call_cursor = Some(cursor);
+        self.descend();
     }
 
     fn request_sessions_for_selection(&mut self) {
@@ -1497,6 +1552,140 @@ mod tests {
         let (dir, generation) = app.take_session_load().expect("a session load was requested");
         assert!(dir.ends_with("projects/b"));
         assert_eq!(generation, app.generation());
+    }
+
+    #[test]
+    fn scrolling_a_column_does_not_take_focus_away_from_another() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok((0..30).map(|index| project(&format!("p{index}"))).collect()));
+        assert_eq!(app.focused(), Column::Projects);
+        app.apply(Action::Focus { forward: true });
+        assert_eq!(app.focused(), Column::Sessions);
+
+        app.apply(Action::Scroll { column: Column::Projects, delta: 5 });
+        assert_eq!(app.focused(), Column::Sessions, "the wheel does not steal focus");
+        assert!(app.pane(Column::Projects).top > 0, "the column under the pointer still scrolled");
+    }
+
+    #[test]
+    fn scrolling_past_the_selection_snaps_it_back_onto_the_visible_rows_and_requests_sessions() {
+        let mut app = app(Size::new(120, 10));
+        app.set_projects(app.generation(), Ok((0..30).map(|index| project(&format!("p{index}"))).collect()));
+        let generation_after_load = app.generation();
+
+        app.apply(Action::Scroll { column: Column::Projects, delta: 20 });
+
+        assert!(app.pane(Column::Projects).selected > 0, "the selection followed the scroll onto the visible rows");
+        assert!(app.generation() > generation_after_load, "the new selection requested sessions");
+    }
+
+    #[test]
+    fn scrolling_without_crossing_the_selection_requests_nothing() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok((0..30).map(|index| project(&format!("p{index}"))).collect()));
+        app.apply(Action::Click { column: Column::Projects, row: 15 });
+        let generation_after_click = app.generation();
+
+        app.apply(Action::Scroll { column: Column::Projects, delta: 1 });
+
+        assert_eq!(app.generation(), generation_after_click, "the selection stayed on screen, so nothing reloaded");
+    }
+
+    #[test]
+    fn a_click_selects_a_row_focuses_the_column_and_requests_sessions() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("a"), project("b"), project("c")]));
+        assert_eq!(app.focused(), Column::Projects);
+        let generation_after_load = app.generation();
+
+        app.apply(Action::Click { column: Column::Projects, row: 1 });
+
+        assert_eq!(app.focused(), Column::Projects);
+        assert_eq!(app.pane(Column::Projects).selected, 1);
+        assert!(app.generation() > generation_after_load, "clicking a new row requests sessions");
+        let (dir, _) = app.take_session_load().expect("a session load was requested");
+        assert!(dir.ends_with("projects/b"));
+    }
+
+    #[test]
+    fn clicking_the_column_already_focused_and_selected_moves_the_focus_but_reloads_nothing() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("a"), project("b")]));
+        app.apply(Action::Move(Motion::Line(1)));
+        let generation_after_move = app.generation();
+
+        app.apply(Action::Click { column: Column::Projects, row: 1 });
+
+        assert_eq!(app.pane(Column::Projects).selected, 1);
+        assert_eq!(app.generation(), generation_after_move, "re-clicking the same row did not reload");
+    }
+
+    #[test]
+    fn a_click_past_the_end_of_a_short_list_selects_nothing() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("a")]));
+        let generation_after_load = app.generation();
+
+        app.apply(Action::Click { column: Column::Projects, row: 10 });
+
+        assert_eq!(app.pane(Column::Projects).selected, 0);
+        assert_eq!(app.generation(), generation_after_load);
+    }
+
+    #[test]
+    fn clicking_a_calls_header_row_expands_it_just_like_space() {
+        let mut app = with_calls(Size::new(120, 30));
+        app.apply(Action::Focus { forward: true });
+        app.apply(Action::Focus { forward: true });
+        let row =
+            u16::try_from(app.anchors().first().map(|anchor| anchor.line).expect("at least one call")).expect("a small row");
+
+        app.apply(Action::Click { column: Column::Conversation, row });
+
+        assert_eq!(app.call_cursor(), Some(0));
+        assert!(call_lines(&app).first().is_some_and(|text| text.contains('▾')), "the click expanded the call");
+    }
+
+    #[test]
+    fn clicking_a_subagent_row_enters_it_just_like_enter() {
+        let mut app = with_subagent(Size::new(120, 30));
+        enter_first_subagent(&mut app);
+        let cursor = app.call_cursor().expect("a subagent call is selected");
+        let line = app.anchors().get(cursor).map(|anchor| anchor.line).expect("the anchor exists");
+        app.call_cursor = None;
+        let top = app.pane(Column::Conversation).top;
+        let row = u16::try_from(line.saturating_sub(top)).expect("a small row");
+
+        app.apply(Action::Click { column: Column::Conversation, row });
+
+        assert_eq!(app.depth(), 1, "the click descended into the subagent");
+    }
+
+    #[test]
+    fn a_click_on_a_body_row_of_an_expanded_call_only_focuses_the_column() {
+        let mut app = with_calls(Size::new(120, 30));
+        app.apply(Action::Focus { forward: true });
+        app.apply(Action::Focus { forward: true });
+        app.apply(Action::ToggleCall);
+        let cursor = app.call_cursor();
+
+        app.apply(Action::Click { column: Column::Conversation, row: 1 });
+
+        assert_eq!(app.call_cursor(), cursor, "a body row is not a header row, so the cursor did not move");
+    }
+
+    #[test]
+    fn the_mouse_does_nothing_while_the_diagnostics_overlay_is_open() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("a"), project("b")]));
+        app.apply(Action::ToggleDiagnostics);
+        assert!(app.diagnostics_open());
+
+        app.apply(Action::Click { column: Column::Projects, row: 1 });
+        assert_eq!(app.pane(Column::Projects).selected, 0, "the click did not reach the list underneath");
+
+        app.apply(Action::Scroll { column: Column::Projects, delta: 1 });
+        assert_eq!(app.pane(Column::Projects).top, 0, "the wheel did not reach the list underneath");
     }
 
     #[test]

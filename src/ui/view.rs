@@ -9,8 +9,8 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::render::line::{RenderedLine, truncate};
 use crate::ui::age;
-use crate::ui::app::{App, Column, Loadable, Mode};
-use crate::ui::columns::{self, Columns};
+use crate::ui::app::{App, Column, Loadable};
+use crate::ui::columns;
 use crate::ui::diagnostics;
 
 const TITLE_PREFIX: &str = "rewind";
@@ -147,45 +147,11 @@ fn progress(area: Rect, buf: &mut Buffer, app: &App) {
 }
 
 fn content(area: Rect, buf: &mut Buffer, app: &App) {
-    if app.mode() == Mode::Focus {
-        column(area, buf, app, Column::Conversation, true);
-        return;
-    }
-
-    match columns::layout(area.width) {
-        Columns::Three { projects, sessions, conversation } => {
-            let x1 = area.x.saturating_add(projects);
-            let x2 = x1.saturating_add(1).saturating_add(sessions);
-            column(Rect { x: area.x, width: projects, ..area }, buf, app, Column::Projects, app.focused() == Column::Projects);
-            divider(x1, area, buf);
-            column(
-                Rect { x: x1.saturating_add(1), width: sessions, ..area },
-                buf,
-                app,
-                Column::Sessions,
-                app.focused() == Column::Sessions,
-            );
-            divider(x2, area, buf);
-            column(
-                Rect { x: x2.saturating_add(1), width: conversation, ..area },
-                buf,
-                app,
-                Column::Conversation,
-                app.focused() == Column::Conversation,
-            );
+    for (index, (which, x, width)) in columns::placement(area.width, app.mode()).into_iter().enumerate() {
+        if index > 0 {
+            divider(area.x.saturating_add(x).saturating_sub(1), area, buf);
         }
-        Columns::Two { sessions, conversation } => {
-            let x1 = area.x.saturating_add(sessions);
-            column(Rect { x: area.x, width: sessions, ..area }, buf, app, Column::Sessions, app.focused() == Column::Sessions);
-            divider(x1, area, buf);
-            column(
-                Rect { x: x1.saturating_add(1), width: conversation, ..area },
-                buf,
-                app,
-                Column::Conversation,
-                app.focused() == Column::Conversation,
-            );
-        }
+        column(Rect { x: area.x.saturating_add(x), width, ..area }, buf, app, which, app.focused() == which);
     }
 }
 
@@ -381,7 +347,7 @@ mod tests {
     use crate::domain::project::{Project, Resolution};
     use crate::domain::session::{Session, TitleSource};
     use crate::ui::Options;
-    use crate::ui::app::Pane;
+    use crate::ui::app::{Mode, Pane};
     use crate::ui::input::{Action, Motion};
 
     fn ctx() -> Ctx {

@@ -126,7 +126,8 @@ fn next(app: &App, rx: &Receiver<Wake>) -> Result<Wake, RecvTimeoutError> {
 fn handle(app: &mut App, wake: Wake) -> Result<()> {
     match wake {
         Wake::Input(event) => {
-            if let Some(action) = input::action(&event) {
+            let viewport = input::Viewport { area: app.area(), mode: app.mode() };
+            if let Some(action) = input::action(&event, viewport) {
                 app.apply(action);
             }
         }
