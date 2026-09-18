@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::domain::subagent::Agents;
+use crate::domain::thread::NodeId;
 
 pub type Expanded = HashSet<Box<str>>;
 pub type Outputs = HashMap<Box<str>, Overflow>;
@@ -26,6 +27,7 @@ pub struct Ctx<'a> {
     pub expanded: &'a Expanded,
     pub outputs: &'a Outputs,
     pub agents: &'a Agents,
+    pub root: Option<NodeId>,
 }
 
 impl Ctx<'_> {
@@ -34,6 +36,6 @@ impl Ctx<'_> {
     }
 
     pub const fn narrowed(&self, width: usize) -> Ctx<'_> {
-        Ctx { width, expanded: self.expanded, outputs: self.outputs, agents: self.agents }
+        Ctx { width, expanded: self.expanded, outputs: self.outputs, agents: self.agents, root: self.root }
     }
 }

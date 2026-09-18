@@ -144,7 +144,7 @@ fn visible(session: &std::path::Path, agents: &Agents) -> std::collections::BTre
     let Ok(conversation) = thread::build(session) else { return std::collections::BTreeSet::new() };
     let expanded = rewind::render::Expanded::new();
     let outputs = rewind::render::Outputs::new();
-    let ctx = rewind::render::Ctx { width: 100, expanded: &expanded, outputs: &outputs, agents };
+    let ctx = rewind::render::Ctx { width: 100, expanded: &expanded, outputs: &outputs, agents, root: None };
     rewind::render::message::transcript(&conversation, &ctx)
         .anchors
         .iter()
@@ -258,4 +258,36 @@ fn collect(dir: &std::path::Path, found: &mut Vec<PathBuf>) {
             found.push(path);
         }
     }
+}
+
+#[test]
+fn a_legacy_inline_sidechain_is_lifted_off_the_thread_and_hung_on_its_task_call() {
+    const DRIFT: &str = "44444444-4444-4444-8444-444444444444";
+    let conversation = thread::build(&session_path(DRIFT)).expect("the drift fixture");
+
+    let root = conversation.inline_agent("toolu_01FixtureDTaskOld0000000").expect("the Task call owns a sidechain");
+    let thread: Vec<&str> =
+        conversation.thread().iter().filter_map(|id| conversation.node(*id)).map(rewind::domain::thread::Node::uuid).collect();
+    assert!(!thread.contains(&"a4444444-0000-4000-8000-000000000003"), "the sidechain user turn is not a human turn");
+    assert!(!thread.contains(&"a4444444-0000-4000-8000-000000000004"), "nor its reply");
+    assert!(
+        thread.contains(&"a4444444-0000-4000-8000-000000000005"),
+        "the main chain ran through the sidechain and must be re-stitched past it"
+    );
+
+    let inside: Vec<&str> = conversation
+        .path_from(root)
+        .iter()
+        .filter_map(|id| conversation.node(*id))
+        .map(rewind::domain::thread::Node::uuid)
+        .collect();
+    assert_eq!(inside, ["a4444444-0000-4000-8000-000000000003", "a4444444-0000-4000-8000-000000000004"]);
+}
+
+#[test]
+fn a_subagents_own_conversation_knows_it_is_one() {
+    let session = thread::build(&session_path(BASELINE)).expect("the session");
+    assert!(!session.is_sidechain());
+    let agent = thread::build(&subagent::transcript_path(&session_path(BASELINE), JOINED)).expect("the agent");
+    assert!(agent.is_sidechain(), "every record in a subagent file carries isSidechain");
 }

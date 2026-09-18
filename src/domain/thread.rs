@@ -67,6 +67,15 @@ pub struct Node {
 }
 
 impl Node {
+    pub const fn is_sidechain(&self) -> bool {
+        match &self.kind {
+            NodeKind::User(record) => record.envelope.is_sidechain,
+            NodeKind::Assistant(turn) => turn.envelope.is_sidechain,
+            NodeKind::System(record) => record.envelope.is_sidechain,
+            NodeKind::Attachment(record) => record.envelope.is_sidechain,
+        }
+    }
+
     pub fn uuid(&self) -> &str {
         match &self.kind {
             NodeKind::User(record) => &record.envelope.uuid,
@@ -95,6 +104,7 @@ pub struct Conversation {
     nodes: Vec<Node>,
     ids: HashMap<Box<str>, NodeId>,
     results: HashMap<Box<str>, NodeId>,
+    inline: HashMap<Box<str>, NodeId>,
     roots: Vec<NodeId>,
     thread: Vec<NodeId>,
     chosen: HashMap<NodeId, NodeId>,
@@ -133,6 +143,24 @@ impl Conversation {
 
     pub fn result_of(&self, tool_use_id: &str) -> Option<&Node> {
         self.node(*self.results.get(tool_use_id)?)
+    }
+
+    pub fn inline_agent(&self, tool_use_id: &str) -> Option<NodeId> {
+        self.inline.get(tool_use_id).copied()
+    }
+
+    pub fn inline_agents(&self) -> impl Iterator<Item = (&str, NodeId)> {
+        self.inline.iter().map(|(id, node)| (&**id, *node))
+    }
+
+    pub fn is_sidechain(&self) -> bool {
+        self.roots.first().and_then(|root| self.node(*root)).is_some_and(Node::is_sidechain)
+    }
+
+    pub fn path_from(&self, root: NodeId) -> Vec<NodeId> {
+        let mut chosen = HashMap::new();
+        let target = newest_childless(&self.nodes, root);
+        walk_up(&self.nodes, target, root, &mut chosen)
     }
 }
 
@@ -220,12 +248,72 @@ pub fn build(path: &Path) -> Result<Conversation, ThreadError> {
 
     let mut roots = resolve_parents(&mut nodes, &provisional, &ids, &mut diagnostics);
     sever_cycles(&mut nodes, &mut roots, &provisional, &mut diagnostics);
+    let inline = lift_inline_sidechains(&mut nodes);
     order_and_mark_roots(&mut nodes, &mut roots);
     let (thread, chosen) = choose_threads(&nodes, &roots, state.leaf_uuid.as_deref(), &ids);
 
     let results = index_results(&nodes);
 
-    Ok(Conversation { nodes, ids, results, roots, thread, chosen, state, diagnostics })
+    Ok(Conversation { nodes, ids, results, inline, roots, thread, chosen, state, diagnostics })
+}
+
+fn lift_inline_sidechains(nodes: &mut [Node]) -> HashMap<Box<str>, NodeId> {
+    let mut lifted = HashMap::new();
+    let starts: Vec<(NodeId, NodeId)> = nodes
+        .iter()
+        .filter(|node| node.is_sidechain())
+        .filter_map(|node| {
+            let parent = node.parent?;
+            nodes.get(parent.index()).filter(|parent| !parent.is_sidechain()).map(|parent| (node.id, parent.id))
+        })
+        .collect();
+
+    for (start, parent) in starts {
+        let Some(tool_use_id) = spawning_call(nodes, parent) else { continue };
+        restitch(nodes, start, parent);
+        if let Some(node) = nodes.get_mut(parent.index()) {
+            node.children.retain(|child| *child != start);
+        }
+        if let Some(node) = nodes.get_mut(start.index()) {
+            node.parent = None;
+        }
+        lifted.insert(tool_use_id, start);
+    }
+    lifted
+}
+
+fn restitch(nodes: &mut [Node], start: NodeId, parent: NodeId) {
+    let mut stack = vec![start];
+    let mut rejoining = Vec::new();
+    while let Some(id) = stack.pop() {
+        let Some(node) = nodes.get(id.index()) else { continue };
+        for &child in &node.children {
+            if nodes.get(child.index()).is_some_and(Node::is_sidechain) {
+                stack.push(child);
+            } else {
+                rejoining.push((id, child));
+            }
+        }
+    }
+    for (inside, child) in rejoining {
+        if let Some(node) = nodes.get_mut(inside.index()) {
+            node.children.retain(|found| *found != child);
+        }
+        if let Some(node) = nodes.get_mut(child.index()) {
+            node.parent = Some(parent);
+        }
+        if let Some(node) = nodes.get_mut(parent.index()) {
+            node.children.push(child);
+        }
+    }
+}
+
+fn spawning_call(nodes: &[Node], parent: NodeId) -> Option<Box<str>> {
+    let NodeKind::Assistant(turn) = &nodes.get(parent.index())?.kind else { return None };
+    turn.content.iter().find_map(|block| match block {
+        Block::ToolUse { id, name, .. } if name == "Task" || name == "Agent" => Some(Box::from(id.as_str())),
+        _ => None,
+    })
 }
 
 fn index_results(nodes: &[Node]) -> HashMap<Box<str>, NodeId> {

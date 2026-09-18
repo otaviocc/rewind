@@ -48,11 +48,12 @@ struct View {
     expanded: Expanded,
     outputs: Outputs,
     agents: Agents,
+    root: Option<rewind::domain::thread::NodeId>,
 }
 
 impl View {
     const fn ctx(&self, width: usize) -> Ctx<'_> {
-        Ctx { width, expanded: &self.expanded, outputs: &self.outputs, agents: &self.agents }
+        Ctx { width, expanded: &self.expanded, outputs: &self.outputs, agents: &self.agents, root: self.root }
     }
 
     fn expanding(path: &Path) -> Self {

@@ -31,6 +31,7 @@ enum Wake {
     SessionsLoaded { generation: u64, sessions: Vec<session::Session> },
     ConversationLoaded { generation: u64, result: Result<Box<Conversation>, ThreadError>, agents: Box<Agents> },
     ToolOutputLoaded { generation: u64, id: Box<str>, result: Result<Vec<String>, String> },
+    SubagentLoaded { generation: u64, path: PathBuf, result: Result<Box<Conversation>, ThreadError> },
     InputLost(String),
 }
 
@@ -108,6 +109,9 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App, tx: &Sender<Wake>, 
         if let Some((id, path, generation)) = app.take_tool_output() {
             spawn_tool_output_load(tx, id, path, generation);
         }
+        if let Some((_, path, generation)) = app.take_subagent_load() {
+            spawn_subagent_load(tx, path, generation);
+        }
     }
 }
 
@@ -129,6 +133,7 @@ fn handle(app: &mut App, wake: Wake) -> Result<()> {
         Wake::SessionsLoaded { generation, sessions } => app.set_sessions(generation, sessions),
         Wake::ConversationLoaded { generation, result, agents } => app.set_conversation(generation, result, *agents),
         Wake::ToolOutputLoaded { generation, id, result } => app.set_tool_output(generation, id, result),
+        Wake::SubagentLoaded { generation, path, result } => app.set_subagent(generation, result, path),
         Wake::InputLost(error) => bail!("cannot read keyboard input: {error}"),
     }
     Ok(())
@@ -173,6 +178,14 @@ fn spawn_conversation_load(tx: &Sender<Wake>, path: PathBuf, generation: u64) {
         let agents = Box::new(subagent::discover(&path));
         let result = thread::build(&path).map(Box::new);
         let _ = tx.send(Wake::ConversationLoaded { generation, result, agents });
+    });
+}
+
+fn spawn_subagent_load(tx: &Sender<Wake>, path: PathBuf, generation: u64) {
+    let tx = tx.clone();
+    std::thread::spawn(move || {
+        let result = thread::build(&path).map(Box::new);
+        let _ = tx.send(Wake::SubagentLoaded { generation, path, result });
     });
 }
 

@@ -10,8 +10,8 @@ use ratatui::layout::Size;
 use crate::ctx::Ctx;
 use crate::domain::project::{Project, ProjectError};
 use crate::domain::session::Session;
-use crate::domain::subagent::Agents;
-use crate::domain::thread::{Conversation, ThreadError};
+use crate::domain::subagent::{Agent, Agents};
+use crate::domain::thread::{Conversation, NodeId, NodeKind, ThreadError};
 use crate::domain::tool;
 use crate::render::line::RenderedLine;
 use crate::render::message::{self, Anchor, Transcript};
@@ -47,6 +47,7 @@ pub struct Rendered {
     conversation: Conversation,
     path: PathBuf,
     agents: Agents,
+    root: Option<NodeId>,
     transcript: Transcript,
     wrapped_at: u16,
     revision: u64,
@@ -54,12 +55,26 @@ pub struct Rendered {
 
 impl Rendered {
     fn new(conversation: Conversation, path: PathBuf, agents: Agents, width: u16, view: &View) -> Self {
-        let transcript = message::transcript(&conversation, &view.ctx(usize::from(width), &agents));
-        Self { conversation, path, agents, transcript, wrapped_at: width, revision: view.revision }
+        let transcript = message::transcript(&conversation, &view.ctx(usize::from(width), &agents, None));
+        Self { conversation, path, agents, root: None, transcript, wrapped_at: width, revision: view.revision }
+    }
+
+    fn rooted(&self, root: NodeId, width: u16, view: &View) -> Self {
+        let mut rendered = Self {
+            conversation: self.conversation.clone(),
+            path: self.path.clone(),
+            agents: self.agents.clone(),
+            root: Some(root),
+            transcript: Transcript::default(),
+            wrapped_at: width,
+            revision: view.revision,
+        };
+        rendered.rewrap(width, view);
+        rendered
     }
 
     fn rewrap(&mut self, width: u16, view: &View) {
-        self.transcript = message::transcript(&self.conversation, &view.ctx(usize::from(width), &self.agents));
+        self.transcript = message::transcript(&self.conversation, &view.ctx(usize::from(width), &self.agents, self.root));
         self.wrapped_at = width;
         self.revision = view.revision;
     }
@@ -83,6 +98,18 @@ impl Rendered {
     pub const fn agents(&self) -> &Agents {
         &self.agents
     }
+
+    pub fn turns(&self) -> usize {
+        let walk = self.root.map_or_else(|| self.conversation.thread().to_vec(), |root| self.conversation.path_from(root));
+        walk.iter()
+            .filter_map(|id| self.conversation.node(*id))
+            .filter(|node| match &node.kind {
+                NodeKind::Assistant(_) => true,
+                NodeKind::User(record) => record.is_human_turn(),
+                NodeKind::System(_) | NodeKind::Attachment(_) => false,
+            })
+            .count()
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -93,8 +120,8 @@ struct View {
 }
 
 impl View {
-    const fn ctx<'a>(&'a self, width: usize, agents: &'a Agents) -> RenderCtx<'a> {
-        RenderCtx { width, expanded: &self.expanded, outputs: &self.outputs, agents }
+    const fn ctx<'a>(&'a self, width: usize, agents: &'a Agents, root: Option<NodeId>) -> RenderCtx<'a> {
+        RenderCtx { width, expanded: &self.expanded, outputs: &self.outputs, agents, root }
     }
 
     const fn bump(&mut self) {
@@ -107,6 +134,14 @@ pub enum Loadable<T> {
     Loading,
     Ready(T),
     Failed(String),
+}
+
+struct Frame {
+    conversation: Loadable<Rendered>,
+    pane: Pane,
+    view: View,
+    call_cursor: Option<usize>,
+    label: Option<Box<str>>,
 }
 
 pub struct App {
@@ -134,6 +169,9 @@ pub struct App {
     conversation_due: Option<Instant>,
     view: View,
     call_cursor: Option<usize>,
+    stack: Vec<Frame>,
+    label: Option<Box<str>>,
+    pending_subagent_load: Option<(Box<str>, PathBuf, u64)>,
 }
 
 impl App {
@@ -163,6 +201,9 @@ impl App {
             conversation_due: None,
             view: View::default(),
             call_cursor: None,
+            stack: Vec::new(),
+            label: None,
+            pending_subagent_load: None,
         }
     }
 
@@ -208,6 +249,14 @@ impl App {
         self.call_cursor
     }
 
+    pub const fn depth(&self) -> usize {
+        self.stack.len()
+    }
+
+    pub fn trail(&self) -> Vec<&str> {
+        self.stack.iter().filter_map(|frame| frame.label.as_deref()).chain(self.label.as_deref()).collect()
+    }
+
     pub fn cursor_line(&self) -> Option<usize> {
         let cursor = self.call_cursor?;
         self.anchors().get(cursor).map(|anchor| anchor.line)
@@ -249,6 +298,37 @@ impl App {
 
     pub fn take_tool_output(&mut self) -> Option<(Box<str>, PathBuf, u64)> {
         self.pending_tool_output.pop_front()
+    }
+
+    pub const fn take_subagent_load(&mut self) -> Option<(Box<str>, PathBuf, u64)> {
+        self.pending_subagent_load.take()
+    }
+
+    pub fn set_subagent(&mut self, generation: u64, result: Result<Box<Conversation>, ThreadError>, path: PathBuf) {
+        if generation != self.conversation_generation {
+            return;
+        }
+        let width = columns::conversation_width(self.area, self.mode);
+        let agents = self.inherited_agents();
+        self.conversation = match result {
+            Ok(conversation) => Loadable::Ready(Rendered::new(*conversation, path, agents, width, &self.view)),
+            Err(error) => Loadable::Failed(error.to_string()),
+        };
+    }
+
+    fn inherited_agents(&self) -> Agents {
+        match self.stack.last().map(|frame| &frame.conversation) {
+            Some(Loadable::Ready(parent)) => parent.agents().clone(),
+            _ => Agents::default(),
+        }
+    }
+
+    pub fn subagent_status(&self) -> Option<String> {
+        let label = self.label.as_deref()?;
+        let Loadable::Ready(rendered) = &self.conversation else { return Some(format!("{label} · loading")) };
+        let turns = rendered.turns();
+        let plural = if turns == 1 { "msg" } else { "msgs" };
+        Some(format!("{label} · {turns} {plural} · depth {}", self.depth()))
     }
 
     pub fn set_tool_output(&mut self, generation: u64, id: Box<str>, result: Result<Vec<String>, String>) {
@@ -455,19 +535,100 @@ impl App {
     }
 
     fn descend(&mut self) {
-        if self.focused == Column::Conversation {
-            self.toggle_call();
+        if self.focused != Column::Conversation {
+            self.move_focus(true);
             return;
         }
-        self.move_focus(true);
+        if self.enter_subagent() {
+            return;
+        }
+        self.toggle_call();
     }
 
     fn ascend(&mut self) {
+        if self.leave_subagent() {
+            return;
+        }
         if self.mode == Mode::Focus {
             self.toggle_focus_mode();
             return;
         }
         self.move_focus(false);
+    }
+
+    fn selected_key(&self) -> Option<&str> {
+        let cursor = self.call_cursor?;
+        self.anchors().get(cursor)?.agent.as_deref()
+    }
+
+    fn enter_inline_subagent(&mut self) -> bool {
+        let width = columns::conversation_width(self.area, self.mode);
+        let Some(key) = self.selected_key().map(str::to_owned) else { return false };
+        let Loadable::Ready(rendered) = &self.conversation else { return false };
+        let Some(root) = rendered.conversation().inline_agent(&key) else { return false };
+        let label: Box<str> = rendered
+            .conversation()
+            .node(root)
+            .and_then(|node| node.timestamp.map(|_| "sidechain"))
+            .map_or_else(|| Box::from("sidechain"), Box::from);
+        let child = rendered.rooted(root, width, &View::default());
+
+        self.stack.push(Frame {
+            conversation: std::mem::replace(&mut self.conversation, Loadable::Ready(child)),
+            pane: self.conversation_pane,
+            view: std::mem::take(&mut self.view),
+            call_cursor: self.call_cursor.take(),
+            label: self.label.replace(label),
+        });
+        self.conversation_pane = Pane::default();
+        true
+    }
+
+    fn selected_agent(&self) -> Option<&Agent> {
+        let cursor = self.call_cursor?;
+        let id = self.anchors().get(cursor)?.agent.as_deref()?;
+        let Loadable::Ready(rendered) = &self.conversation else { return None };
+        rendered.agents().by_id(id)
+    }
+
+    fn enter_subagent(&mut self) -> bool {
+        if self.enter_inline_subagent() {
+            return true;
+        }
+        let Some((id, path, label)) = self
+            .selected_agent()
+            .and_then(|agent| Some((agent.id.clone(), agent.transcript.clone()?, Box::<str>::from(agent.label()))))
+        else {
+            return false;
+        };
+
+        self.conversation_generation = self.conversation_generation.saturating_add(1);
+        self.pending_tool_output.clear();
+        self.stack.push(Frame {
+            conversation: std::mem::replace(&mut self.conversation, Loadable::Loading),
+            pane: self.conversation_pane,
+            view: std::mem::take(&mut self.view),
+            call_cursor: self.call_cursor.take(),
+            label: self.label.replace(label),
+        });
+        self.conversation_pane = Pane::default();
+        self.pending_subagent_load = Some((id, path, self.conversation_generation));
+        true
+    }
+
+    fn leave_subagent(&mut self) -> bool {
+        let Some(frame) = self.stack.pop() else { return false };
+        self.conversation_generation = self.conversation_generation.saturating_add(1);
+        self.pending_subagent_load = None;
+        self.pending_tool_output.clear();
+        self.conversation = frame.conversation;
+        self.conversation_pane = frame.pane;
+        self.view = frame.view;
+        self.call_cursor = frame.call_cursor;
+        self.label = frame.label;
+        self.rerender();
+        self.conversation_pane.top = frame.pane.top.min(self.last(Column::Conversation));
+        true
     }
 
     fn move_focus(&mut self, forward: bool) {
@@ -523,6 +684,9 @@ impl App {
     }
 
     fn request_conversation_for_selection(&mut self) {
+        self.stack.clear();
+        self.label = None;
+        self.pending_subagent_load = None;
         self.conversation_generation = self.conversation_generation.saturating_add(1);
         self.conversation = Loadable::Loading;
         self.conversation_pane = Pane::default();
@@ -636,6 +800,155 @@ mod tests {
 
     fn call_lines(app: &App) -> Vec<String> {
         app.lines().iter().map(RenderedLine::text).filter(|text| text.contains('▸') || text.contains('▾')).collect()
+    }
+
+    fn with_subagent(area: Size) -> App {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("data").join("claude").join("projects");
+        let path = root.join("-Users-fixture-Developer-holodeck").join("11111111-1111-4111-8111-111111111111.jsonl");
+        let conversation = crate::domain::thread::build(&path).expect("the baseline session");
+        let agents = crate::domain::subagent::discover(&path);
+        let mut app = app(area);
+        app.pending_conversation_path = Some(path);
+        app.set_conversation(app.conversation_generation(), Ok(Box::new(conversation)), agents);
+        app
+    }
+
+    fn enter_first_subagent(app: &mut App) {
+        app.apply(Action::Focus { forward: true });
+        app.apply(Action::Focus { forward: true });
+        while app.anchors().get(app.call_cursor().unwrap_or(0)).is_none_or(|anchor| anchor.agent.is_none()) {
+            let before = app.call_cursor();
+            app.apply(Action::NextCall { forward: true });
+            assert_ne!(app.call_cursor(), before, "ran out of calls before finding a subagent");
+        }
+    }
+
+    #[test]
+    fn entering_a_subagent_pushes_a_frame_and_leaving_pops_it() {
+        let mut app = with_subagent(Size::new(120, 30));
+        assert_eq!(app.depth(), 0);
+        enter_first_subagent(&mut app);
+        let before = app.lines().len();
+
+        app.apply(Action::Descend);
+        assert_eq!(app.depth(), 1, "Enter on a subagent call descends rather than expanding it");
+        assert_eq!(app.trail(), ["Explore"], "the breadcrumb names the agent");
+        let (id, path, generation) = app.take_subagent_load().expect("a subagent load was queued");
+        assert_eq!(&*id, "a1b2c3d4e5f607182");
+        assert!(path.ends_with("subagents/agent-a1b2c3d4e5f607182.jsonl"));
+        assert_eq!(generation, app.conversation_generation());
+
+        app.apply(Action::Ascend);
+        assert_eq!(app.depth(), 0, "Esc pops the frame before it exits focus mode");
+        assert!(app.trail().is_empty());
+        assert_eq!(app.lines().len(), before, "the parent came back exactly as it was");
+    }
+
+    #[test]
+    fn leaving_a_subagent_restores_the_scroll_position_and_the_call_it_came_from() {
+        let mut app = with_subagent(Size::new(120, 12));
+        enter_first_subagent(&mut app);
+        app.apply(Action::Move(Motion::Line(3)));
+        let top = app.pane(Column::Conversation).top;
+        let cursor = app.call_cursor();
+
+        app.apply(Action::Descend);
+        app.apply(Action::Ascend);
+        assert_eq!(app.pane(Column::Conversation).top, top, "the reading position came back");
+        assert_eq!(app.call_cursor(), cursor, "and so did the call it was on");
+    }
+
+    #[test]
+    fn a_subagent_load_that_arrives_after_leaving_is_dropped() {
+        let mut app = with_subagent(Size::new(120, 30));
+        enter_first_subagent(&mut app);
+        app.apply(Action::Descend);
+        let (_, path, stale) = app.take_subagent_load().expect("a queued load");
+        app.apply(Action::Ascend);
+
+        let conversation = crate::domain::thread::build(&path).expect("the agent");
+        app.set_subagent(stale, Ok(Box::new(conversation)), path);
+        assert_eq!(app.depth(), 0);
+        assert!(app.lines().iter().any(|line| line.text().contains("read the grid scanner")), "the parent is still on screen");
+    }
+
+    #[test]
+    fn escape_pops_a_frame_before_it_leaves_focus_mode() {
+        let mut app = with_subagent(Size::new(120, 30));
+        enter_first_subagent(&mut app);
+        app.apply(Action::ToggleFocusMode);
+        app.apply(Action::Descend);
+        assert_eq!(app.depth(), 1);
+
+        app.apply(Action::Ascend);
+        assert_eq!(app.depth(), 0);
+        assert_eq!(app.mode(), Mode::Focus, "focus mode outlives the drill-in");
+        app.apply(Action::Ascend);
+        assert_eq!(app.mode(), Mode::Browse);
+    }
+
+    #[test]
+    fn selecting_another_session_while_nested_clears_the_stack_rather_than_orphaning_it() {
+        let mut app = with_subagent(Size::new(120, 30));
+        enter_first_subagent(&mut app);
+        app.apply(Action::Descend);
+        assert_eq!(app.depth(), 1);
+
+        app.set_projects(app.generation(), Ok(vec![project("a")]));
+        app.set_sessions(app.generation(), vec![session("s1"), session("s2")]);
+        assert_eq!(app.depth(), 0, "the stack cannot outlive the session it was rooted in");
+        assert!(app.trail().is_empty());
+        assert!(app.take_subagent_load().is_none(), "and the queued load goes with it");
+    }
+
+    #[test]
+    fn enter_still_expands_a_call_that_spawned_no_subagent() {
+        let mut app = with_subagent(Size::new(120, 30));
+        app.apply(Action::Focus { forward: true });
+        app.apply(Action::Focus { forward: true });
+        app.apply(Action::NextCall { forward: true });
+        assert!(app.anchors().first().is_some_and(|anchor| anchor.agent.is_none()), "the first call is a Bash");
+
+        app.apply(Action::Descend);
+        assert_eq!(app.depth(), 0, "a plain call does not descend");
+        assert!(app.lines().iter().any(|line| line.text().contains('▾')), "it expands instead");
+    }
+
+    fn with_inline_sidechain(area: Size) -> App {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("data")
+            .join("claude")
+            .join("projects")
+            .join("-Users-fixture-Developer-holodeck")
+            .join("44444444-4444-4444-8444-444444444444.jsonl");
+        let conversation = crate::domain::thread::build(&path).expect("the drift fixture");
+        let agents = crate::domain::subagent::discover(&path);
+        let mut app = app(area);
+        app.pending_conversation_path = Some(path);
+        app.set_conversation(app.conversation_generation(), Ok(Box::new(conversation)), agents);
+        app
+    }
+
+    #[test]
+    fn a_legacy_inline_sidechain_is_entered_without_reading_another_file() {
+        let mut app = with_inline_sidechain(Size::new(120, 30));
+        app.apply(Action::Focus { forward: true });
+        app.apply(Action::Focus { forward: true });
+        app.apply(Action::NextCall { forward: true });
+        assert!(app.anchors().first().is_some_and(|anchor| anchor.agent.is_some()), "the Task call owns a sidechain");
+
+        app.apply(Action::Descend);
+        assert_eq!(app.depth(), 1);
+        assert!(app.take_subagent_load().is_none(), "an inline sidechain is already in memory");
+        let text: Vec<String> = app.lines().iter().map(RenderedLine::text).collect();
+        assert!(text.iter().any(|line| line.contains("prompt")), "its opening turn is the spawning prompt: {text:?}");
+        assert!(text.iter().any(|line| line.contains("Four shapes, all still readable")), "{text:?}");
+        assert!(!text.iter().any(|line| line.contains("Glob")), "the main thread did not come with it: {text:?}");
+
+        app.apply(Action::Ascend);
+        assert_eq!(app.depth(), 0);
+        assert!(app.lines().iter().any(|line| line.text().contains("Glob")), "the session came back");
     }
 
     #[test]

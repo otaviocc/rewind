@@ -71,7 +71,8 @@ pub fn call(
     );
     let expanded = ctx.is_expanded(id);
     let glyph = if expanded { EXPANDED } else { COLLAPSED };
-    let mark = agent.is_some_and(Agent::enterable).then_some(ENTER);
+    let inline = AGENT_TOOLS.contains(&name) && conversation.inline_agent(id).is_some();
+    let mark = (agent.is_some_and(Agent::enterable) || inline).then_some(ENTER);
     let mut lines = vec![line(glyph, name, &digest, mark, status, ctx.width, styles)];
     if expanded {
         lines.extend(body(ctx, id, name, input, outcome.as_ref(), styles));

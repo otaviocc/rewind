@@ -7,13 +7,15 @@ use ratatui::widgets::Widget;
 use ratatui::{Frame, symbols};
 use unicode_width::UnicodeWidthStr;
 
-use crate::render::line::RenderedLine;
+use crate::render::line::{RenderedLine, truncate};
 use crate::ui::age;
 use crate::ui::app::{App, Column, Loadable, Mode};
 use crate::ui::columns::{self, Columns};
 
 const TITLE_PREFIX: &str = "rewind";
 const HINTS: &str = "? help";
+const SEPARATOR: &str = " · ";
+const ELIDED: &str = "…";
 const HINT_GAP: usize = 2;
 const EDGE_PAD: u16 = 1;
 const CHEVRON: &str = "›";
@@ -78,14 +80,35 @@ fn header(area: Rect, buf: &mut Buffer, app: &App) {
     let area = padded(area);
     let project = app.selected_project().map(|project| project.path.display().to_string());
     let session = app.selected_session().map(|session| session.title.clone());
-    let title = [Some(TITLE_PREFIX.to_owned()), project, session].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+    let mut segments: Vec<String> = [Some(TITLE_PREFIX.to_owned()), project, session].into_iter().flatten().collect();
+    segments.extend(app.trail().into_iter().map(str::to_owned));
+    let hints = HINTS.width();
+    let room = usize::from(area.width).saturating_sub(HINT_GAP).saturating_sub(hints);
+    let title = elided(&segments, room);
     row(area, buf, area.x, &title, title_style());
 
-    let hints = HINTS.width();
     if title.width().saturating_add(HINT_GAP).saturating_add(hints) <= usize::from(area.width) {
         let x = area.right().saturating_sub(u16::try_from(hints).unwrap_or(area.width));
         row(area, buf, x, HINTS, hint_style());
     }
+}
+
+fn elided(segments: &[String], room: usize) -> String {
+    let joined = |from: usize, lead: bool| {
+        let tail = segments.get(from..).unwrap_or_default().join(SEPARATOR);
+        if lead { format!("{ELIDED}{SEPARATOR}{tail}") } else { tail }
+    };
+    let whole = joined(0, false);
+    if whole.width() <= room {
+        return whole;
+    }
+    for from in 1..segments.len() {
+        let candidate = joined(from, true);
+        if candidate.width() <= room {
+            return candidate;
+        }
+    }
+    segments.last().map_or_else(String::new, |last| truncate(last, room))
 }
 
 fn rule(area: Rect, buf: &mut Buffer, style: Style) {
@@ -284,6 +307,10 @@ fn timestamp_of(at: std::time::SystemTime) -> jiff::Timestamp {
 
 fn statusbar(area: Rect, buf: &mut Buffer, app: &App) {
     let area = padded(area);
+    if let Some(status) = app.subagent_status() {
+        row(area, buf, area.x, &status, Style::new());
+        return;
+    }
     let Some(session) = app.selected_session() else { return };
     let branch = session.git_branch.as_deref().unwrap_or("-");
     let plural = if session.messages == 1 { "msg" } else { "msgs" };
@@ -529,5 +556,28 @@ mod tests {
     fn the_pane_accessor_matches_the_focused_column() {
         let app = app(Size::new(120, 24));
         assert_eq!(pane_of(&app, Column::Projects), Pane::default());
+    }
+
+    #[test]
+    fn a_breadcrumb_that_fits_keeps_every_segment() {
+        let segments = ["rewind".to_owned(), "holodeck".to_owned(), "The tool surface".to_owned(), "Explore".to_owned()];
+        assert_eq!(elided(&segments, 60), "rewind · holodeck · The tool surface · Explore");
+    }
+
+    #[test]
+    fn a_breadcrumb_too_wide_elides_from_the_left_so_the_deepest_segment_survives() {
+        let segments = ["rewind".to_owned(), "holodeck".to_owned(), "The tool surface".to_owned(), "code-review".to_owned()];
+        let elided = elided(&segments, 34);
+        assert!(elided.starts_with("…"), "{elided:?}");
+        assert!(elided.ends_with("code-review"), "the segment being read is the one that must not go: {elided:?}");
+        assert!(elided.width() <= 34);
+    }
+
+    #[test]
+    fn a_breadcrumb_with_no_room_at_all_keeps_a_truncated_last_segment() {
+        let segments = ["rewind".to_owned(), "holodeck".to_owned(), "code-review".to_owned()];
+        let elided = elided(&segments, 6);
+        assert!(elided.width() <= 6, "{elided:?}");
+        assert!(!elided.is_empty());
     }
 }

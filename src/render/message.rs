@@ -15,6 +15,7 @@ use unicode_width::UnicodeWidthStr;
 const RAIL: &str = "▎ ";
 const RAIL_BLANK: &str = "▎";
 const HUMAN_LABEL: &str = "you";
+const PROMPT_LABEL: &str = "prompt";
 const ASSISTANT_LABEL: &str = "claude";
 const MODEL_PREFIX: &str = "claude-";
 const SEPARATOR: &str = " · ";
@@ -106,11 +107,15 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
     let ctx = &ctx.narrowed(inner);
     let mut groups: Vec<Group> = Vec::new();
 
-    for &id in conversation.thread() {
+    let sidechain = ctx.root.is_some() || conversation.is_sidechain();
+    let human = if sidechain { PROMPT_LABEL } else { HUMAN_LABEL };
+    let walk = ctx.root.map_or_else(|| conversation.thread().to_vec(), |root| conversation.path_from(root));
+
+    for &id in &walk {
         let Some(node) = conversation.node(id) else { continue };
         match &node.kind {
             NodeKind::User(record) if record.is_human_turn() && !record.is_compact_summary => {
-                let mut lines = vec![header(HUMAN_LABEL, None, inner)];
+                let mut lines = vec![header(human, None, inner)];
                 let mut anchors = Vec::new();
                 content(conversation, ctx, &record.message.content, &mut lines, &mut anchors);
                 groups.push(Group { rail: Rail::Human, model: None, lines, anchors });
@@ -142,12 +147,20 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
         }
     }
 
+    if sidechain {
+        return flatten(groups);
+    }
+
     let reached: HashSet<Box<str>> =
         groups.iter().flat_map(|group| group.anchors.iter()).filter_map(|anchor| anchor.agent.clone()).collect();
     if let Some(tail) = unreached(ctx, inner, &reached) {
         groups.push(tail);
     }
 
+    flatten(groups)
+}
+
+fn flatten(groups: Vec<Group>) -> Transcript {
     let mut transcript = Transcript::default();
     for group in groups {
         if !transcript.lines.is_empty() {
@@ -234,8 +247,10 @@ fn blocks(
             Block::Text { text } => lines.extend(markdown(text, ctx.width)),
             Block::Thinking { thinking } => lines.push(one(&thinking_summary(thinking), dim_style(), ctx.width)),
             Block::ToolUse { id, name, input } => {
-                let agent =
-                    tool::spawned(conversation, ctx, id, name).filter(|agent| agent.enterable()).map(|agent| agent.id.clone());
+                let agent = tool::spawned(conversation, ctx, id, name)
+                    .filter(|agent| agent.enterable())
+                    .map(|agent| agent.id.clone())
+                    .or_else(|| conversation.inline_agent(id).map(|_| Box::from(id.as_str())));
                 anchors.push(Anchor { id: Box::from(id.as_str()), line: lines.len(), agent });
                 lines.extend(tool::call(conversation, ctx, id, name, input, &styles));
             }
@@ -315,6 +330,7 @@ mod tests {
             expanded: EXPANDED.get_or_init(crate::render::Expanded::new),
             outputs: OUTPUTS.get_or_init(crate::render::Outputs::new),
             agents: AGENTS.get_or_init(crate::domain::subagent::Agents::default),
+            root: None,
         }
     }
 
