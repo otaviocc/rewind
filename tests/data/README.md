@@ -49,7 +49,7 @@ mirroring the ratio in a real map.
 
 | Directory | Real path | What it is for |
 | --- | --- | --- |
-| `-Users-fixture-Developer-holodeck` | `/Users/fixture/Developer/holodeck` | the seven interesting sessions |
+| `-Users-fixture-Developer-holodeck` | `/Users/fixture/Developer/holodeck` | the eight interesting sessions |
 | `-Users-fixture-Developer-warp-core` | three colliding keys | **ambiguity.** `warp-core`, `warp.core` and `warp core` all encode to this one name. Only the `cwd` on a transcript record says which owns it |
 | `-Users-fixture--tricorder` | `/Users/fixture/.tricorder` | a leading dot in the path |
 | `-Users-fixture-Music-Red-Alert---Live-(2019)` | `/Users/fixture/Music/Red Alert - Live (2019)` | ` - ` collapsing to `---`, and parentheses surviving verbatim |
@@ -211,6 +211,44 @@ only fixture that says so.
 
 The `ai-title` latch is the only latch in the file; the title machinery is proved by
 `11111111-….jsonl` and there is nothing to add to it here.
+
+### `dddddddd-….jsonl` — the tool surface
+
+Every tool-call shape the renderer has to say something useful about. Nothing here is new
+*schema* — every record is a shape `11111111-….jsonl` already carries. What is new is the
+tool names and the `toolUseResult` payloads, which are polymorphic per tool, so a renderer
+that reads only `input` passes every other file in this tree and says nothing about what
+happened in this one.
+
+All ten shapes were **observed** against a real store on 2026-09-18, in a survey that found
+62 distinct tool names — `Bash` 11 362 of them, then `Read`, `Edit`, `ToolSearch`, `Agent`,
+`Write`, and a long tail ending in singletons. `Task`, `Grep`, `Glob` and `TodoWrite` appear
+nowhere in a current store; they live in `44444444-….jsonl` and `33333333-….jsonl` as the
+legacy names they are.
+
+| Call | |
+| --- | --- |
+| `Edit` | one `structuredPatch` hunk, already unified-diff prefixed, and `originalFile: null` |
+| `Write` | **two** hunks and `type: "create"`, so multi-hunk rendering has a case. `originalFile` is `""` here and `null` above: it is empty either way, and neither spelling can be relied on |
+| `WebFetch` | `{bytes, code, codeText, result, durationMs, url}` |
+| `mcp__jeffries__beam_status` | an **MCP** name, `mcp__<server>__<tool>`, with the `[{type:"text",…}]` list result that MCP tools return |
+| `Replicator` | an **unknown** tool name. Nothing may special-case it, and it must not render blank |
+| `Read` | input elided to `{"__unparsedToolInput": "…"}`, a truncated fragment of the JSON the model emitted. A digest that requires `file_path` finds nothing here |
+| `Bash` | **denied** — the observed rejection string, `is_error: true` |
+| `Bash` | **interrupted** — `[Request interrupted by user for tool use]` |
+| `Bash` | **pending**: a `tool_use` with no result record after it at all, as a session that ends mid-call leaves behind. Status cannot be read off the call alone |
+
+`structuredPatch` exists in no other file in the tree, so this is its only specification.
+Both `Edit` and `Write` carry one, which is why rendering a diff needs no diff algorithm.
+
+The three error cases are three *different* outcomes wearing the same `is_error: true`, and
+the distinction is only in the body text — a denial is not a failure and an interrupt is
+neither. `toolUseResult` is a bare string on all three, and on the unknown tool too: it is an
+object only sometimes.
+
+The timestamps are `2026-01-03`, deliberately older than every other session in `holodeck`,
+so adding this file could not move the project's mtime and with it the ordering
+`the_list_is_ordered_by_last_activity_and_is_stable_across_builds` pins.
 
 ### `aaaaaaaa-….jsonl` — a severed cycle
 

@@ -98,6 +98,13 @@ fn every_nasty_case_is_still_present() {
         (r#""type":"image""#, "an inline base64 image"),
         (r#""type":"attachment""#, "context injections"),
         (r#""persistedOutputPath""#, "overflowed tool output"),
+        (r#""structuredPatch""#, "a diff to render an Edit or a Write from"),
+        (r#""name":"Edit""#, "an Edit call"),
+        (r#""name":"Write""#, "a Write call"),
+        (r#""name":"mcp__"#, "an MCP tool name"),
+        (r#""__unparsedToolInput""#, "a tool input the CLI could not parse"),
+        ("[Request interrupted by user for tool use]", "an interrupted call"),
+        ("The user doesn't want to proceed with this tool use", "a denied call"),
         (r#""origin":{"kind":"peer""#, "a peer-origin user turn"),
         (r#""isMeta":true"#, "meta user turns"),
         (r#""type":"server_tool_use""#, "an unknown content block"),
@@ -117,6 +124,23 @@ fn every_nasty_case_is_still_present() {
     ] {
         assert!(corpus.contains(needle), "the fixtures lost {what}");
     }
+}
+
+#[test]
+fn one_overflow_file_is_referenced_and_one_is_deliberately_orphaned() {
+    let overflow = fixtures().join("projects").join(HOLODECK).join(BASELINE).join("tool-results");
+    let corpus = every_line();
+    let mut referenced = Vec::new();
+    let mut orphaned = Vec::new();
+    for entry in fs::read_dir(&overflow).expect("a readable tool-results directory") {
+        let path = entry.expect("a readable tool-results entry").path();
+        let name = path.file_name().expect("a named overflow file").to_string_lossy().into_owned();
+        if corpus.contains(&name) { referenced.push(name) } else { orphaned.push(name) }
+    }
+    referenced.sort();
+    orphaned.sort();
+    assert_eq!(referenced, ["b7k2m9x4q.txt"], "the referenced overflow file moved");
+    assert_eq!(orphaned, ["b0orphan1.txt"], "real sessions accumulate overflow files no record points at");
 }
 
 #[test]
