@@ -70,7 +70,22 @@ enters it. `--no-mouse` turns capture off.
 
 ## Themes
 
-`rewind` reads one file. On every platform, including macOS, it lives at
+Thirteen themes are built in. `spool` is the default — written for `rewind` rather than
+borrowed from an editor, and it leaves the background and foreground alone so a transcript
+sits on your own terminal ground. `ansi` is the other end: it asserts no colour at all and
+takes everything from your terminal's scheme.
+
+```
+spool             ansi              catppuccin-latte
+catppuccin-mocha  gruvbox-dark      gruvbox-light
+kanagawa-dragon   nord              solarized-dark
+solarized-light   tokyo-night       tokyo-night-day
+vesper
+```
+
+`--theme <name>` picks one, `--list-themes` prints them.
+
+To change anything, `rewind` reads one file. On every platform, including macOS, it lives at
 `$XDG_CONFIG_HOME/rewind/theme.toml`, or `~/.config/rewind/theme.toml` if that variable is
 unset. Named themes go beside it in `themes/<name>.toml` and are selected with `--theme`.
 
@@ -82,8 +97,8 @@ a complete and valid file:
 accent = "#89b4fa"
 ```
 
-`--list-themes` prints what is available. A theme of your own in `themes/` shadows a built-in
-of the same name — including `ansi`, which every other theme inherits from.
+A theme of your own in `themes/` shadows a built-in of the same name — including `spool`,
+which replaces the default without a flag, and `ansi`, which every other theme inherits from.
 
 ### Colors
 
@@ -134,11 +149,16 @@ The element keys are `body`, `muted`, `label`, `human_gutter`, `assistant_gutter
 `base` takes the name of another theme, which is merged underneath field by field:
 
 ```toml
-base = "ansi"
+base = "nord"
 
 [palette]
 accent = "#89b4fa"
 ```
+
+A theme may also name the syntax highlighting its code blocks use, with
+`syntax_theme = "..."`. The bundled ones are `base16-ocean.dark`, `base16-eighties.dark`,
+`base16-mocha.dark`, `base16-ocean.light`, `InspiredGitHub`, `Solarized (dark)` and
+`Solarized (light)`.
 
 A key you misspell is reported on stderr and otherwise ignored, so one typo does not cost you
 the rest of the file. A color or modifier that is not one fails the run and names the key
