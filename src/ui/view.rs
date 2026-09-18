@@ -130,7 +130,7 @@ fn progress(area: Rect, buf: &mut Buffer, app: &App) {
 fn content(area: Rect, buf: &mut Buffer, app: &App) {
     for (index, (which, x, width)) in columns::placement(area.width, app.mode()).into_iter().enumerate() {
         if index > 0 {
-            divider(area.x.saturating_add(x).saturating_sub(1), area, buf);
+            divider(area.x.saturating_add(x).saturating_sub(1), area, buf, app.theme().style(Element::Hint));
         }
         column(Rect { x: area.x.saturating_add(x), width, ..area }, buf, app, which, app.focused() == which);
     }
@@ -168,10 +168,11 @@ fn overlay(area: Rect, buf: &mut Buffer, app: &App) {
     }
 }
 
-fn divider(x: u16, area: Rect, buf: &mut Buffer) {
+fn divider(x: u16, area: Rect, buf: &mut Buffer, style: Style) {
     for y in area.y..area.bottom() {
         if let Some(cell) = buf.cell_mut((x, y)) {
             cell.set_symbol(symbols::line::VERTICAL);
+            cell.set_style(style);
         }
     }
 }
@@ -534,6 +535,21 @@ mod tests {
         app.apply(Action::ToggleDiagnostics);
         app.apply(Action::ToggleFocusMode);
         assert_eq!(app.mode(), Mode::Browse, "focus mode must not toggle behind the overlay");
+    }
+
+    #[test]
+    fn the_column_dividers_are_the_same_hairline_colour_as_the_rules_around_them() {
+        let app = app(Size::new(120, 24));
+        let buffer = frame(&app, Size::new(120, 24));
+        let hairline = app.theme().style(Element::Hint).fg.expect("the hint style names a foreground");
+
+        let dividers: Vec<u16> = (0..120).filter(|&x| buffer[(x, 3)].symbol() == symbols::line::VERTICAL).collect();
+        assert_eq!(dividers.len(), 2, "three columns should be split by two dividers: {dividers:?}");
+        for x in dividers {
+            assert_eq!(buffer[(x, 3)].fg, hairline, "the divider at {x} is not the hairline colour");
+            assert_ne!(buffer[(x, 3)].fg, ratatui::style::Color::Reset, "the divider at {x} took the terminal's foreground");
+        }
+        assert_eq!(buffer[(0, 1)].fg, hairline, "the top rule is no longer the hairline colour");
     }
 
     #[test]
