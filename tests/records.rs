@@ -71,8 +71,10 @@ fn the_drift_fixture_still_reports_exactly_three_defects() {
     let unknown_records = outcomes.iter().filter(|outcome| matches!(outcome, Err(ParseError::UnknownType(_)))).count();
     assert_eq!(unknown_records, 1, "the telemetry-latch record is the only unknown record type");
 
-    let unknown_blocks: usize = outcomes.iter().filter_map(|outcome| outcome.as_ref().ok()).map(Record::unknown_blocks).sum();
-    assert_eq!(unknown_blocks, 1, "the server_tool_use block is the only unknown block");
+    let unknown_block_kinds: Vec<&str> =
+        outcomes.iter().filter_map(|outcome| outcome.as_ref().ok()).flat_map(Record::unknown_block_kinds).collect();
+    assert_eq!(unknown_block_kinds, ["server_tool_use"], "the server_tool_use block is the only unknown block");
+    let unknown_blocks = unknown_block_kinds.len();
 
     let mut lines = Lines::open(&path).expect("a readable fixture transcript");
     while lines.next_line().expect("a readable fixture transcript").is_some() {}

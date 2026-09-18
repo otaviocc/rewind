@@ -374,7 +374,7 @@ fn blocks(
                 lines.extend(tool::call(conversation, ctx, id, name, input, &styles));
             }
             Block::Image { source } => lines.push(one(&image_summary(source), dim_style(), ctx.width)),
-            Block::ToolResult { .. } | Block::Other => {}
+            Block::ToolResult { .. } | Block::Other { .. } => {}
         }
     }
 }

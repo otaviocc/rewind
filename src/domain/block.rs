@@ -11,33 +11,96 @@ pub enum Content {
     Blocks(Vec<Block>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "type")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Block {
-    #[serde(rename = "text")]
     Text { text: String },
-    #[serde(rename = "thinking")]
     Thinking { thinking: String },
-    #[serde(rename = "tool_use")]
-    ToolUse {
-        id: String,
-        name: String,
-        #[serde(default)]
-        input: serde_json::Value,
-    },
-    #[serde(rename = "tool_result")]
-    ToolResult {
-        #[serde(default)]
-        tool_use_id: Option<String>,
-        #[serde(default)]
-        content: Option<ToolResultContent>,
-        #[serde(default)]
-        is_error: Option<bool>,
-    },
-    #[serde(rename = "image")]
+    ToolUse { id: String, name: String, input: serde_json::Value },
+    ToolResult { tool_use_id: Option<String>, content: Option<ToolResultContent>, is_error: Option<bool> },
     Image { source: ImageSource },
-    #[serde(other)]
-    Other,
+    Other { kind: String },
+}
+
+#[derive(Default)]
+struct BlockFields {
+    text: Option<serde_json::Value>,
+    thinking: Option<serde_json::Value>,
+    id: Option<serde_json::Value>,
+    name: Option<serde_json::Value>,
+    input: Option<serde_json::Value>,
+    tool_use_id: Option<serde_json::Value>,
+    content: Option<serde_json::Value>,
+    is_error: Option<serde_json::Value>,
+    source: Option<serde_json::Value>,
+}
+
+fn field<T: serde::de::DeserializeOwned>(value: Option<serde_json::Value>) -> Result<T, serde_json::Error> {
+    serde_json::from_value(value.unwrap_or(serde_json::Value::Null))
+}
+
+fn assemble(kind: String, fields: BlockFields) -> Result<Block, serde_json::Error> {
+    match kind.as_str() {
+        "text" => Ok(Block::Text { text: field(fields.text)? }),
+        "thinking" => Ok(Block::Thinking { thinking: field(fields.thinking)? }),
+        "tool_use" => Ok(Block::ToolUse {
+            id: field(fields.id)?,
+            name: field(fields.name)?,
+            input: fields.input.unwrap_or(serde_json::Value::Null),
+        }),
+        "tool_result" => Ok(Block::ToolResult {
+            tool_use_id: field(fields.tool_use_id)?,
+            content: field(fields.content)?,
+            is_error: field(fields.is_error)?,
+        }),
+        "image" => Ok(Block::Image { source: field(fields.source)? }),
+        _ => Ok(Block::Other { kind }),
+    }
+}
+
+impl<'de> Deserialize<'de> for Block {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct BlockVisitor;
+
+        impl<'de> Visitor<'de> for BlockVisitor {
+            type Value = Block;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a content block object")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut kind: Option<String> = None;
+                let mut fields = BlockFields::default();
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "type" => kind = Some(map.next_value()?),
+                        "text" => fields.text = Some(map.next_value()?),
+                        "thinking" => fields.thinking = Some(map.next_value()?),
+                        "id" => fields.id = Some(map.next_value()?),
+                        "name" => fields.name = Some(map.next_value()?),
+                        "input" => fields.input = Some(map.next_value()?),
+                        "tool_use_id" => fields.tool_use_id = Some(map.next_value()?),
+                        "content" => fields.content = Some(map.next_value()?),
+                        "is_error" => fields.is_error = Some(map.next_value()?),
+                        "source" => fields.source = Some(map.next_value()?),
+                        _ => {
+                            let _ignored: de::IgnoredAny = map.next_value()?;
+                        }
+                    }
+                }
+                let kind = kind.ok_or_else(|| de::Error::missing_field("type"))?;
+                assemble(kind, fields).map_err(de::Error::custom)
+            }
+        }
+
+        deserializer.deserialize_map(BlockVisitor)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -151,9 +214,41 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_block_type_is_the_other_variant() {
+    fn an_unknown_block_keeps_the_name_it_arrived_with() {
         let block: Block = serde_json::from_str(r#"{"type":"server_tool_use","id":"x","name":"web_search"}"#).expect("a block");
-        assert_eq!(block, Block::Other);
+        assert_eq!(block, Block::Other { kind: "server_tool_use".to_owned() });
+    }
+
+    #[test]
+    fn a_block_with_no_type_at_all_is_a_parse_failure_rather_than_an_unknown_block() {
+        let result = serde_json::from_str::<Block>(r#"{"text":"hi"}"#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn the_key_order_does_not_decide_the_variant() {
+        let block: Block = serde_json::from_str(r#"{"text":"hi","type":"text"}"#).expect("a text block");
+        assert_eq!(block, Block::Text { text: "hi".to_owned() });
+    }
+
+    #[test]
+    fn a_tool_use_block_defaults_its_input_to_null() {
+        let block: Block = serde_json::from_str(r#"{"type":"tool_use","id":"t1","name":"Bash"}"#).expect("a tool_use block");
+        assert_eq!(block, Block::ToolUse { id: "t1".to_owned(), name: "Bash".to_owned(), input: serde_json::Value::Null });
+    }
+
+    #[test]
+    fn a_thinking_block_reads_its_own_field() {
+        let block: Block =
+            serde_json::from_str(r#"{"type":"thinking","thinking":"hmm","signature":"sig"}"#).expect("a thinking block");
+        assert_eq!(block, Block::Thinking { thinking: "hmm".to_owned() });
+    }
+
+    #[test]
+    fn an_unknown_block_carrying_a_field_a_known_block_also_uses_is_still_unknown() {
+        let block: Block =
+            serde_json::from_str(r#"{"type":"web_search_result","content":[{"title":"x"}]}"#).expect("an unknown block");
+        assert_eq!(block, Block::Other { kind: "web_search_result".to_owned() });
     }
 
     #[test]

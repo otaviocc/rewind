@@ -234,7 +234,13 @@ pub fn build(path: &Path) -> Result<Conversation, ThreadError> {
         let line = line.to_vec();
         line_number = line_number.saturating_add(1);
         line_offsets.push(lines.complete_offset());
-        match record::parse(&line) {
+        let parsed = record::parse(&line);
+        if let Ok(record) = &parsed {
+            for kind in record.unknown_block_kinds() {
+                diagnostics.push(Defect::UnknownBlock { line: line_number, kind: kind.to_owned() });
+            }
+        }
+        match parsed {
             Ok(Record::User(user)) => {
                 let parent_key = user.envelope.parent_uuid.clone().map(Box::from);
                 push_node(&mut nodes, &mut provisional, &mut ids, line_number, parent_key, NodeKind::User(*user));
@@ -274,19 +280,6 @@ pub fn build(path: &Path) -> Result<Conversation, ThreadError> {
             Err(ParseError::Json(error)) => {
                 diagnostics.push(Defect::Unparseable { line: line_number, message: error.to_string() });
             }
-        }
-    }
-
-    for index in 0..nodes.len() {
-        let Some(node) = nodes.get(index) else { continue };
-        let unknown = match &node.kind {
-            NodeKind::User(record) => count_unknown(&record.message.content),
-            NodeKind::Assistant(turn) => turn.content.iter().filter(|block| matches!(block, Block::Other)).count(),
-            NodeKind::System(_) | NodeKind::Attachment(_) => 0,
-        };
-        for _ in 0..unknown {
-            let line = provisional.get(index).map_or(0, |entry| entry.line);
-            diagnostics.push(Defect::UnknownBlock { line });
         }
     }
 
@@ -376,13 +369,6 @@ fn index_results(nodes: &[Node]) -> HashMap<Box<str>, NodeId> {
         }
     }
     results
-}
-
-fn count_unknown(content: &Content) -> usize {
-    match content {
-        Content::Text(_) => 0,
-        Content::Blocks(blocks) => blocks.iter().filter(|block| matches!(block, Block::Other)).count(),
-    }
 }
 
 fn push_node(
@@ -746,6 +732,30 @@ mod tests {
         assert_eq!(root.divider, Some(Divider::Detached));
         assert_eq!(conversation.diagnostics().count(), 1);
         assert!(matches!(conversation.diagnostics().defects().first(), Some(Defect::OrphanedParent { .. })));
+    }
+
+    #[test]
+    fn an_unknown_block_in_an_assistant_record_is_counted_and_named() {
+        let (_dir, path) = write(&[
+            r#"{"parentUuid":null,"isSidechain":false,"message":{"role":"user","content":"hi"},"type":"user","origin":{"kind":"human"},"uuid":"u1","timestamp":"2026-01-01T00:00:00Z","sessionId":"s1"}"#,
+            r#"{"parentUuid":"u1","isSidechain":false,"message":{"model":"m","id":"msg1","role":"assistant","content":[{"type":"text","text":"hi"},{"type":"server_tool_use","id":"x","name":"web_search"}]},"type":"assistant","uuid":"a1","timestamp":"2026-01-01T00:01:00Z","sessionId":"s1"}"#,
+        ]);
+        let conversation = build(&path).expect("a conversation");
+        assert_eq!(conversation.diagnostics().defects(), [Defect::UnknownBlock { line: 2, kind: "server_tool_use".to_owned() }]);
+    }
+
+    #[test]
+    fn an_unknown_block_in_a_later_fragment_is_reported_at_its_own_line() {
+        let (_dir, path) = write(&[
+            r#"{"parentUuid":null,"isSidechain":false,"message":{"role":"user","content":"hi"},"type":"user","origin":{"kind":"human"},"uuid":"u1","timestamp":"2026-01-01T00:00:00Z","sessionId":"s1"}"#,
+            r#"{"parentUuid":"u1","isSidechain":false,"message":{"model":"m","id":"msg1","role":"assistant","content":[{"type":"text","text":"one"}]},"apiBlockIndex":0,"requestId":"r1","type":"assistant","uuid":"a1","timestamp":"2026-01-01T00:01:00Z","sessionId":"s1"}"#,
+            r#"{"parentUuid":"a1","isSidechain":false,"message":{"model":"m","id":"msg1","role":"assistant","content":[{"type":"web_search_result","content":[]}]},"apiBlockIndex":1,"requestId":"r1","type":"assistant","uuid":"a2","timestamp":"2026-01-01T00:02:00Z","sessionId":"s1"}"#,
+        ]);
+        let conversation = build(&path).expect("a conversation");
+        assert_eq!(
+            conversation.diagnostics().defects(),
+            [Defect::UnknownBlock { line: 3, kind: "web_search_result".to_owned() }]
+        );
     }
 
     #[test]

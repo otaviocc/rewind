@@ -13,7 +13,7 @@ pub enum Defect {
     Truncated { line: u64 },
     Unparseable { line: u64, message: String },
     UnknownRecord { line: u64, kind: String },
-    UnknownBlock { line: u64 },
+    UnknownBlock { line: u64, kind: String },
     OrphanedParent { line: u64, uuid: String },
     SeveredCycle { line: u64, uuid: String },
 }

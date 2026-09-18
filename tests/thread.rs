@@ -14,6 +14,7 @@ const HOLODECK: &str = "-Users-fixture-Developer-holodeck";
 const COMPACTION: &str = "22222222-2222-4222-8222-222222222222.jsonl";
 const FRAGMENTED: &str = "33333333-3333-4333-8333-333333333333.jsonl";
 const CYCLIC: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl";
+const DRIFT: &str = "44444444-4444-4444-8444-444444444444.jsonl";
 
 fn fixture(name: &str) -> PathBuf {
     fixtures().join("projects").join(HOLODECK).join(name)
@@ -115,4 +116,23 @@ fn the_cyclic_fixture_terminates_with_exactly_one_severed_cycle_defect() {
     assert_eq!(conversation.roots().len(), 1, "one of the two mutually-parented records is promoted to a root");
     let root = conversation.roots().first().copied().expect("a root");
     assert_eq!(conversation.node(root).and_then(|node| node.divider), Some(Divider::Detached));
+}
+
+#[test]
+fn the_drift_fixture_loads_and_names_each_of_its_three_defects() {
+    let conversation = thread::build(&fixture(DRIFT)).expect("a conversation, not an aborted load");
+
+    assert!(!conversation.roots().is_empty(), "three defects must not cost the transcript its thread");
+    assert_eq!(conversation.diagnostics().count(), 3);
+
+    let defects = conversation.diagnostics().defects();
+    assert!(
+        defects.iter().any(|defect| matches!(defect, Defect::UnknownBlock { kind, .. } if kind == "server_tool_use")),
+        "the unknown content block sits in an assistant record: {defects:?}"
+    );
+    assert!(
+        defects.iter().any(|defect| matches!(defect, Defect::UnknownRecord { kind, .. } if kind == "telemetry-latch")),
+        "the unknown record type: {defects:?}"
+    );
+    assert!(defects.iter().any(|defect| matches!(defect, Defect::Truncated { .. })), "the truncated tail: {defects:?}");
 }

@@ -8,7 +8,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Deserializer};
 use thiserror::Error;
 
-use crate::domain::block::Content;
+use crate::domain::block::{Block, Content};
 use crate::domain::latch::{self, Latch};
 use crate::domain::scan;
 
@@ -44,20 +44,30 @@ impl Record {
         }
     }
 
-    pub fn unknown_blocks(&self) -> usize {
+    pub fn unknown_block_kinds(&self) -> Vec<&str> {
         let content = match self {
             Self::User(user) => Some(&user.message.content),
             Self::Assistant(assistant) => Some(&assistant.message.content),
             Self::System(_) | Self::Attachment(_) | Self::Summary(_) | Self::Latch(_) => None,
         };
-        content.map_or(0, count_unknown_blocks)
+        content.map_or_else(Vec::new, unknown_block_kinds)
     }
 }
 
-fn count_unknown_blocks(content: &Content) -> usize {
+fn unknown_block_kinds(content: &Content) -> Vec<&str> {
     match content {
-        Content::Text(_) => 0,
-        Content::Blocks(blocks) => blocks.iter().filter(|block| matches!(block, crate::domain::block::Block::Other)).count(),
+        Content::Text(_) => Vec::new(),
+        Content::Blocks(blocks) => blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::Other { kind } => Some(kind.as_str()),
+                Block::Text { .. }
+                | Block::Thinking { .. }
+                | Block::ToolUse { .. }
+                | Block::ToolResult { .. }
+                | Block::Image { .. } => None,
+            })
+            .collect(),
     }
 }
 
@@ -402,7 +412,7 @@ mod tests {
     fn an_unknown_block_inside_an_assistant_message_is_counted() {
         let line = br#"{"parentUuid":"u1","isSidechain":false,"message":{"role":"assistant","content":[{"type":"text","text":"hi"},{"type":"server_tool_use","id":"x","name":"web_search"}]},"type":"assistant","uuid":"a1","timestamp":"2026-01-01T00:00:00Z","sessionId":"s1"}"#;
         let record = parse(line).expect("an assistant record");
-        assert_eq!(record.unknown_blocks(), 1);
+        assert_eq!(record.unknown_block_kinds(), ["server_tool_use"]);
     }
 
     #[test]
