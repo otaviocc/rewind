@@ -61,7 +61,7 @@ cargo install --locked --path .
 | `y` `Y` | copy the message · the whole session |
 | `c` | copy `claude --resume <id>` |
 | `e` | export to a file |
-| `d` | diagnostics |
+| `d` | what could not be read · `Esc` closes it |
 | `q` | quit |
 
 Mouse wheel scrolls whichever column is under the pointer. `--no-mouse` turns capture off.
