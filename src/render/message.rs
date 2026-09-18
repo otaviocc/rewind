@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Style;
 
 use crate::domain::block::{Block, Content, ImageSource};
 use crate::domain::record::CompactMetadata;
@@ -11,6 +11,7 @@ use crate::domain::thread::{Conversation, Node, NodeId, NodeKind};
 use crate::render::line::{RenderedLine, StyledSpan, truncate};
 use crate::render::prose;
 use crate::render::{Ctx, divider, injection, tool};
+use crate::theme::{Element, Theme};
 use unicode_width::UnicodeWidthStr;
 
 const RAIL: &str = "▎ ";
@@ -24,48 +25,18 @@ const SEPARATOR: &str = " · ";
 const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
 const UNIT: usize = 1024;
 
-const fn label_style() -> Style {
-    Style::new().add_modifier(Modifier::BOLD)
-}
-
-const fn dim_style() -> Style {
-    Style::new().fg(Color::DarkGray)
-}
-
-const fn body_style() -> Style {
-    Style::new()
-}
-
-const fn human_rail_style() -> Style {
-    Style::new().add_modifier(Modifier::BOLD)
-}
-
-const fn assistant_rail_style() -> Style {
-    Style::new().add_modifier(Modifier::DIM)
-}
-
-const fn error_style() -> Style {
-    Style::new().fg(Color::Red)
-}
-
-const fn added_style() -> Style {
-    Style::new().fg(Color::Green)
-}
-
-const fn removed_style() -> Style {
-    Style::new().fg(Color::Red)
-}
-
-const fn tool_styles() -> tool::Styles {
+fn tool_styles(theme: &Theme) -> tool::Styles {
     tool::Styles {
-        glyph: body_style(),
-        name: label_style(),
-        digest: body_style(),
-        muted: dim_style(),
-        error: error_style(),
-        added: added_style(),
-        removed: removed_style(),
-        enter: label_style(),
+        glyph: theme.style(Element::Body),
+        name: theme.style(Element::ToolName),
+        digest: theme.style(Element::ToolSummary),
+        muted: theme.style(Element::Muted),
+        error: theme.style(Element::ToolError),
+        added: theme.style(Element::DiffAdded),
+        removed: theme.style(Element::DiffRemoved),
+        context: theme.style(Element::DiffContext),
+        enter: theme.style(Element::Subagent),
+        ok: theme.style(Element::ToolOk),
     }
 }
 
@@ -77,10 +48,11 @@ enum Rail {
 }
 
 impl Rail {
-    const fn style(self) -> Style {
+    const fn element(self) -> Element {
         match self {
-            Self::Human | Self::Seam => human_rail_style(),
-            Self::Assistant => assistant_rail_style(),
+            Self::Human => Element::HumanGutter,
+            Self::Assistant => Element::AssistantGutter,
+            Self::Seam => Element::CompactDivider,
         }
     }
 }
@@ -153,11 +125,11 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
         }
         flush(conversation, ctx, &mut injections, &mut groups, inner);
         let Some(node) = conversation.node(id) else { continue };
-        let seam = seam(node, sidechain, inner);
+        let seam = seam(node, sidechain, inner, ctx.theme);
         match &node.kind {
             NodeKind::User(record) if record.is_human_turn() && !record.is_compact_summary => {
                 let mut lines = Vec::from_iter(seam);
-                lines.push(header(human, None, inner));
+                lines.push(header(human, None, inner, ctx.theme));
                 let mut anchors = Vec::new();
                 content(conversation, ctx, &record.message.content, &mut lines, &mut anchors);
                 let spans = vec![Span { node: id, line: 0 }];
@@ -184,7 +156,7 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
                     _ => {
                         let detail = model_label(turn.model.as_deref());
                         let mut lines = Vec::from_iter(seam);
-                        lines.push(header(ASSISTANT_LABEL, detail.as_deref(), inner));
+                        lines.push(header(ASSISTANT_LABEL, detail.as_deref(), inner, ctx.theme));
                         let at = lines.len();
                         shift(&mut anchors, at);
                         lines.append(&mut body);
@@ -195,7 +167,7 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
             }
             NodeKind::User(record) if record.is_compact_summary => {
                 let mut lines = Vec::from_iter(seam);
-                lines.push(header(SUMMARY_LABEL, None, inner));
+                lines.push(header(SUMMARY_LABEL, None, inner, ctx.theme));
                 let mut anchors = Vec::new();
                 content(conversation, ctx, &record.message.content, &mut lines, &mut anchors);
                 let spans = vec![Span { node: id, line: 0 }];
@@ -209,12 +181,12 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
             }
         }
         let on = walk.get(index.saturating_add(1)).copied();
-        marker(conversation, id, on, &mut groups, inner);
+        marker(conversation, id, on, &mut groups, inner, ctx.theme);
     }
     flush(conversation, ctx, &mut injections, &mut groups, inner);
 
     if sidechain {
-        return flatten(groups);
+        return flatten(groups, ctx.theme);
     }
 
     let reached: HashSet<Box<str>> =
@@ -223,10 +195,10 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
         groups.push(tail);
     }
 
-    flatten(groups)
+    flatten(groups, ctx.theme)
 }
 
-fn marker(conversation: &Conversation, id: NodeId, on: Option<NodeId>, groups: &mut [Group], width: usize) {
+fn marker(conversation: &Conversation, id: NodeId, on: Option<NodeId>, groups: &mut [Group], width: usize, theme: &Theme) {
     let alternates = conversation.alternates(id);
     if alternates.len() < 2 {
         return;
@@ -236,7 +208,7 @@ fn marker(conversation: &Conversation, id: NodeId, on: Option<NodeId>, groups: &
     let showing = on.and_then(|on| alternates.iter().position(|alternate| *alternate == on)).map_or(1, |at| at.saturating_add(1));
     let text = format!("{} alternate branches here{SEPARATOR}showing {showing}{SEPARATOR}[b] to switch", alternates.len());
     group.anchors.push(Anchor { id: Box::from(node.uuid()), line: group.lines.len(), agent: None });
-    group.lines.push(divider::line(&text, width, dim_style()));
+    group.lines.push(divider::line(&text, width, theme.style(Element::BranchMarker)));
 }
 
 fn flush(conversation: &Conversation, ctx: &Ctx<'_>, pending: &mut Vec<NodeId>, groups: &mut Vec<Group>, width: usize) {
@@ -247,9 +219,10 @@ fn flush(conversation: &Conversation, ctx: &Ctx<'_>, pending: &mut Vec<NodeId>, 
     let Some(first) = run.first().copied() else { return };
     let Some(key) = conversation.node(first).map(|node| Box::<str>::from(node.uuid())) else { return };
     let expanded = ctx.is_expanded(&key);
-    let mut lines = vec![injection::run(conversation, &run, expanded, width, dim_style())];
+    let style = ctx.theme.style(Element::Injection);
+    let mut lines = vec![injection::run(conversation, &run, expanded, width, style)];
     if expanded {
-        lines.extend(injection::each(conversation, &run, width, dim_style()));
+        lines.extend(injection::each(conversation, &run, width, style));
     }
     if let Some(group) = groups.last_mut() {
         group.anchors.push(Anchor { id: key, line: group.lines.len(), agent: None });
@@ -261,12 +234,12 @@ fn flush(conversation: &Conversation, ctx: &Ctx<'_>, pending: &mut Vec<NodeId>, 
     groups.push(Group { rail: Rail::Seam, model: None, lines, anchors, spans });
 }
 
-fn seam(node: &Node, sidechain: bool, width: usize) -> Option<RenderedLine> {
+fn seam(node: &Node, sidechain: bool, width: usize, theme: &Theme) -> Option<RenderedLine> {
     if sidechain {
         return None;
     }
     let label = divider::label(node.divider?, compact_metadata(node))?;
-    Some(divider::line(&label, width, dim_style()))
+    Some(divider::line(&label, width, theme.style(Element::CompactDivider)))
 }
 
 const fn compact_metadata(node: &Node) -> Option<&CompactMetadata> {
@@ -274,7 +247,7 @@ const fn compact_metadata(node: &Node) -> Option<&CompactMetadata> {
     record.compact_metadata.as_ref()
 }
 
-fn flatten(groups: Vec<Group>) -> Transcript {
+fn flatten(groups: Vec<Group>, theme: &Theme) -> Transcript {
     let mut transcript = Transcript::default();
     for group in groups {
         if !transcript.lines.is_empty() {
@@ -288,13 +261,13 @@ fn flatten(groups: Vec<Group>) -> Transcript {
         }
         transcript.anchors.append(&mut anchors);
         transcript.spans.append(&mut spans);
-        transcript.lines.extend(railed(group.lines, group.rail.style()));
+        transcript.lines.extend(railed(group.lines, theme.style(group.rail.element())));
     }
     transcript
 }
 
 fn unreached(ctx: &Ctx<'_>, width: usize, reached: &HashSet<Box<str>>) -> Option<Group> {
-    let styles = tool_styles();
+    let styles = tool_styles(ctx.theme);
     let agents = tool::unreached(ctx, reached);
     if agents.is_empty() {
         return None;
@@ -330,12 +303,12 @@ fn model_label(model: Option<&str>) -> Option<String> {
     Some(model.strip_prefix(MODEL_PREFIX).unwrap_or(model).to_owned())
 }
 
-fn header(label: &str, detail: Option<&str>, width: usize) -> RenderedLine {
+fn header(label: &str, detail: Option<&str>, width: usize, theme: &Theme) -> RenderedLine {
     let mut line = RenderedLine::blank();
-    line.push(StyledSpan::new(truncate(label, width), label_style()));
+    line.push(StyledSpan::new(truncate(label, width), theme.style(Element::Label)));
     let left = width.saturating_sub(label.width()).saturating_sub(SEPARATOR.width());
     if let Some(detail) = detail.filter(|_| left > 0) {
-        line.push(StyledSpan::new(format!("{SEPARATOR}{}", truncate(detail, left)), dim_style()));
+        line.push(StyledSpan::new(format!("{SEPARATOR}{}", truncate(detail, left)), theme.style(Element::Muted)));
     }
     line
 }
@@ -348,7 +321,7 @@ fn content(
     anchors: &mut Vec<Anchor>,
 ) {
     match content {
-        Content::Text(text) => lines.extend(markdown(text, ctx.width)),
+        Content::Text(text) => lines.extend(markdown(text, ctx.width, ctx.theme)),
         Content::Blocks(blocks_of) => blocks(conversation, ctx, blocks_of, lines, anchors),
     }
 }
@@ -360,11 +333,13 @@ fn blocks(
     lines: &mut Vec<RenderedLine>,
     anchors: &mut Vec<Anchor>,
 ) {
-    let styles = tool_styles();
+    let styles = tool_styles(ctx.theme);
     for block in blocks {
         match block {
-            Block::Text { text } => lines.extend(markdown(text, ctx.width)),
-            Block::Thinking { thinking } => lines.push(one(&thinking_summary(thinking), dim_style(), ctx.width)),
+            Block::Text { text } => lines.extend(markdown(text, ctx.width, ctx.theme)),
+            Block::Thinking { thinking } => {
+                lines.push(one(&thinking_summary(thinking), ctx.theme.style(Element::Thinking), ctx.width));
+            }
             Block::ToolUse { id, name, input } => {
                 let agent = tool::spawned(conversation, ctx, id, name)
                     .filter(|agent| agent.enterable())
@@ -373,14 +348,14 @@ fn blocks(
                 anchors.push(Anchor { id: Box::from(id.as_str()), line: lines.len(), agent });
                 lines.extend(tool::call(conversation, ctx, id, name, input, &styles));
             }
-            Block::Image { source } => lines.push(one(&image_summary(source), dim_style(), ctx.width)),
+            Block::Image { source } => lines.push(one(&image_summary(source), ctx.theme.style(Element::Muted), ctx.width)),
             Block::ToolResult { .. } | Block::Other { .. } => {}
         }
     }
 }
 
-fn markdown(text: &str, width: usize) -> Vec<RenderedLine> {
-    prose::render(&crate::markdown::parse(text), width)
+fn markdown(text: &str, width: usize, theme: &Theme) -> Vec<RenderedLine> {
+    prose::render(&crate::markdown::parse(text), width, theme)
 }
 
 fn one(text: &str, style: Style, width: usize) -> RenderedLine {
@@ -441,12 +416,14 @@ mod tests {
     use crate::domain::thread;
 
     fn plain(width: usize) -> Ctx<'static> {
+        static THEME: std::sync::OnceLock<Theme> = std::sync::OnceLock::new();
         static EXPANDED: std::sync::OnceLock<crate::render::Expanded> = std::sync::OnceLock::new();
         static OUTPUTS: std::sync::OnceLock<crate::render::Outputs> = std::sync::OnceLock::new();
         static AGENTS: std::sync::OnceLock<crate::domain::subagent::Agents> = std::sync::OnceLock::new();
         static BRANCHES: std::sync::OnceLock<crate::render::Branches> = std::sync::OnceLock::new();
         Ctx {
             width,
+            theme: THEME.get_or_init(Theme::default),
             expanded: EXPANDED.get_or_init(crate::render::Expanded::new),
             outputs: OUTPUTS.get_or_init(crate::render::Outputs::new),
             agents: AGENTS.get_or_init(crate::domain::subagent::Agents::default),
@@ -590,14 +567,17 @@ mod tests {
 
     #[test]
     fn a_human_rail_and_an_assistant_rail_are_two_different_styles() {
-        assert_ne!(Rail::Human.style(), Rail::Assistant.style());
+        let theme = Theme::default();
+        assert_ne!(theme.style(Rail::Human.element()), theme.style(Rail::Assistant.element()));
     }
 
     #[test]
-    fn neither_rail_names_a_colour_that_could_sit_on_the_background() {
+    fn a_human_rail_and_an_assistant_rail_each_carry_a_foreground_but_never_a_background() {
+        let theme = Theme::default();
         for rail in [Rail::Human, Rail::Assistant] {
-            assert_eq!(rail.style().fg, None, "{rail:?} pins an absolute foreground");
-            assert_eq!(rail.style().bg, None, "{rail:?} pins an absolute background");
+            let style = theme.style(rail.element());
+            assert!(style.fg.is_some(), "{rail:?} has to be findable against a plain terminal");
+            assert_eq!(style.bg, None, "{rail:?} pins an absolute background");
         }
     }
 
@@ -760,8 +740,9 @@ mod tests {
 
     #[test]
     fn the_error_style_names_a_foreground_and_never_a_background() {
-        assert!(error_style().fg.is_some(), "an error has to be findable");
-        assert!(error_style().bg.is_none(), "an error colour may never sit on the background");
+        let style = Theme::default().style(Element::ToolError);
+        assert!(style.fg.is_some(), "an error has to be findable");
+        assert!(style.bg.is_none(), "an error colour may never sit on the background");
     }
 
     #[test]

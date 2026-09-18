@@ -1,11 +1,12 @@
 //! A Markdown block tree laid out as styled lines, at a given column count.
 
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Style;
 use unicode_width::UnicodeWidthStr;
 
 use crate::markdown::{Alignment, Block, Inline, ListItem, plain_text};
 use crate::render::code;
 use crate::render::line::{self, RenderedLine, StyledSpan, split_at_width, truncate, wrap_spans};
+use crate::theme::{Element, Theme};
 
 const BULLETS: [&str; 3] = ["•", "◦", "▪"];
 const QUOTE_GUTTER: &str = "┃ ";
@@ -14,37 +15,9 @@ const ELLIPSIS: &str = "…";
 const CODE_PAD: usize = 1;
 const MIN_COLUMN: usize = 3;
 
-const fn heading_style() -> Style {
-    Style::new().add_modifier(Modifier::BOLD)
-}
-
-const fn emphasis_style() -> Style {
-    Style::new().add_modifier(Modifier::ITALIC)
-}
-
-const fn strong_style() -> Style {
-    Style::new().add_modifier(Modifier::BOLD)
-}
-
-const fn strike_style() -> Style {
-    Style::new().add_modifier(Modifier::CROSSED_OUT)
-}
-
-const fn code_style() -> Style {
-    Style::new().fg(Color::Cyan)
-}
-
-const fn link_style() -> Style {
-    Style::new().fg(Color::Blue).add_modifier(Modifier::UNDERLINED)
-}
-
-const fn dim_style() -> Style {
-    Style::new().fg(Color::DarkGray)
-}
-
-pub fn render(blocks: &[Block], width: usize) -> Vec<RenderedLine> {
+pub fn render(blocks: &[Block], width: usize, theme: &Theme) -> Vec<RenderedLine> {
     let width = width.max(1);
-    let mut lines = blocks_to_lines(blocks, Style::default(), width, 0);
+    let mut lines = blocks_to_lines(blocks, theme.style(Element::Body), width, 0, theme);
     for line in &mut lines {
         clamp(line, width);
     }
@@ -78,49 +51,56 @@ fn clamp(line: &mut RenderedLine, width: usize) {
     line.spans = spans;
 }
 
-fn blocks_to_lines(blocks: &[Block], base: Style, width: usize, depth: usize) -> Vec<RenderedLine> {
+fn blocks_to_lines(blocks: &[Block], base: Style, width: usize, depth: usize, theme: &Theme) -> Vec<RenderedLine> {
     let mut lines: Vec<RenderedLine> = Vec::new();
     for block in blocks {
         if !lines.is_empty() {
             lines.push(RenderedLine::blank());
         }
-        lines.extend(block_to_lines(block, base, width, depth));
+        lines.extend(block_to_lines(block, base, width, depth, theme));
     }
     lines
 }
 
-fn block_to_lines(block: &Block, base: Style, width: usize, depth: usize) -> Vec<RenderedLine> {
+fn block_to_lines(block: &Block, base: Style, width: usize, depth: usize, theme: &Theme) -> Vec<RenderedLine> {
     match block {
-        Block::Paragraph(inlines) => wrap_inlines(inlines, base, width),
-        Block::Heading { inlines, .. } => wrap_inlines(inlines, base.patch(heading_style()), width),
-        Block::Quote(blocks) => quote_to_lines(blocks, base, width, depth),
-        Block::List { ordered, items } => list_to_lines(*ordered, items, base, width, depth),
-        Block::CodeBlock { lang, text } => code_to_lines(lang.as_deref(), text, width),
-        Block::Table { header, rows, alignments } => table_to_lines(header, rows, alignments, width),
-        Block::Rule => vec![one(RULE.repeat(width), dim_style())],
-        Block::Html(text) => text.lines().map(|html| one(truncate(html, width), dim_style())).collect(),
+        Block::Paragraph(inlines) => wrap_inlines(inlines, base, width, theme),
+        Block::Heading { inlines, .. } => wrap_inlines(inlines, base.patch(theme.style(Element::Heading)), width, theme),
+        Block::Quote(blocks) => quote_to_lines(blocks, base, width, depth, theme),
+        Block::List { ordered, items } => list_to_lines(*ordered, items, base, width, depth, theme),
+        Block::CodeBlock { lang, text } => code_to_lines(lang.as_deref(), text, width, theme),
+        Block::Table { header, rows, alignments } => table_to_lines(header, rows, alignments, width, theme),
+        Block::Rule => vec![one(RULE.repeat(width), theme.style(Element::Rule))],
+        Block::Html(text) => text.lines().map(|html| one(truncate(html, width), theme.style(Element::Html))).collect(),
     }
 }
 
-fn quote_to_lines(blocks: &[Block], base: Style, width: usize, depth: usize) -> Vec<RenderedLine> {
-    let gutter = StyledSpan::new(QUOTE_GUTTER, dim_style());
+fn quote_to_lines(blocks: &[Block], base: Style, width: usize, depth: usize, theme: &Theme) -> Vec<RenderedLine> {
+    let gutter = StyledSpan::new(QUOTE_GUTTER, theme.style(Element::QuoteGutter));
     let inner = width.saturating_sub(gutter.width()).max(1);
-    let mut lines = blocks_to_lines(blocks, base, inner, depth);
+    let mut lines = blocks_to_lines(blocks, base, inner, depth, theme);
     for line in &mut lines {
         line.prefix(gutter.clone());
     }
     lines
 }
 
-fn list_to_lines(ordered: Option<u64>, items: &[ListItem], base: Style, width: usize, depth: usize) -> Vec<RenderedLine> {
+fn list_to_lines(
+    ordered: Option<u64>,
+    items: &[ListItem],
+    base: Style,
+    width: usize,
+    depth: usize,
+    theme: &Theme,
+) -> Vec<RenderedLine> {
     let mut lines = Vec::new();
     for (index, item) in items.iter().enumerate() {
-        let (marker, style) = marker_for(item, ordered, index, depth);
+        let (marker, style) = marker_for(item, ordered, index, depth, theme);
         let indent = marker.width();
 
         let mut blocks = item.blocks.clone();
         strip_task_marker(&mut blocks);
-        let mut item_lines = item_to_lines(&blocks, base, width.saturating_sub(indent).max(1), depth.saturating_add(1));
+        let mut item_lines = item_to_lines(&blocks, base, width.saturating_sub(indent).max(1), depth.saturating_add(1), theme);
         if item_lines.is_empty() {
             item_lines.push(RenderedLine::blank());
         }
@@ -138,28 +118,29 @@ fn list_to_lines(ordered: Option<u64>, items: &[ListItem], base: Style, width: u
     lines
 }
 
-fn item_to_lines(blocks: &[Block], base: Style, width: usize, depth: usize) -> Vec<RenderedLine> {
+fn item_to_lines(blocks: &[Block], base: Style, width: usize, depth: usize, theme: &Theme) -> Vec<RenderedLine> {
     let mut lines: Vec<RenderedLine> = Vec::new();
     for block in blocks {
         if !lines.is_empty() && !matches!(block, Block::List { .. }) {
             lines.push(RenderedLine::blank());
         }
-        lines.extend(block_to_lines(block, base, width, depth));
+        lines.extend(block_to_lines(block, base, width, depth, theme));
     }
     lines
 }
 
-fn marker_for(item: &ListItem, ordered: Option<u64>, index: usize, depth: usize) -> (String, Style) {
+fn marker_for(item: &ListItem, ordered: Option<u64>, index: usize, depth: usize, theme: &Theme) -> (String, Style) {
+    let bullet_style = theme.style(Element::ListBullet);
     match (item.task(), ordered) {
-        (Some(true), _) => ("☑ ".to_owned(), dim_style()),
-        (Some(false), _) => ("☐ ".to_owned(), dim_style()),
+        (Some(true), _) => ("☑ ".to_owned(), bullet_style),
+        (Some(false), _) => ("☐ ".to_owned(), bullet_style),
         (None, Some(start)) => {
             let number = u64::try_from(index).map_or(start, |index| start.saturating_add(index));
-            (format!("{number}. "), dim_style())
+            (format!("{number}. "), bullet_style)
         }
         (None, None) => {
             let bullet = index_of(depth, BULLETS.len()).and_then(|index| BULLETS.get(index)).copied().unwrap_or("•");
-            (format!("{bullet} "), dim_style())
+            (format!("{bullet} "), bullet_style)
         }
     }
 }
@@ -179,13 +160,13 @@ fn strip_task_marker(blocks: &mut [Block]) {
     }
 }
 
-fn code_to_lines(lang: Option<&str>, text: &str, width: usize) -> Vec<RenderedLine> {
-    let mut lines = vec![fence_line(lang, width)];
+fn code_to_lines(lang: Option<&str>, text: &str, width: usize, theme: &Theme) -> Vec<RenderedLine> {
+    let mut lines = vec![fence_line(lang, width, theme)];
     let pad = code_pad(width);
-    for code in code::highlight(lang, text).iter() {
-        lines.push(code_line(code, pad, width));
+    for code in code::highlight(lang, text, theme).iter() {
+        lines.push(code_line(code, pad, width, theme));
     }
-    lines.push(one(RULE.repeat(width), dim_style()));
+    lines.push(one(RULE.repeat(width), theme.style(Element::Rule)));
     for line in &mut lines {
         line.inset = pad;
     }
@@ -196,21 +177,22 @@ const fn code_pad(width: usize) -> usize {
     if width > CODE_PAD.saturating_mul(2).saturating_add(1) { CODE_PAD } else { 0 }
 }
 
-fn fence_line(lang: Option<&str>, width: usize) -> RenderedLine {
+fn fence_line(lang: Option<&str>, width: usize, theme: &Theme) -> RenderedLine {
+    let rule_style = theme.style(Element::Rule);
     let Some(lang) = lang.map(str::trim).filter(|lang| !lang.is_empty()) else {
-        return one(RULE.repeat(width), dim_style());
+        return one(RULE.repeat(width), rule_style);
     };
     let head = format!("{lang} ");
     if head.width() >= width {
-        return one(truncate(lang, width), dim_style());
+        return one(truncate(lang, width), theme.style(Element::CodeBlockLang));
     }
     let mut line = RenderedLine::blank();
-    line.push(StyledSpan::new(head.clone(), dim_style()));
-    line.push(StyledSpan::new(RULE.repeat(width.saturating_sub(head.width())), dim_style()));
+    line.push(StyledSpan::new(head.clone(), theme.style(Element::CodeBlockLang)));
+    line.push(StyledSpan::new(RULE.repeat(width.saturating_sub(head.width())), rule_style));
     line
 }
 
-fn code_line(code: &[StyledSpan], pad: usize, width: usize) -> RenderedLine {
+fn code_line(code: &[StyledSpan], pad: usize, width: usize, theme: &Theme) -> RenderedLine {
     let room = width.saturating_sub(pad);
     let total = code.iter().map(StyledSpan::width).fold(0, usize::saturating_add);
     let cut = total > room;
@@ -233,7 +215,7 @@ fn code_line(code: &[StyledSpan], pad: usize, width: usize) -> RenderedLine {
         }
     }
     if cut {
-        spans.push(StyledSpan::new(ELLIPSIS, dim_style()));
+        spans.push(StyledSpan::new(ELLIPSIS, theme.style(Element::Muted)));
     }
     RenderedLine { spans: line::merge(spans), inset: pad }
 }
@@ -243,6 +225,7 @@ fn table_to_lines(
     rows: &[Vec<Vec<Inline>>],
     alignments: &[Alignment],
     width: usize,
+    theme: &Theme,
 ) -> Vec<RenderedLine> {
     let columns = header.len().max(rows.iter().map(Vec::len).max().unwrap_or(0));
     if columns == 0 {
@@ -250,16 +233,17 @@ fn table_to_lines(
     }
     let widths = column_widths(header, rows, columns, width);
     let align = |column: usize| alignments.get(column).copied().unwrap_or(Alignment::None);
+    let border = theme.style(Element::TableBorder);
 
-    let mut lines = vec![rule_line("┌", "┬", "┐", &widths)];
+    let mut lines = vec![rule_line("┌", "┬", "┐", &widths, border)];
     if !header.is_empty() {
-        lines.extend(row_to_lines(header, &widths, heading_style(), &align));
-        lines.push(rule_line("├", "┼", "┤", &widths));
+        lines.extend(row_to_lines(header, &widths, theme.style(Element::TableHeader), &align, border, theme));
+        lines.push(rule_line("├", "┼", "┤", &widths, border));
     }
     for row in rows {
-        lines.extend(row_to_lines(row, &widths, Style::default(), &align));
+        lines.extend(row_to_lines(row, &widths, theme.style(Element::Body), &align, border, theme));
     }
-    lines.push(rule_line("└", "┴", "┘", &widths));
+    lines.push(rule_line("└", "┴", "┘", &widths, border));
     lines
 }
 
@@ -304,11 +288,18 @@ fn column_widths(header: &[Vec<Inline>], rows: &[Vec<Vec<Inline>>], columns: usi
     shrunk
 }
 
-fn row_to_lines(cells: &[Vec<Inline>], widths: &[usize], style: Style, align: &impl Fn(usize) -> Alignment) -> Vec<RenderedLine> {
+fn row_to_lines(
+    cells: &[Vec<Inline>],
+    widths: &[usize],
+    style: Style,
+    align: &impl Fn(usize) -> Alignment,
+    border: Style,
+    theme: &Theme,
+) -> Vec<RenderedLine> {
     let wrapped: Vec<Vec<RenderedLine>> = widths
         .iter()
         .enumerate()
-        .map(|(column, width)| wrap_inlines(cells.get(column).map_or(&[], Vec::as_slice), style, *width))
+        .map(|(column, width)| wrap_inlines(cells.get(column).map_or(&[], Vec::as_slice), style, *width, theme))
         .collect();
 
     let height = wrapped.iter().map(Vec::len).max().unwrap_or(1).max(1);
@@ -316,7 +307,7 @@ fn row_to_lines(cells: &[Vec<Inline>], widths: &[usize], style: Style, align: &i
         .map(|offset| {
             let mut line = RenderedLine::blank();
             for (column, width) in widths.iter().enumerate() {
-                line.push(StyledSpan::new("│ ", dim_style()));
+                line.push(StyledSpan::new("│ ", border));
                 let cell = wrapped.get(column).and_then(|cell| cell.get(offset)).cloned().unwrap_or_default();
                 let (before, after) = pad_split(align(column), width.saturating_sub(cell.width()));
                 line.push(StyledSpan::new(" ".repeat(before), style));
@@ -324,9 +315,9 @@ fn row_to_lines(cells: &[Vec<Inline>], widths: &[usize], style: Style, align: &i
                     line.push(span);
                 }
                 line.push(StyledSpan::new(" ".repeat(after), style));
-                line.push(StyledSpan::new(" ", dim_style()));
+                line.push(StyledSpan::new(" ", border));
             }
-            line.push(StyledSpan::new("│", dim_style()));
+            line.push(StyledSpan::new("│", border));
             line.spans = line::merge(std::mem::take(&mut line.spans));
             line
         })
@@ -344,7 +335,7 @@ fn pad_split(alignment: Alignment, padding: usize) -> (usize, usize) {
     }
 }
 
-fn rule_line(left: &str, join: &str, right: &str, widths: &[usize]) -> RenderedLine {
+fn rule_line(left: &str, join: &str, right: &str, widths: &[usize], style: Style) -> RenderedLine {
     let mut text = String::from(left);
     for (column, width) in widths.iter().enumerate() {
         if column > 0 {
@@ -353,31 +344,33 @@ fn rule_line(left: &str, join: &str, right: &str, widths: &[usize]) -> RenderedL
         text.push_str(&RULE.repeat(width.saturating_add(2)));
     }
     text.push_str(right);
-    one(text, dim_style())
+    one(text, style)
 }
 
-fn wrap_inlines(inlines: &[Inline], base: Style, width: usize) -> Vec<RenderedLine> {
+fn wrap_inlines(inlines: &[Inline], base: Style, width: usize, theme: &Theme) -> Vec<RenderedLine> {
     let mut spans = Vec::new();
-    flatten(inlines, base, &mut spans);
+    flatten(inlines, base, &mut spans, theme);
     wrap_spans(&spans, width)
 }
 
-fn flatten(inlines: &[Inline], base: Style, out: &mut Vec<StyledSpan>) {
+fn flatten(inlines: &[Inline], base: Style, out: &mut Vec<StyledSpan>, theme: &Theme) {
     for inline in inlines {
         match inline {
             Inline::Text(value) => out.push(StyledSpan::new(value.clone(), base)),
-            Inline::Code(value) => out.push(StyledSpan::new(value.clone(), base.patch(code_style()))),
-            Inline::Html(value) => out.push(StyledSpan::new(value.clone(), base.patch(dim_style()))),
-            Inline::Image { alt, .. } => out.push(StyledSpan::new(format!("[image: {alt}]"), base.patch(dim_style()))),
+            Inline::Code(value) => out.push(StyledSpan::new(value.clone(), base.patch(theme.style(Element::InlineCode)))),
+            Inline::Html(value) => out.push(StyledSpan::new(value.clone(), base.patch(theme.style(Element::Html)))),
+            Inline::Image { alt, .. } => {
+                out.push(StyledSpan::new(format!("[image: {alt}]"), base.patch(theme.style(Element::Muted))));
+            }
             Inline::SoftBreak => out.push(StyledSpan::new(" ", base)),
             Inline::HardBreak => out.push(StyledSpan::new("\n", base)),
-            Inline::Emphasis(children) => flatten(children, base.patch(emphasis_style()), out),
-            Inline::Strong(children) => flatten(children, base.patch(strong_style()), out),
-            Inline::Strike(children) => flatten(children, base.patch(strike_style()), out),
+            Inline::Emphasis(children) => flatten(children, base.patch(theme.style(Element::Emphasis)), out, theme),
+            Inline::Strong(children) => flatten(children, base.patch(theme.style(Element::Strong)), out, theme),
+            Inline::Strike(children) => flatten(children, base.patch(theme.style(Element::Strikethrough)), out, theme),
             Inline::Link { url, inlines } => {
-                flatten(inlines, base.patch(link_style()), out);
+                flatten(inlines, base.patch(theme.style(Element::Link)), out, theme);
                 if !url.is_empty() && url.trim() != plain_text(inlines).trim() {
-                    out.push(StyledSpan::new(format!(" ({url})"), base.patch(dim_style())));
+                    out.push(StyledSpan::new(format!(" ({url})"), base.patch(theme.style(Element::Muted))));
                 }
             }
             Inline::TaskMarker(_) => {}
@@ -396,18 +389,23 @@ mod tests {
     use super::*;
     use crate::markdown::parse;
 
+    fn theme() -> Theme {
+        Theme::default()
+    }
+
     fn lines(source: &str, width: usize) -> Vec<String> {
-        render(&parse(source), width).iter().map(RenderedLine::text).collect()
+        render(&parse(source), width, &theme()).iter().map(RenderedLine::text).collect()
     }
 
     fn styles(source: &str, width: usize) -> Vec<Vec<Style>> {
-        render(&parse(source), width).iter().map(|line| line.spans.iter().map(|span| span.style).collect()).collect()
+        render(&parse(source), width, &theme()).iter().map(|line| line.spans.iter().map(|span| span.style).collect()).collect()
     }
 
     #[test]
     fn a_heading_is_bold_and_its_hashes_do_not_survive() {
         assert_eq!(lines("## Deflector", 40), vec!["Deflector"]);
-        assert_eq!(styles("## Deflector", 40), vec![vec![heading_style()]]);
+        let expected = theme().style(Element::Body).patch(theme().style(Element::Heading));
+        assert_eq!(styles("## Deflector", 40), vec![vec![expected]]);
     }
 
     #[test]
@@ -467,7 +465,7 @@ mod tests {
     fn a_table_fits_the_column_it_was_given_even_when_it_has_to_shrink() {
         let source = "| alpha | beta |\n| --- | --- |\n| one two three | four |\n";
         for width in [12, 20, 40, 80] {
-            for line in render(&parse(source), width) {
+            for line in render(&parse(source), width, &theme()) {
                 assert!(line.width() <= width, "width {width}: {:?}", line.text());
             }
         }
@@ -501,16 +499,17 @@ mod tests {
     #[test]
     fn inline_code_emphasis_and_strong_each_carry_their_own_style() {
         let styled = styles("`a` *b* **c**", 40).into_iter().flatten().collect::<Vec<_>>();
-        assert!(styled.contains(&code_style()));
-        assert!(styled.contains(&emphasis_style()));
-        assert!(styled.contains(&strong_style()));
+        let body = theme().style(Element::Body);
+        assert!(styled.contains(&body.patch(theme().style(Element::InlineCode))));
+        assert!(styled.contains(&body.patch(theme().style(Element::Emphasis))));
+        assert!(styled.contains(&body.patch(theme().style(Element::Strong))));
     }
 
     #[test]
     fn every_line_of_a_document_of_every_element_fits_the_column_it_was_wrapped_for() {
         let source = "# h\n\npara *a* `b`\n\n| x | y |\n| - | - |\n| 1 | 2 |\n\n- a\n  - b\n\n- [x] t\n\n> q\n\n---\n\n```rust\nfn main() {}\n```\n";
         for width in 1..=60 {
-            for line in render(&parse(source), width) {
+            for line in render(&parse(source), width, &theme()) {
                 assert!(line.width() <= width, "width {width} overflowed with {:?}", line.text());
             }
         }
@@ -518,6 +517,6 @@ mod tests {
 
     #[test]
     fn nothing_at_all_renders_as_nothing_at_all() {
-        assert!(render(&parse(""), 40).is_empty());
+        assert!(render(&parse(""), 40, &theme()).is_empty());
     }
 }

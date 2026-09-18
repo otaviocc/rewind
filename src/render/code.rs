@@ -11,6 +11,7 @@ use syntect::parsing::{SyntaxReference, SyntaxSet};
 use syntect::util::LinesWithEndings;
 
 use crate::render::line::{self, StyledSpan};
+use crate::theme::{Element, Theme as RewindTheme};
 
 const THEME: &str = "base16-ocean.dark";
 const PLAIN: &str = "Plain Text";
@@ -18,9 +19,10 @@ const CAPACITY: usize = 256;
 
 pub type CodeLines = Arc<Vec<Vec<StyledSpan>>>;
 
-pub fn highlight(lang: Option<&str>, text: &str) -> CodeLines {
+pub fn highlight(lang: Option<&str>, text: &str, theme: &RewindTheme) -> CodeLines {
     let syntaxes = syntax_set();
     let syntax = syntax_for(syntaxes, lang, text);
+    let fallback = theme.style(Element::CodeBlock);
 
     let key =
         Key { syntax: syntax.map_or("", |syntax| syntax.name.as_str()).to_owned(), theme: THEME.to_owned(), text: hash(text) };
@@ -28,9 +30,9 @@ pub fn highlight(lang: Option<&str>, text: &str) -> CodeLines {
         return hit;
     }
 
-    let lines = Arc::new(match (syntax, theme()) {
-        (Some(syntax), Some(theme)) => paint(syntaxes, syntax, theme, text),
-        _ => unpainted(text),
+    let lines = Arc::new(match (syntax, syntect_theme()) {
+        (Some(syntax), Some(syntect_theme)) => paint(syntaxes, syntax, syntect_theme, text),
+        _ => unpainted(text, fallback),
     });
     store(key, Arc::clone(&lines));
     lines
@@ -44,21 +46,21 @@ fn syntax_for<'a>(syntaxes: &'a SyntaxSet, lang: Option<&str>, text: &str) -> Op
         .filter(|syntax| syntax.name != PLAIN)
 }
 
-fn paint(syntaxes: &SyntaxSet, syntax: &SyntaxReference, theme: &SyntectTheme, text: &str) -> Vec<Vec<StyledSpan>> {
-    let mut highlighter = HighlightLines::new(syntax, theme);
+fn paint(syntaxes: &SyntaxSet, syntax: &SyntaxReference, syntect_theme: &SyntectTheme, text: &str) -> Vec<Vec<StyledSpan>> {
+    let mut highlighter = HighlightLines::new(syntax, syntect_theme);
     let body = body(text);
     LinesWithEndings::from(&body)
         .map(|line| {
             highlighter.highlight_line(line, syntaxes).map_or_else(
-                |_| plain(line).into_iter().collect(),
+                |_| plain(line, Style::default()).into_iter().collect(),
                 |regions| line::merge(regions.iter().filter_map(|(style, piece)| span(*style, piece))),
             )
         })
         .collect()
 }
 
-fn unpainted(text: &str) -> Vec<Vec<StyledSpan>> {
-    LinesWithEndings::from(&body(text)).map(|line| plain(line).into_iter().collect()).collect()
+fn unpainted(text: &str, fallback: Style) -> Vec<Vec<StyledSpan>> {
+    LinesWithEndings::from(&body(text)).map(|line| plain(line, fallback).into_iter().collect()).collect()
 }
 
 fn body(text: &str) -> String {
@@ -66,9 +68,9 @@ fn body(text: &str) -> String {
     if trimmed.is_empty() { String::new() } else { format!("{trimmed}\n") }
 }
 
-fn plain(line: &str) -> Option<StyledSpan> {
+fn plain(line: &str, style: Style) -> Option<StyledSpan> {
     let line = line.trim_end_matches(['\n', '\r']);
-    (!line.is_empty()).then(|| StyledSpan::new(line, Style::default()))
+    (!line.is_empty()).then(|| StyledSpan::new(line, style))
 }
 
 fn span(style: SyntectStyle, piece: &str) -> Option<StyledSpan> {
@@ -98,7 +100,7 @@ fn syntax_set() -> &'static SyntaxSet {
     })
 }
 
-fn theme() -> Option<&'static SyntectTheme> {
+fn syntect_theme() -> Option<&'static SyntectTheme> {
     static THEMES: OnceLock<ThemeSet> = OnceLock::new();
     THEMES.get_or_init(ThemeSet::load_defaults).themes.get(THEME)
 }
@@ -147,6 +149,10 @@ fn hash(text: &str) -> u64 {
 mod tests {
     use super::*;
 
+    fn theme() -> RewindTheme {
+        RewindTheme::default()
+    }
+
     fn styles(lines: &[Vec<StyledSpan>]) -> Vec<Style> {
         lines.iter().flatten().map(|span| span.style).collect()
     }
@@ -161,7 +167,7 @@ mod tests {
 
     #[test]
     fn a_known_language_comes_back_in_more_than_one_colour() {
-        let lines = highlight(Some("rust"), "fn main() {\n    let x = \"hi\";\n}\n");
+        let lines = highlight(Some("rust"), "fn main() {\n    let x = \"hi\";\n}\n", &theme());
         assert_eq!(lines.len(), 3);
         let styles = styles(&lines);
         assert!(styles.iter().collect::<std::collections::HashSet<_>>().len() > 1, "{styles:?}");
@@ -169,47 +175,47 @@ mod tests {
 
     #[test]
     fn a_language_nobody_bundles_falls_back_to_one_unstyled_span_a_line() {
-        let lines = highlight(Some("nothing-of-the-sort"), "alpha\nbeta\n");
+        let lines = highlight(Some("nothing-of-the-sort"), "alpha\nbeta\n", &theme());
         assert_eq!(lines.len(), 2);
         assert_eq!(styles(&lines), vec![Style::default(), Style::default()]);
     }
 
     #[test]
     fn a_fence_with_no_language_at_all_is_still_laid_out_line_by_line() {
-        let lines = highlight(None, "alpha\nbeta\ngamma\n");
+        let lines = highlight(None, "alpha\nbeta\ngamma\n", &theme());
         assert_eq!(lines.len(), 3);
     }
 
     #[test]
     fn the_same_block_twice_is_the_same_allocation_rather_than_a_second_highlight() {
-        let first = highlight(Some("rust"), "fn cached() {}\n");
-        let second = highlight(Some("rust"), "fn cached() {}\n");
+        let first = highlight(Some("rust"), "fn cached() {}\n", &theme());
+        let second = highlight(Some("rust"), "fn cached() {}\n", &theme());
         assert!(Arc::ptr_eq(&first, &second));
     }
 
     #[test]
     fn the_language_is_part_of_the_key_so_two_readings_of_one_text_do_not_collide() {
         let source = "let x = 1\n";
-        assert!(!Arc::ptr_eq(&highlight(Some("rust"), source), &highlight(Some("swift"), source)));
+        assert!(!Arc::ptr_eq(&highlight(Some("rust"), source, &theme()), &highlight(Some("swift"), source, &theme())));
     }
 
     #[test]
     fn a_trailing_newline_does_not_add_an_empty_line_at_the_end() {
-        assert_eq!(highlight(Some("rust"), "fn main() {}").len(), 1);
-        assert_eq!(highlight(Some("rust"), "fn main() {}\n").len(), 1);
-        assert_eq!(highlight(Some("rust"), "fn main() {}\n\n").len(), 1);
+        assert_eq!(highlight(Some("rust"), "fn main() {}", &theme()).len(), 1);
+        assert_eq!(highlight(Some("rust"), "fn main() {}\n", &theme()).len(), 1);
+        assert_eq!(highlight(Some("rust"), "fn main() {}\n\n", &theme()).len(), 1);
     }
 
     #[test]
     fn an_empty_block_is_no_lines_rather_than_one_blank_one() {
-        assert!(highlight(Some("rust"), "").is_empty());
-        assert!(highlight(Some("rust"), "\n\n").is_empty());
+        assert!(highlight(Some("rust"), "", &theme()).is_empty());
+        assert!(highlight(Some("rust"), "\n\n", &theme()).is_empty());
     }
 
     #[test]
     fn the_cache_evicts_rather_than_growing_without_a_bound() {
         for index in 0..CAPACITY.saturating_add(16) {
-            highlight(Some("rust"), &format!("fn evicted{index}() {{}}\n"));
+            highlight(Some("rust"), &format!("fn evicted{index}() {{}}\n"), &theme());
         }
         assert!(cache().lock().unwrap_or_else(PoisonError::into_inner).order.len() <= CAPACITY);
     }

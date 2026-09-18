@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use crate::domain::subagent::Agents;
 use crate::domain::thread::NodeId;
+use crate::theme::Theme;
 
 pub type Expanded = HashSet<Box<str>>;
 pub type Outputs = HashMap<Box<str>, Overflow>;
@@ -27,6 +28,7 @@ pub enum Overflow {
 
 pub struct Ctx<'a> {
     pub width: usize,
+    pub theme: &'a Theme,
     pub expanded: &'a Expanded,
     pub outputs: &'a Outputs,
     pub agents: &'a Agents,
@@ -43,6 +45,7 @@ impl Ctx<'_> {
     pub const fn narrowed(&self, width: usize) -> Ctx<'_> {
         Ctx {
             width,
+            theme: self.theme,
             expanded: self.expanded,
             outputs: self.outputs,
             agents: self.agents,

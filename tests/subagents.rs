@@ -142,11 +142,13 @@ fn a_subagents_assistant_records_carry_the_attribution_that_labels_them() {
 
 fn visible(session: &std::path::Path, agents: &Agents) -> std::collections::BTreeSet<String> {
     let Ok(conversation) = thread::build(session) else { return std::collections::BTreeSet::new() };
+    let theme = rewind::theme::Theme::default();
     let expanded = rewind::render::Expanded::new();
     let outputs = rewind::render::Outputs::new();
     let branches = rewind::render::Branches::new();
     let ctx = rewind::render::Ctx {
         width: 100,
+        theme: &theme,
         expanded: &expanded,
         outputs: &outputs,
         agents,

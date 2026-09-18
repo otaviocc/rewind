@@ -17,6 +17,7 @@ use crate::domain::tool;
 use crate::render::line::RenderedLine;
 use crate::render::message::{self, Anchor, Position, Transcript};
 use crate::render::{Branches, Ctx as RenderCtx, Expanded, Outputs, Overflow};
+use crate::theme::Theme;
 use crate::ui::input::{Action, Motion};
 use crate::ui::{Options, columns, diagnostics, listing};
 
@@ -55,12 +56,12 @@ pub struct Rendered {
 }
 
 impl Rendered {
-    fn new(conversation: Conversation, path: PathBuf, agents: Agents, width: u16, view: &View) -> Self {
-        let transcript = message::transcript(&conversation, &view.ctx(usize::from(width), &agents, None));
+    fn new(conversation: Conversation, path: PathBuf, agents: Agents, width: u16, view: &View, theme: &Theme) -> Self {
+        let transcript = message::transcript(&conversation, &view.ctx(usize::from(width), &agents, None, theme));
         Self { conversation, path, agents, root: None, transcript, wrapped_at: width, revision: view.revision }
     }
 
-    fn rooted(&self, root: NodeId, width: u16, view: &View) -> Self {
+    fn rooted(&self, root: NodeId, width: u16, view: &View, theme: &Theme) -> Self {
         let mut rendered = Self {
             conversation: self.conversation.clone(),
             path: self.path.clone(),
@@ -70,12 +71,12 @@ impl Rendered {
             wrapped_at: width,
             revision: view.revision,
         };
-        rendered.rewrap(width, view);
+        rendered.rewrap(width, view, theme);
         rendered
     }
 
-    fn rewrap(&mut self, width: u16, view: &View) {
-        self.transcript = message::transcript(&self.conversation, &view.ctx(usize::from(width), &self.agents, self.root));
+    fn rewrap(&mut self, width: u16, view: &View, theme: &Theme) {
+        self.transcript = message::transcript(&self.conversation, &view.ctx(usize::from(width), &self.agents, self.root, theme));
         self.wrapped_at = width;
         self.revision = view.revision;
     }
@@ -131,9 +132,10 @@ struct View {
 }
 
 impl View {
-    const fn ctx<'a>(&'a self, width: usize, agents: &'a Agents, root: Option<NodeId>) -> RenderCtx<'a> {
+    const fn ctx<'a>(&'a self, width: usize, agents: &'a Agents, root: Option<NodeId>, theme: &'a Theme) -> RenderCtx<'a> {
         RenderCtx {
             width,
+            theme,
             expanded: &self.expanded,
             outputs: &self.outputs,
             agents,
@@ -201,6 +203,7 @@ pub struct App {
     drift: BTreeMap<PathBuf, Diagnostics>,
     diagnostics_open: bool,
     diagnostics_pane: Pane,
+    theme: Theme,
 }
 
 impl App {
@@ -209,6 +212,7 @@ impl App {
             ctx,
             quit: false,
             claude_dir: options.claude_dir.clone(),
+            theme: options.theme.clone(),
             projects: Loadable::Loading,
             sessions: Loadable::Loading,
             conversation: Loadable::Loading,
@@ -241,6 +245,10 @@ impl App {
 
     pub fn claude_dir(&self) -> &Path {
         &self.claude_dir
+    }
+
+    pub const fn theme(&self) -> &Theme {
+        &self.theme
     }
 
     pub const fn generation(&self) -> u64 {
@@ -376,7 +384,7 @@ impl App {
         self.conversation = match result {
             Ok(conversation) => {
                 self.record_drift(&conversation);
-                Loadable::Ready(Rendered::new(*conversation, path, agents, width, &self.view))
+                Loadable::Ready(Rendered::new(*conversation, path, agents, width, &self.view, &self.theme))
             }
             Err(error) => Loadable::Failed(error.to_string()),
         };
@@ -447,7 +455,7 @@ impl App {
         self.conversation = match result {
             Ok(conversation) => {
                 self.record_drift(&conversation);
-                Loadable::Ready(Rendered::new(*conversation, path, agents, width, &self.view))
+                Loadable::Ready(Rendered::new(*conversation, path, agents, width, &self.view, &self.theme))
             }
             Err(error) => Loadable::Failed(error.to_string()),
         };
@@ -511,7 +519,7 @@ impl App {
     }
 
     pub fn diagnostics_lines(&self) -> Vec<RenderedLine> {
-        diagnostics::lines(&self.drift, usize::from(diagnostics::inner(self.diagnostics_area()).width))
+        diagnostics::lines(&self.drift, usize::from(diagnostics::inner(self.diagnostics_area()).width), &self.theme)
     }
 
     const fn diagnostics_area(&self) -> Size {
@@ -664,7 +672,7 @@ impl App {
         let anchored = self.anchored();
         let width = columns::conversation_width(self.area, self.mode);
         if let Loadable::Ready(rendered) = &mut self.conversation {
-            rendered.rewrap(width, &self.view);
+            rendered.rewrap(width, &self.view, &self.theme);
         }
         self.restore(&anchored);
     }
@@ -673,7 +681,7 @@ impl App {
         let anchored = Anchored { position: None, cursor: Some(Box::from(id)), row };
         let width = columns::conversation_width(self.area, self.mode);
         if let Loadable::Ready(rendered) = &mut self.conversation {
-            rendered.rewrap(width, &self.view);
+            rendered.rewrap(width, &self.view, &self.theme);
         }
         self.restore(&anchored);
         if row.is_none() {
@@ -745,7 +753,7 @@ impl App {
             .node(root)
             .and_then(|node| node.timestamp.map(|_| "sidechain"))
             .map_or_else(|| Box::from("sidechain"), Box::from);
-        let child = rendered.rooted(root, width, &View::default());
+        let child = rendered.rooted(root, width, &View::default(), &self.theme);
 
         self.stack.push(Frame {
             conversation: std::mem::replace(&mut self.conversation, Loadable::Ready(child)),

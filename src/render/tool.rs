@@ -38,7 +38,9 @@ pub struct Styles {
     pub error: Style,
     pub added: Style,
     pub removed: Style,
+    pub context: Style,
     pub enter: Style,
+    pub ok: Style,
 }
 
 pub fn spawned<'a>(conversation: &Conversation, ctx: &'a Ctx<'_>, id: &str, name: &str) -> Option<&'a Agent> {
@@ -195,7 +197,7 @@ fn diff(hunks: &[Hunk], width: usize, styles: &Styles) -> Vec<RenderedLine> {
             let style = match text.as_bytes().first() {
                 Some(b'+') => styles.added,
                 Some(b'-') => styles.removed,
-                _ => styles.digest,
+                _ => styles.context,
             };
             lines.push(cut(text, width, style));
         }
@@ -270,7 +272,7 @@ fn line(
     if let Some(mark) = mark {
         line.push(StyledSpan::new(format!("{mark}{MARK_GAP}"), styles.enter));
     }
-    line.push(StyledSpan::new(outcome, if status.is_error() { styles.error } else { styles.muted }));
+    line.push(StyledSpan::new(outcome, if status.is_error() { styles.error } else { styles.ok }));
     line
 }
 
@@ -305,7 +307,9 @@ mod tests {
             error: Style::new().fg(Color::Red),
             added: Style::new().fg(Color::Green),
             removed: Style::new().fg(Color::Red),
+            context: Style::new(),
             enter: Style::new().add_modifier(Modifier::BOLD),
+            ok: Style::new().fg(Color::DarkGray),
         }
     }
 

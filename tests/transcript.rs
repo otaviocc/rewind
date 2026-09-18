@@ -17,6 +17,7 @@ use rewind::render::line::RenderedLine;
 use rewind::render::message::Transcript;
 use rewind::render::message::transcript;
 use rewind::render::{Ctx, Expanded, Outputs, Overflow};
+use rewind::theme::Theme;
 use tempfile::TempDir;
 
 const HOLODECK: &str = "-Users-fixture-Developer-holodeck";
@@ -48,6 +49,7 @@ fn session_path(session: &str) -> PathBuf {
 
 #[derive(Default)]
 struct View {
+    theme: Theme,
     expanded: Expanded,
     outputs: Outputs,
     agents: Agents,
@@ -60,6 +62,7 @@ impl View {
     const fn ctx(&self, width: usize) -> Ctx<'_> {
         Ctx {
             width,
+            theme: &self.theme,
             expanded: &self.expanded,
             outputs: &self.outputs,
             agents: &self.agents,

@@ -24,6 +24,7 @@ use crate::domain::session;
 use crate::domain::subagent::{self, Agents};
 use crate::domain::thread::{self, Conversation, ThreadError};
 use crate::domain::tool;
+use crate::theme::Theme;
 use crate::ui::app::App;
 
 enum Wake {
@@ -42,6 +43,7 @@ pub struct Options {
     pub project: Option<String>,
     pub session: Option<String>,
     pub mouse: bool,
+    pub theme: Theme,
 }
 
 pub fn run(ctx: Ctx, options: &Options) -> Result<()> {

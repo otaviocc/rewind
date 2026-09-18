@@ -2,12 +2,13 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect, Size};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Style;
 use ratatui::widgets::{Block, Clear, Widget};
 use ratatui::{Frame, symbols};
 use unicode_width::UnicodeWidthStr;
 
 use crate::render::line::{RenderedLine, truncate};
+use crate::theme::Element;
 use crate::ui::age;
 use crate::ui::app::{App, Column, Loadable};
 use crate::ui::columns;
@@ -22,26 +23,6 @@ const EDGE_PAD: u16 = 1;
 const CHEVRON: &str = "›";
 const GONE: &str = "⊘";
 const INFO_WIDTH: u16 = 7;
-
-const fn hint_style() -> Style {
-    Style::new().fg(Color::DarkGray)
-}
-
-const fn title_style() -> Style {
-    Style::new().add_modifier(Modifier::BOLD)
-}
-
-const fn cursor_line_style() -> Style {
-    Style::new().add_modifier(Modifier::REVERSED)
-}
-
-const fn scroll_progress_color() -> Color {
-    Color::Cyan
-}
-
-const fn unreadable_style() -> Style {
-    Style::new().fg(Color::Yellow)
-}
 
 pub fn draw(frame: &mut Frame, app: &App) {
     frame.render_widget(Screen { app }, frame.area());
@@ -58,11 +39,11 @@ impl Widget for Screen<'_> {
         let [header_row, top_rule, content_rows, bottom_rule, status_row] = Layout::vertical(rows).areas(area);
 
         header(header_row, buf, self.app);
-        rule(top_rule, buf, hint_style());
+        rule(top_rule, buf, self.app.theme().style(Element::Hint));
         progress(top_rule, buf, self.app);
         content(content_rows, buf, self.app);
         overlay(content_rows, buf, self.app);
-        rule(bottom_rule, buf, hint_style());
+        rule(bottom_rule, buf, self.app.theme().style(Element::Hint));
         statusbar(status_row, buf, self.app);
     }
 }
@@ -91,11 +72,11 @@ fn header(area: Rect, buf: &mut Buffer, app: &App) {
     let hints = HINTS.width();
     let room = usize::from(area.width).saturating_sub(HINT_GAP).saturating_sub(hints);
     let title = elided(&segments, room);
-    row(area, buf, area.x, &title, title_style());
+    row(area, buf, area.x, &title, app.theme().style(Element::HeaderTitle));
 
     if title.width().saturating_add(HINT_GAP).saturating_add(hints) <= usize::from(area.width) {
         let x = area.right().saturating_sub(u16::try_from(hints).unwrap_or(area.width));
-        row(area, buf, x, HINTS, hint_style());
+        row(area, buf, x, HINTS, app.theme().style(Element::Hint));
     }
 }
 
@@ -141,7 +122,7 @@ fn progress(area: Rect, buf: &mut Buffer, app: &App) {
         .min(area.width);
     for x in area.x..area.x.saturating_add(filled) {
         if let Some(cell) = buf.cell_mut((x, area.y)) {
-            cell.set_fg(scroll_progress_color());
+            cell.set_fg(app.theme().style(Element::ScrollProgress).fg.unwrap_or_default());
         }
     }
 }
@@ -170,7 +151,10 @@ fn overlay(area: Rect, buf: &mut Buffer, app: &App) {
         height: outer.height,
     };
     Clear.render(box_area, buf);
-    let frame = Block::bordered().title(diagnostics::TITLE).border_style(hint_style()).title_style(title_style());
+    let frame = Block::bordered()
+        .title(diagnostics::TITLE)
+        .border_style(app.theme().style(Element::Hint))
+        .title_style(app.theme().style(Element::HeaderTitle));
     let inner = frame.inner(box_area);
     frame.render(box_area, buf);
 
@@ -196,7 +180,7 @@ fn column(area: Rect, buf: &mut Buffer, app: &App, which: Column, focused: bool)
     if area.width == 0 || area.height == 0 {
         return;
     }
-    row(area, buf, area.x, label(which), title_style());
+    row(area, buf, area.x, label(which), app.theme().style(Element::HeaderTitle));
     let inner = Rect { y: area.y.saturating_add(1), height: area.height.saturating_sub(1), ..area };
     match which {
         Column::Projects => projects_rows(inner, buf, app, focused),
@@ -223,7 +207,7 @@ fn projects_rows(area: Rect, buf: &mut Buffer, app: &App, focused: bool) {
         let y = area.y.saturating_add(u16::try_from(row_index).unwrap_or(u16::MAX));
         let picked = index == pane.selected;
         if picked {
-            buf.set_style(Rect { y, height: 1, ..area }, cursor_line_style());
+            buf.set_style(Rect { y, height: 1, ..area }, app.theme().style(Element::CursorLine));
         }
         let marker = if !project.present {
             GONE
@@ -232,14 +216,14 @@ fn projects_rows(area: Rect, buf: &mut Buffer, app: &App, focused: bool) {
         } else {
             " "
         };
-        row(Rect { y, height: 1, ..area }, buf, area.x, marker, Style::new());
+        row(Rect { y, height: 1, ..area }, buf, area.x, marker, app.theme().style(Element::Status));
 
         let name = project
             .path
             .file_name()
             .map_or_else(|| project.path.display().to_string(), |name| name.to_string_lossy().into_owned());
         let info = format!("{} {}", age::relative(app.ctx.now, timestamp_of(project.last_activity)), project.sessions);
-        text_and_info(Rect { y, height: 1, ..area }, buf, &name, &info);
+        text_and_info(Rect { y, height: 1, ..area }, buf, &name, &info, app);
     }
 }
 
@@ -253,14 +237,14 @@ fn sessions_rows(area: Rect, buf: &mut Buffer, app: &App, focused: bool) {
         let y = area.y.saturating_add(u16::try_from(row_index).unwrap_or(u16::MAX));
         let picked = index == pane.selected;
         if picked {
-            buf.set_style(Rect { y, height: 1, ..area }, cursor_line_style());
+            buf.set_style(Rect { y, height: 1, ..area }, app.theme().style(Element::CursorLine));
         }
         let marker = if picked && focused { CHEVRON } else { " " };
-        row(Rect { y, height: 1, ..area }, buf, area.x, marker, Style::new());
+        row(Rect { y, height: 1, ..area }, buf, area.x, marker, app.theme().style(Element::Status));
 
         let age = session.last_activity.map_or_else(|| "-".to_owned(), |at| age::relative(app.ctx.now, at));
         let info = format!("{age} {}", session.messages);
-        text_and_info(Rect { y, height: 1, ..area }, buf, &session.title, &info);
+        text_and_info(Rect { y, height: 1, ..area }, buf, &session.title, &info, app);
     }
 }
 
@@ -276,7 +260,7 @@ fn conversation_rows(area: Rect, buf: &mut Buffer, app: &App) {
         let row = Rect { y, height: 1, ..area };
         painted(row, buf, line);
         if cursor == Some(index) {
-            buf.set_style(row, cursor_line_style());
+            buf.set_style(row, app.theme().style(Element::CursorLine));
         }
     }
 }
@@ -292,14 +276,14 @@ fn painted(area: Rect, buf: &mut Buffer, line: &RenderedLine) {
     }
 }
 
-fn text_and_info(area: Rect, buf: &mut Buffer, text: &str, info: &str) {
+fn text_and_info(area: Rect, buf: &mut Buffer, text: &str, info: &str, app: &App) {
     let x = area.x.saturating_add(2);
     let info_width = INFO_WIDTH.min(area.width);
     let text_width = area.width.saturating_sub(2).saturating_sub(info_width);
-    row(Rect { width: text_width, ..area }, buf, x, text, Style::new());
+    row(Rect { width: text_width, ..area }, buf, x, text, app.theme().style(Element::Status));
 
     let info_x = area.right().saturating_sub(u16::try_from(info.width()).unwrap_or(info_width).min(info_width));
-    row(area, buf, info_x, info, hint_style());
+    row(area, buf, info_x, info, app.theme().style(Element::Hint));
 }
 
 fn timestamp_of(at: std::time::SystemTime) -> jiff::Timestamp {
@@ -309,7 +293,7 @@ fn timestamp_of(at: std::time::SystemTime) -> jiff::Timestamp {
 fn statusbar(area: Rect, buf: &mut Buffer, app: &App) {
     let area = padded(area);
     if let Some(status) = app.subagent_status() {
-        row(area, buf, area.x, &status, Style::new());
+        row(area, buf, area.x, &status, app.theme().style(Element::Status));
         unreadable(area, buf, app, status.width());
         return;
     }
@@ -318,7 +302,7 @@ fn statusbar(area: Rect, buf: &mut Buffer, app: &App) {
     let plural = if session.messages == 1 { "msg" } else { "msgs" };
     let age = session.last_activity.map_or_else(|| "-".to_owned(), |at| age::relative(app.ctx.now, at));
     let text = format!("{} · {} {plural} · {branch} · {age}", session.id, session.messages);
-    row(area, buf, area.x, &text, Style::new());
+    row(area, buf, area.x, &text, app.theme().style(Element::Status));
     unreadable(area, buf, app, text.width());
 }
 
@@ -329,7 +313,7 @@ fn unreadable(area: Rect, buf: &mut Buffer, app: &App, used: usize) {
     }
     let text = format!("{SEPARATOR}{count} unreadable");
     let x = area.x.saturating_add(u16::try_from(used).unwrap_or(area.width));
-    row(area, buf, x, &text, unreadable_style());
+    row(area, buf, x, &text, app.theme().style(Element::StatusNotice));
 }
 
 #[cfg(test)]
@@ -498,7 +482,8 @@ mod tests {
         let buffer = frame(&app, Size::new(120, 24));
         let status = text_row(&buffer, 23);
         assert!(status.ends_with("· 3 unreadable"), "{status}");
-        let tinted = (0..120).filter(|&x| buffer[(x, 23)].fg == Color::Yellow).count();
+        let notice = app.theme().style(Element::StatusNotice).fg.unwrap_or_default();
+        let tinted = (0..120).filter(|&x| buffer[(x, 23)].fg == notice).count();
         assert!(tinted > 0, "the count is styled apart from the rest of the line");
     }
 
@@ -555,7 +540,8 @@ mod tests {
     fn the_top_rule_is_untinted_with_nothing_loaded() {
         let app = app(Size::new(120, 24));
         let buffer = frame(&app, Size::new(120, 24));
-        let tinted = (0..120).filter(|&x| buffer[(x, 1)].fg == scroll_progress_color()).count();
+        let progress = app.theme().style(Element::ScrollProgress).fg.unwrap_or_default();
+        let tinted = (0..120).filter(|&x| buffer[(x, 1)].fg == progress).count();
         assert_eq!(tinted, 0);
     }
 
@@ -565,7 +551,8 @@ mod tests {
         app.set_projects(app.generation(), Ok((0..50).map(|index| project(&format!("p{index}"), true)).collect()));
         app.apply(Action::Move(Motion::Bottom));
         let buffer = frame(&app, Size::new(120, 10));
-        let tinted = (0..120).filter(|&x| buffer[(x, 1)].fg == scroll_progress_color()).count();
+        let progress = app.theme().style(Element::ScrollProgress).fg.unwrap_or_default();
+        let tinted = (0..120).filter(|&x| buffer[(x, 1)].fg == progress).count();
         assert!(tinted > 0);
     }
 
@@ -646,7 +633,8 @@ mod tests {
         let buffer = frame(&app, Size::new(120, 24));
         let row = text_row(&buffer, 3);
         assert!(!row.starts_with(CHEVRON), "{row}");
-        assert_eq!(buffer[(0, 3)].style().add_modifier, Modifier::REVERSED);
+        let cursor = app.theme().style(Element::CursorLine).bg.unwrap_or_default();
+        assert_eq!(buffer[(0, 3)].bg, cursor);
     }
 
     fn pane_of(app: &App, column: Column) -> Pane {
