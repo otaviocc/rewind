@@ -9,12 +9,12 @@ expression: "rendered(BASELINE, 80)"
 ▎ thinking · 1 line
 ▎ The grid scanner walks one cell row at a time into a reused buffer.
 ▎
-▎ ▸ Bash  {"command":"wc -l src/engine/grid.rs","description":"Count the scanne…
+▎ ▸ Bash  wc -l src/engine/grid.rs                                            ok
 ▎
-▎ ▸ Agent  {"description":"Trace the grid scanner","prompt":"Find every caller …
+▎ ▸ Agent  Explore · Trace the grid scanner                                   ok
 ▎
-▎ ▸ Bash  {"command":"cargo build -v 2>&1","description":"Verbose build"}
+▎ ▸ Bash  cargo build -v 2>&1                                                 ok
 ▎
-▎ ▸ Read  {"file_path":"/Users/fixture/Developer/holodeck/src/engine/grid.rs"}
+▎ ▸ Read  /Users/fixture/Developer/holodeck/src/engine/grid.rs · 212 lines    ok
 ▎
 ▎ Two hundred and twelve lines, and no serde_json anywhere in it.

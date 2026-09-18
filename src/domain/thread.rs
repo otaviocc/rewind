@@ -91,6 +91,7 @@ pub struct SessionState {
 pub struct Conversation {
     nodes: Vec<Node>,
     ids: HashMap<Box<str>, NodeId>,
+    results: HashMap<Box<str>, NodeId>,
     roots: Vec<NodeId>,
     thread: Vec<NodeId>,
     chosen: HashMap<NodeId, NodeId>,
@@ -125,6 +126,10 @@ impl Conversation {
 
     pub fn id_of(&self, uuid: &str) -> Option<NodeId> {
         self.ids.get(uuid).copied()
+    }
+
+    pub fn result_of(&self, tool_use_id: &str) -> Option<&Node> {
+        self.node(*self.results.get(tool_use_id)?)
     }
 }
 
@@ -215,7 +220,23 @@ pub fn build(path: &Path) -> Result<Conversation, ThreadError> {
     order_and_mark_roots(&mut nodes, &mut roots);
     let (thread, chosen) = choose_threads(&nodes, &roots, state.leaf_uuid.as_deref(), &ids);
 
-    Ok(Conversation { nodes, ids, roots, thread, chosen, state, diagnostics })
+    let results = index_results(&nodes);
+
+    Ok(Conversation { nodes, ids, results, roots, thread, chosen, state, diagnostics })
+}
+
+fn index_results(nodes: &[Node]) -> HashMap<Box<str>, NodeId> {
+    let mut results = HashMap::new();
+    for node in nodes {
+        let NodeKind::User(record) = &node.kind else { continue };
+        let Content::Blocks(blocks) = &record.message.content else { continue };
+        for block in blocks {
+            if let Block::ToolResult { tool_use_id: Some(id), .. } = block {
+                results.insert(Box::from(id.as_str()), node.id);
+            }
+        }
+    }
+    results
 }
 
 fn count_unknown(content: &Content) -> usize {

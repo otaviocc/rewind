@@ -10,13 +10,13 @@ expression: "rendered(BASELINE, 40)"
 ▎ The grid scanner walks one cell row at
 ▎ a time into a reused buffer.
 ▎
-▎ ▸ Bash  {"command":"wc -l src/engine/…
+▎ ▸ Bash  wc -l src/engine/grid.rs    ok
 ▎
-▎ ▸ Agent  {"description":"Trace the gr…
+▎ ▸ Agent  Explore · Trace the grid … ok
 ▎
-▎ ▸ Bash  {"command":"cargo build -v 2>…
+▎ ▸ Bash  cargo build -v 2>&1         ok
 ▎
-▎ ▸ Read  {"file_path":"/Users/fixture/…
+▎ ▸ Read  /Users/fixture/Developer/h… ok
 ▎
 ▎ Two hundred and twelve lines, and no
 ▎ serde_json anywhere in it.

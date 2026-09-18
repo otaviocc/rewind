@@ -4,12 +4,14 @@
 
 mod common;
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use common::fixtures;
 use rewind::domain::thread;
+use rewind::domain::tool::{self, Outcome};
 use rewind::render::line::RenderedLine;
 use rewind::render::message::transcript;
 use tempfile::TempDir;
@@ -19,6 +21,20 @@ const BASELINE: &str = "11111111-1111-4111-8111-111111111111";
 const WIDE: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const IMAGES: &str = "33333333-3333-4333-8333-333333333333";
 const MARKDOWN: &str = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+const TOOLS: &str = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+const LEGACY: &str = "44444444-4444-4444-8444-444444444444";
+
+fn collect(dir: &Path, found: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect(&path, found);
+        } else if path.extension().is_some_and(|extension| extension == "jsonl") {
+            found.push(path);
+        }
+    }
+}
 
 fn session_path(session: &str) -> PathBuf {
     fixtures().join("projects").join(HOLODECK).join(format!("{session}.jsonl"))
@@ -70,6 +86,34 @@ fn a_markdown_session_renders_every_element_at_a_readable_column() {
 #[test]
 fn a_markdown_session_renders_every_element_at_a_wide_column() {
     insta::assert_snapshot!("markdown-200", rendered(MARKDOWN, 200));
+}
+
+#[test]
+fn every_tool_call_renders_its_name_its_digest_and_its_outcome() {
+    insta::assert_snapshot!("tools-80", rendered(TOOLS, 80));
+}
+
+#[test]
+fn a_tool_call_stays_one_line_however_narrow_the_column() {
+    insta::assert_snapshot!("tools-32", rendered(TOOLS, 32));
+}
+
+#[test]
+fn every_line_of_the_tool_surface_fits_the_column_it_was_wrapped_for() {
+    let path = session_path(TOOLS);
+    for width in [8, 12, 20, 32, 40, 80, 120, 200] {
+        for line in widths(&path, width) {
+            assert!(line <= width, "a line of {line} columns was wrapped for {width}");
+        }
+    }
+}
+
+#[test]
+fn the_legacy_tool_names_are_digested_the_same_way_their_successors_are() {
+    let text = rendered(LEGACY, 80);
+    for expected in ["▸ Task  Audit the old shapes", "▸ Glob  **/*.jsonl", "▸ TodoWrite  1 of 1 done"] {
+        assert!(text.contains(expected), "{expected:?} missing from:\n{text}");
+    }
 }
 
 #[test]
@@ -134,4 +178,86 @@ fn a_ten_megabyte_session_renders_without_decoding_a_byte_of_base64() {
     assert!(lines.iter().all(|line| line.width() <= 80));
     assert!(!lines.iter().any(|line| line.text().contains("AAAAAAAAAAAAAAAA")), "a base64 payload reached the transcript");
     assert!(lines.iter().any(|line| line.text().contains("[image · png · ")), "the image was not named");
+}
+
+fn calls(conversation: &rewind::domain::thread::Conversation) -> Vec<(String, serde_json::Value, bool)> {
+    let mut found = Vec::new();
+    for &id in conversation.thread() {
+        let Some(node) = conversation.node(id) else { continue };
+        let rewind::domain::thread::NodeKind::Assistant(turn) = &node.kind else { continue };
+        for block in &turn.content {
+            let rewind::domain::block::Block::ToolUse { id, name, input } = block else { continue };
+            let detail = conversation.result_of(id).and_then(|node| Outcome::of(node, id)).and_then(|outcome| outcome.detail);
+            let digest = tool::digest(name, input, detail);
+            found.push((name.clone(), input.clone(), digest.primary.is_some()));
+        }
+    }
+    found
+}
+
+fn has_input(input: &serde_json::Value) -> bool {
+    input.as_object().is_some_and(|fields| !fields.is_empty())
+}
+
+#[test]
+fn every_tool_call_in_the_fixture_tree_that_was_given_an_input_digests_to_something() {
+    let mut names = BTreeSet::new();
+    for session in [BASELINE, IMAGES, LEGACY, TOOLS, WIDE] {
+        let conversation = thread::build(&session_path(session)).expect("a built conversation");
+        for (name, input, digested) in calls(&conversation) {
+            assert!(digested || !has_input(&input), "{name} was given {input} and digested to nothing");
+            names.insert(name);
+        }
+    }
+    assert_eq!(
+        names.iter().map(String::as_str).collect::<Vec<_>>(),
+        [
+            "Agent",
+            "Bash",
+            "Edit",
+            "Glob",
+            "Grep",
+            "Read",
+            "Replicator",
+            "Task",
+            "TodoWrite",
+            "WebFetch",
+            "Write",
+            "mcp__jeffries__beam_status"
+        ],
+        "the fixture tree stopped covering a tool shape"
+    );
+}
+
+#[test]
+#[ignore = "reads the developer's real ~/.claude, not the fixture tree"]
+fn every_tool_name_in_the_real_store_digests_to_something_when_it_was_given_an_input() {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return };
+    let projects = home.join(".claude").join("projects");
+    if !projects.is_dir() {
+        return;
+    }
+
+    let mut transcripts = Vec::new();
+    collect(&projects, &mut transcripts);
+
+    let mut digested: BTreeMap<String, bool> = BTreeMap::new();
+    let mut inputless: BTreeSet<String> = BTreeSet::new();
+    for path in transcripts {
+        let Ok(conversation) = thread::build(&path) else { continue };
+        for (name, input, found) in calls(&conversation) {
+            if has_input(&input) {
+                let entry = digested.entry(name).or_default();
+                *entry = *entry || found;
+            } else {
+                inputless.insert(name);
+            }
+        }
+    }
+
+    assert!(!digested.is_empty(), "no tool call was read out of the real store at all");
+    println!("{} tool names with an input, {} without", digested.len(), inputless.len());
+    println!("no input at all, so nothing to summarise: {inputless:?}");
+    let blank: Vec<&String> = digested.iter().filter(|(_, found)| !**found).map(|(name, _)| name).collect();
+    assert!(blank.is_empty(), "these tool names were given an input and digested to nothing: {blank:#?}");
 }

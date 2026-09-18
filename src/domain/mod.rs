@@ -9,3 +9,4 @@ pub mod record;
 pub mod scan;
 pub mod session;
 pub mod thread;
+pub mod tool;

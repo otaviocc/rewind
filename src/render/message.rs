@@ -1,13 +1,13 @@
 //! One conversation becomes styled lines: a role rail, one header per run of replies, prose, and
-//! a one-line stand-in for everything M2 will make expandable.
+//! one dense line per tool call.
 
 use ratatui::style::{Color, Modifier, Style};
-use serde_json::Value;
 
 use crate::domain::block::{Block, Content, ImageSource};
 use crate::domain::thread::{Conversation, NodeKind};
 use crate::render::line::{RenderedLine, StyledSpan, truncate};
 use crate::render::prose;
+use crate::render::tool;
 use unicode_width::UnicodeWidthStr;
 
 const RAIL: &str = "▎ ";
@@ -15,7 +15,6 @@ const RAIL_BLANK: &str = "▎";
 const HUMAN_LABEL: &str = "you";
 const ASSISTANT_LABEL: &str = "claude";
 const MODEL_PREFIX: &str = "claude-";
-const TOOL_MARKER: &str = "▸ ";
 const SEPARATOR: &str = " · ";
 const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
 const UNIT: usize = 1024;
@@ -38,6 +37,14 @@ const fn human_rail_style() -> Style {
 
 const fn assistant_rail_style() -> Style {
     Style::new().add_modifier(Modifier::DIM)
+}
+
+const fn error_style() -> Style {
+    Style::new().fg(Color::Red)
+}
+
+const fn tool_styles() -> tool::Styles {
+    tool::Styles { glyph: body_style(), name: label_style(), digest: body_style(), muted: dim_style(), error: error_style() }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,12 +77,12 @@ pub fn transcript(conversation: &Conversation, width: usize) -> Vec<RenderedLine
         match &node.kind {
             NodeKind::User(record) if record.is_human_turn() && !record.is_compact_summary => {
                 let mut lines = vec![header(HUMAN_LABEL, None, inner)];
-                content(&record.message.content, inner, &mut lines);
+                content(conversation, &record.message.content, inner, &mut lines);
                 groups.push(Group { rail: Rail::Human, model: None, lines });
             }
             NodeKind::Assistant(turn) => {
                 let mut body = Vec::new();
-                blocks(&turn.content, inner, &mut body);
+                blocks(conversation, &turn.content, inner, &mut body);
                 if body.is_empty() {
                     continue;
                 }
@@ -132,19 +139,22 @@ fn header(label: &str, detail: Option<&str>, width: usize) -> RenderedLine {
     line
 }
 
-fn content(content: &Content, width: usize, lines: &mut Vec<RenderedLine>) {
+fn content(conversation: &Conversation, content: &Content, width: usize, lines: &mut Vec<RenderedLine>) {
     match content {
         Content::Text(text) => lines.extend(markdown(text, width)),
-        Content::Blocks(blocks_of) => blocks(blocks_of, width, lines),
+        Content::Blocks(blocks_of) => blocks(conversation, blocks_of, width, lines),
     }
 }
 
-fn blocks(blocks: &[Block], width: usize, lines: &mut Vec<RenderedLine>) {
+fn blocks(conversation: &Conversation, blocks: &[Block], width: usize, lines: &mut Vec<RenderedLine>) {
+    let styles = tool_styles();
     for block in blocks {
         match block {
             Block::Text { text } => lines.extend(markdown(text, width)),
             Block::Thinking { thinking } => lines.push(one(&thinking_summary(thinking), dim_style(), width)),
-            Block::ToolUse { name, input, .. } => lines.push(one(&tool_summary(name, input), body_style(), width)),
+            Block::ToolUse { id, name, input } => {
+                lines.push(tool::collapsed(conversation, id, name, input, width, &styles));
+            }
             Block::Image { source } => lines.push(one(&image_summary(source), dim_style(), width)),
             Block::ToolResult { .. } | Block::Other => {}
         }
@@ -165,16 +175,6 @@ fn thinking_summary(thinking: &str) -> String {
     let count = thinking.lines().filter(|line| !line.trim().is_empty()).count().max(1);
     let plural = if count == 1 { "line" } else { "lines" };
     format!("thinking{SEPARATOR}{count} {plural}")
-}
-
-fn tool_summary(name: &str, input: &Value) -> String {
-    let summary = match input {
-        Value::Null => String::new(),
-        Value::Object(fields) if fields.is_empty() => String::new(),
-        other => serde_json::to_string(other).unwrap_or_default(),
-    };
-    let summary = summary.replace(['\n', '\r', '\t'], " ");
-    if summary.is_empty() { format!("{TOOL_MARKER}{name}") } else { format!("{TOOL_MARKER}{name}  {summary}") }
 }
 
 fn image_summary(source: &ImageSource) -> String {
@@ -405,11 +405,36 @@ mod tests {
     }
 
     #[test]
-    fn a_tool_call_is_one_line_of_its_name_and_a_summary() {
+    fn a_tool_call_is_one_line_of_its_name_its_digest_and_its_outcome() {
         let block = r#"[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls -la"}}]"#;
+        let result = r#"{"type":"user","uuid":"u2","parentUuid":"a1","sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:03Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"total 0","is_error":false}]},"toolUseResult":{"stdout":"total 0\n","interrupted":false}}"#;
+        let lines = rendered(&[HUMAN, &assistant("a1", "u1", block), result]);
+        let call = lines.iter().find(|line| line.contains("▸ Bash")).expect("a tool call line");
+        assert_eq!(call, "▎ ▸ Bash  ls -la                                          ok");
+    }
+
+    #[test]
+    fn a_call_whose_result_never_arrived_reads_as_pending_rather_than_as_failed() {
+        let block = r#"[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cargo build"}}]"#;
         let lines = rendered(&[HUMAN, &assistant("a1", "u1", block)]);
         let call = lines.iter().find(|line| line.contains("▸ Bash")).expect("a tool call line");
-        assert_eq!(call, r#"▎ ▸ Bash  {"command":"ls -la"}"#);
+        assert!(call.ends_with("pending"), "{call:?}");
+    }
+
+    #[test]
+    fn the_result_record_itself_is_still_not_a_turn_so_a_run_is_not_broken_by_one() {
+        let first = r#"[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]"#;
+        let result = r#"{"type":"user","uuid":"u2","parentUuid":"a1","sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:03Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok","is_error":false}]},"toolUseResult":{"stdout":"ok\n"}}"#;
+        let second = r#"[{"type":"text","text":"Done."}]"#;
+        let lines = rendered(&[HUMAN, &assistant("a1", "u1", first), result, &assistant("a2", "u2", second)]);
+        assert_eq!(lines.iter().filter(|line| line.contains("claude")).count(), 1, "one header for the run: {lines:?}");
+        assert!(!lines.iter().any(|line| line.contains("total 0")), "the result node is plumbing, not a turn");
+    }
+
+    #[test]
+    fn the_error_style_names_a_foreground_and_never_a_background() {
+        assert!(error_style().fg.is_some(), "an error has to be findable");
+        assert!(error_style().bg.is_none(), "an error colour may never sit on the background");
     }
 
     #[test]
@@ -419,6 +444,10 @@ mod tests {
         let calls = lines.iter().filter(|line| line.contains("▸ ")).count();
         assert_eq!(calls, 1);
         assert!(lines.iter().all(|line| line.chars().count() <= 60), "{lines:?}");
+        assert!(
+            lines.iter().any(|line| line.contains("first second third")),
+            "the newlines flattened into the one line: {lines:?}"
+        );
     }
 
     #[test]

@@ -12,13 +12,13 @@ expression: "rendered(BASELINE, 32)"
 ▎ cell row at a time into a
 ▎ reused buffer.
 ▎
-▎ ▸ Bash  {"command":"wc -l src…
+▎ ▸ Bash  wc -l src/engine/g… ok
 ▎
-▎ ▸ Agent  {"description":"Trac…
+▎ ▸ Agent  Explore · Trace t… ok
 ▎
-▎ ▸ Bash  {"command":"cargo bui…
+▎ ▸ Bash  cargo build -v 2>&1 ok
 ▎
-▎ ▸ Read  {"file_path":"/Users/…
+▎ ▸ Read  /Users/fixture/Dev… ok
 ▎
 ▎ Two hundred and twelve lines,
 ▎ and no serde_json anywhere in
