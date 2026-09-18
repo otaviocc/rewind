@@ -6,4 +6,5 @@ pub mod domain;
 pub mod markdown;
 pub mod paths;
 pub mod render;
+pub mod theme;
 pub mod ui;
