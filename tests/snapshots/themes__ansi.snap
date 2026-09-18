@@ -1,0 +1,51 @@
+---
+source: tests/themes.rs
+expression: "table(& built_in(\"ansi\"))"
+---
+syntax_theme  -
+
+body                  fg reset         bg -
+muted                 fg darkgray      bg -
+label                 fg -             bg -             bold
+human_gutter          fg cyan          bg -             bold
+assistant_gutter      fg magenta       bg -             dim
+tool_name             fg -             bg -             bold
+tool_summary          fg -             bg -
+tool_ok               fg darkgray      bg -
+tool_error            fg red           bg -
+thinking              fg darkgray      bg -
+diff_added            fg green         bg -
+diff_removed          fg red           bg -
+diff_context          fg -             bg -
+subagent              fg -             bg -             bold
+injection             fg darkgray      bg -
+branch_marker         fg darkgray      bg -
+compact_divider       fg darkgray      bg -
+project_missing       fg darkgray      bg -
+session_live          fg green         bg -
+heading               fg -             bg -             bold
+strong                fg -             bg -             bold
+emphasis              fg -             bg -             italic
+strikethrough         fg -             bg -             crossed_out
+inline_code           fg cyan          bg -
+code_block            fg -             bg -
+code_block_lang       fg darkgray      bg -
+link                  fg blue          bg -             underline
+quote                 fg gray          bg -
+quote_gutter          fg darkgray      bg -
+list_bullet           fg darkgray      bg -
+table_header          fg -             bg -             bold
+table_border          fg darkgray      bg -
+rule                  fg darkgray      bg -
+html                  fg darkgray      bg -
+header_title          fg -             bg -             bold
+status                fg -             bg -
+status_notice         fg yellow        bg -
+status_error          fg red           bg -
+cursor_line           fg -             bg darkgray
+search_match          fg black         bg yellow
+search_current        fg black         bg magenta       bold
+selection             fg white         bg blue
+help_window           fg reset         bg reset
+scroll_progress       fg cyan          bg -
+hint                  fg darkgray      bg -

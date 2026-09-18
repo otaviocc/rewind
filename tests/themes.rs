@@ -9,6 +9,9 @@ use std::path::Path;
 use std::process::Output;
 
 use common::{fixtures, rewind};
+use ratatui::style::{Color, Modifier, Style};
+use rewind::theme::loader::{self, BUILT_INS, DEFAULT, IMPLICIT_BASE};
+use rewind::theme::{Element, Theme};
 use tempfile::TempDir;
 
 fn config(themes: &[(&str, &str)]) -> TempDir {
@@ -106,3 +109,88 @@ fn a_theme_file_is_read_and_never_written() {
     assert_eq!(fs::read(&path).expect("the theme file"), before, "the theme file was rewritten");
     assert_eq!(fs::metadata(&path).expect("the theme file").modified().expect("a modification time"), modified);
 }
+
+fn swatch(color: Color) -> String {
+    match color {
+        Color::Reset => String::from("reset"),
+        Color::Rgb(red, green, blue) => format!("#{red:02x}{green:02x}{blue:02x}"),
+        Color::Indexed(index) => format!("indexed {index}"),
+        named => format!("{named:?}").to_lowercase(),
+    }
+}
+
+fn modifiers(style: Style) -> String {
+    const NAMED: [(Modifier, &str); 6] = [
+        (Modifier::BOLD, "bold"),
+        (Modifier::DIM, "dim"),
+        (Modifier::ITALIC, "italic"),
+        (Modifier::UNDERLINED, "underline"),
+        (Modifier::REVERSED, "reversed"),
+        (Modifier::CROSSED_OUT, "crossed_out"),
+    ];
+    NAMED
+        .iter()
+        .filter(|(modifier, _)| style.add_modifier.contains(*modifier))
+        .map(|(_, name)| *name)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn table(theme: &Theme) -> String {
+    let mut rows = vec![format!("syntax_theme  {}", theme.syntax_theme.as_deref().unwrap_or("-")), String::new()];
+    for element in Element::ALL {
+        let style = theme.style(element);
+        let fg = style.fg.map_or_else(|| String::from("-"), swatch);
+        let bg = style.bg.map_or_else(|| String::from("-"), swatch);
+        rows.push(format!("{:<20}  fg {fg:<12}  bg {bg:<12}  {}", element.key(), modifiers(style)).trim_end().to_owned());
+    }
+    rows.join("\n")
+}
+
+fn built_in(name: &str) -> Theme {
+    let loaded = loader::load(None, Some(name), None).expect("a built-in theme loads with no config directory");
+    assert!(loaded.warnings.is_empty(), "{name} warned: {:?}", loaded.warnings);
+    loaded.theme
+}
+
+#[test]
+fn the_built_ins_are_the_default_then_ansi_then_the_rest_alphabetically() {
+    let names: Vec<&str> = BUILT_INS.iter().map(|(name, _)| *name).collect();
+    assert_eq!(names.first(), Some(&DEFAULT), "{names:?}");
+    assert_eq!(names.get(1), Some(&IMPLICIT_BASE), "{names:?}");
+
+    let rest = names.get(2..).expect("more than two built-in themes");
+    let mut sorted = rest.to_vec();
+    sorted.sort_unstable();
+    assert_eq!(rest, sorted.as_slice(), "the built-ins after ansi are not alphabetical");
+}
+
+#[test]
+fn every_built_in_resolves_to_a_distinct_palette() {
+    let palettes: Vec<String> = BUILT_INS.iter().map(|(name, _)| format!("{:?}", built_in(name).palette)).collect();
+    let distinct: std::collections::BTreeSet<&String> = palettes.iter().collect();
+    assert_eq!(distinct.len(), palettes.len(), "two built-in themes resolve to the same palette");
+}
+
+macro_rules! theme_snapshot {
+    ($test:ident, $name:literal) => {
+        #[test]
+        fn $test() {
+            insta::assert_snapshot!($name, table(&built_in($name)));
+        }
+    };
+}
+
+theme_snapshot!(the_spool_theme_resolves_as_it_reads, "spool");
+theme_snapshot!(the_ansi_theme_resolves_as_it_reads, "ansi");
+theme_snapshot!(the_catppuccin_latte_theme_resolves_as_it_reads, "catppuccin-latte");
+theme_snapshot!(the_catppuccin_mocha_theme_resolves_as_it_reads, "catppuccin-mocha");
+theme_snapshot!(the_gruvbox_dark_theme_resolves_as_it_reads, "gruvbox-dark");
+theme_snapshot!(the_gruvbox_light_theme_resolves_as_it_reads, "gruvbox-light");
+theme_snapshot!(the_kanagawa_dragon_theme_resolves_as_it_reads, "kanagawa-dragon");
+theme_snapshot!(the_nord_theme_resolves_as_it_reads, "nord");
+theme_snapshot!(the_solarized_dark_theme_resolves_as_it_reads, "solarized-dark");
+theme_snapshot!(the_solarized_light_theme_resolves_as_it_reads, "solarized-light");
+theme_snapshot!(the_tokyo_night_theme_resolves_as_it_reads, "tokyo-night");
+theme_snapshot!(the_tokyo_night_day_theme_resolves_as_it_reads, "tokyo-night-day");
+theme_snapshot!(the_vesper_theme_resolves_as_it_reads, "vesper");

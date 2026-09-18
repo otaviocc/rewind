@@ -1,0 +1,51 @@
+---
+source: tests/themes.rs
+expression: "table(& built_in(\"spool\"))"
+---
+syntax_theme  base16-ocean.dark
+
+body                  fg reset         bg -
+muted                 fg #4f5561       bg -
+label                 fg -             bg -             bold
+human_gutter          fg #d9a05b       bg -             bold
+assistant_gutter      fg #9fc7c0       bg -             dim
+tool_name             fg -             bg -             bold
+tool_summary          fg -             bg -
+tool_ok               fg #4f5561       bg -
+tool_error            fg #e08a7e       bg -
+thinking              fg #4f5561       bg -
+diff_added            fg #a3c586       bg -
+diff_removed          fg #e08a7e       bg -
+diff_context          fg -             bg -
+subagent              fg -             bg -             bold
+injection             fg #4f5561       bg -
+branch_marker         fg #4f5561       bg -
+compact_divider       fg #4f5561       bg -
+project_missing       fg #4f5561       bg -
+session_live          fg #a3c586       bg -
+heading               fg -             bg -             bold
+strong                fg -             bg -             bold
+emphasis              fg -             bg -             italic
+strikethrough         fg -             bg -             crossed_out
+inline_code           fg #d9a05b       bg #22262e
+code_block            fg #c7ccd4       bg #22262e
+code_block_lang       fg #4f5561       bg #22262e
+link                  fg #82a9d8       bg -             underline
+quote                 fg #949cab       bg -
+quote_gutter          fg #4f5561       bg -
+list_bullet           fg #4f5561       bg -
+table_header          fg -             bg -             bold
+table_border          fg #4f5561       bg -
+rule                  fg #4f5561       bg -
+html                  fg #4f5561       bg -
+header_title          fg -             bg -             bold
+status                fg -             bg -
+status_notice         fg #dcb173       bg -
+status_error          fg #e08a7e       bg -
+cursor_line           fg -             bg #2e3440
+search_match          fg black         bg #dcb173
+search_current        fg black         bg #9fc7c0       bold
+selection             fg #e8ecf2       bg #3a4152
+help_window           fg reset         bg reset
+scroll_progress       fg #d9a05b       bg -
+hint                  fg #4f5561       bg -

@@ -1,0 +1,51 @@
+---
+source: tests/themes.rs
+expression: "table(& built_in(\"kanagawa-dragon\"))"
+---
+syntax_theme  base16-eighties.dark
+
+body                  fg #c5c9c5       bg -
+muted                 fg #625e5a       bg -
+label                 fg -             bg -             bold
+human_gutter          fg #c4b28a       bg -             bold
+assistant_gutter      fg #8992a7       bg -             dim
+tool_name             fg -             bg -             bold
+tool_summary          fg -             bg -
+tool_ok               fg #625e5a       bg -
+tool_error            fg #c34043       bg -
+thinking              fg #625e5a       bg -
+diff_added            fg #76946a       bg -
+diff_removed          fg #c34043       bg -
+diff_context          fg -             bg -
+subagent              fg -             bg -             bold
+injection             fg #625e5a       bg -
+branch_marker         fg #625e5a       bg -
+compact_divider       fg #625e5a       bg -
+project_missing       fg #625e5a       bg -
+session_live          fg #76946a       bg -
+heading               fg -             bg -             bold
+strong                fg -             bg -             bold
+emphasis              fg -             bg -             italic
+strikethrough         fg -             bg -             crossed_out
+inline_code           fg #c4b28a       bg #282727
+code_block            fg -             bg #282727
+code_block_lang       fg #625e5a       bg #282727
+link                  fg #8ba4b0       bg -             underline
+quote                 fg #737c73       bg -
+quote_gutter          fg #625e5a       bg -
+list_bullet           fg #625e5a       bg -
+table_header          fg -             bg -             bold
+table_border          fg #625e5a       bg -
+rule                  fg #625e5a       bg -
+html                  fg #625e5a       bg -
+header_title          fg -             bg -             bold
+status                fg -             bg -
+status_notice         fg #dca561       bg -
+status_error          fg #c34043       bg -
+cursor_line           fg -             bg #393836
+search_match          fg black         bg #dca561
+search_current        fg black         bg #8992a7       bold
+selection             fg #c5c9c5       bg #223249
+help_window           fg #c5c9c5       bg #181616
+scroll_progress       fg #c4b28a       bg -
+hint                  fg #625e5a       bg -

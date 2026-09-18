@@ -1,0 +1,51 @@
+---
+source: tests/themes.rs
+expression: "table(& built_in(\"solarized-light\"))"
+---
+syntax_theme  Solarized (light)
+
+body                  fg #657b83       bg -
+muted                 fg #93a1a1       bg -
+label                 fg -             bg -             bold
+human_gutter          fg #268bd2       bg -             bold
+assistant_gutter      fg #d33682       bg -             dim
+tool_name             fg -             bg -             bold
+tool_summary          fg -             bg -
+tool_ok               fg #93a1a1       bg -
+tool_error            fg #dc322f       bg -
+thinking              fg #93a1a1       bg -
+diff_added            fg #859900       bg -
+diff_removed          fg #dc322f       bg -
+diff_context          fg -             bg -
+subagent              fg -             bg -             bold
+injection             fg #93a1a1       bg -
+branch_marker         fg #93a1a1       bg -
+compact_divider       fg #93a1a1       bg -
+project_missing       fg #93a1a1       bg -
+session_live          fg #859900       bg -
+heading               fg -             bg -             bold
+strong                fg -             bg -             bold
+emphasis              fg -             bg -             italic
+strikethrough         fg -             bg -             crossed_out
+inline_code           fg #268bd2       bg #eee8d5
+code_block            fg -             bg #eee8d5
+code_block_lang       fg #93a1a1       bg #eee8d5
+link                  fg #6c71c4       bg -             underline
+quote                 fg #839496       bg -
+quote_gutter          fg #93a1a1       bg -
+list_bullet           fg #93a1a1       bg -
+table_header          fg -             bg -             bold
+table_border          fg #93a1a1       bg -
+rule                  fg #93a1a1       bg -
+html                  fg #93a1a1       bg -
+header_title          fg -             bg -             bold
+status                fg -             bg -
+status_notice         fg #b58900       bg -
+status_error          fg #dc322f       bg -
+cursor_line           fg -             bg #e3ddca
+search_match          fg black         bg #b58900
+search_current        fg black         bg #d33682       bold
+selection             fg #002b36       bg #93a1a1
+help_window           fg #657b83       bg #fdf6e3
+scroll_progress       fg #268bd2       bg -
+hint                  fg #93a1a1       bg -

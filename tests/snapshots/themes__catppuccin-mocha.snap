@@ -1,0 +1,51 @@
+---
+source: tests/themes.rs
+expression: "table(& built_in(\"catppuccin-mocha\"))"
+---
+syntax_theme  base16-mocha.dark
+
+body                  fg #cdd6f4       bg -
+muted                 fg #45475a       bg -
+label                 fg -             bg -             bold
+human_gutter          fg #cba6f7       bg -             bold
+assistant_gutter      fg #f5c2e7       bg -             dim
+tool_name             fg -             bg -             bold
+tool_summary          fg -             bg -
+tool_ok               fg #45475a       bg -
+tool_error            fg #f38ba8       bg -
+thinking              fg #45475a       bg -
+diff_added            fg #a6e3a1       bg -
+diff_removed          fg #f38ba8       bg -
+diff_context          fg -             bg -
+subagent              fg -             bg -             bold
+injection             fg #45475a       bg -
+branch_marker         fg #45475a       bg -
+compact_divider       fg #45475a       bg -
+project_missing       fg #45475a       bg -
+session_live          fg #a6e3a1       bg -
+heading               fg -             bg -             bold
+strong                fg -             bg -             bold
+emphasis              fg -             bg -             italic
+strikethrough         fg -             bg -             crossed_out
+inline_code           fg #cba6f7       bg #313244
+code_block            fg -             bg #313244
+code_block_lang       fg #45475a       bg #313244
+link                  fg #89b4fa       bg -             underline
+quote                 fg #7f849c       bg -
+quote_gutter          fg #45475a       bg -
+list_bullet           fg #45475a       bg -
+table_header          fg -             bg -             bold
+table_border          fg #45475a       bg -
+rule                  fg #45475a       bg -
+html                  fg #45475a       bg -
+header_title          fg -             bg -             bold
+status                fg -             bg -
+status_notice         fg #f9e2af       bg -
+status_error          fg #f38ba8       bg -
+cursor_line           fg -             bg #45475a
+search_match          fg black         bg #f9e2af
+search_current        fg black         bg #f5c2e7       bold
+selection             fg #cdd6f4       bg #585b70
+help_window           fg #cdd6f4       bg #1e1e2e
+scroll_progress       fg #cba6f7       bg -
+hint                  fg #45475a       bg -

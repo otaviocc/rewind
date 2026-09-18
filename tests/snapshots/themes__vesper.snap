@@ -1,0 +1,51 @@
+---
+source: tests/themes.rs
+expression: "table(& built_in(\"vesper\"))"
+---
+syntax_theme  base16-ocean.dark
+
+body                  fg #ffffff       bg -
+muted                 fg #343434       bg -
+label                 fg -             bg -             bold
+human_gutter          fg #ffc799       bg -             bold
+assistant_gutter      fg #99ffe4       bg -             dim
+tool_name             fg -             bg -             bold
+tool_summary          fg -             bg -
+tool_ok               fg #343434       bg -
+tool_error            fg #ff8080       bg -
+thinking              fg #343434       bg -
+diff_added            fg #99ffe4       bg -
+diff_removed          fg #ff8080       bg -
+diff_context          fg -             bg -
+subagent              fg -             bg -             bold
+injection             fg #343434       bg -
+branch_marker         fg #343434       bg -
+compact_divider       fg #343434       bg -
+project_missing       fg #343434       bg -
+session_live          fg #99ffe4       bg -
+heading               fg -             bg -             bold
+strong                fg -             bg -             bold
+emphasis              fg -             bg -             italic
+strikethrough         fg -             bg -             crossed_out
+inline_code           fg #ffc799       bg #161616
+code_block            fg -             bg #161616
+code_block_lang       fg #343434       bg #161616
+link                  fg #ffcfa8       bg -             underline
+quote                 fg #8b8b8b       bg -
+quote_gutter          fg #343434       bg -
+list_bullet           fg #343434       bg -
+table_header          fg -             bg -             bold
+table_border          fg #343434       bg -
+rule                  fg #343434       bg -
+html                  fg #343434       bg -
+header_title          fg -             bg -             bold
+status                fg -             bg -
+status_notice         fg #ffc799       bg -
+status_error          fg #ff8080       bg -
+cursor_line           fg -             bg #232323
+search_match          fg black         bg #ffc799
+search_current        fg black         bg #99ffe4       bold
+selection             fg #ffffff       bg #343434
+help_window           fg #ffffff       bg #101010
+scroll_progress       fg #ffc799       bg -
+hint                  fg #343434       bg -

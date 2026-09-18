@@ -1,0 +1,51 @@
+---
+source: tests/themes.rs
+expression: "table(& built_in(\"tokyo-night-day\"))"
+---
+syntax_theme  base16-ocean.light
+
+body                  fg #3760bf       bg -
+muted                 fg #a1a6c5       bg -
+label                 fg -             bg -             bold
+human_gutter          fg #2e7de9       bg -             bold
+assistant_gutter      fg #b15c00       bg -             dim
+tool_name             fg -             bg -             bold
+tool_summary          fg -             bg -
+tool_ok               fg #a1a6c5       bg -
+tool_error            fg #f52a65       bg -
+thinking              fg #a1a6c5       bg -
+diff_added            fg #587539       bg -
+diff_removed          fg #f52a65       bg -
+diff_context          fg -             bg -
+subagent              fg -             bg -             bold
+injection             fg #a1a6c5       bg -
+branch_marker         fg #a1a6c5       bg -
+compact_divider       fg #a1a6c5       bg -
+project_missing       fg #a1a6c5       bg -
+session_live          fg #587539       bg -
+heading               fg -             bg -             bold
+strong                fg -             bg -             bold
+emphasis              fg -             bg -             italic
+strikethrough         fg -             bg -             crossed_out
+inline_code           fg #2e7de9       bg #d4d6e4
+code_block            fg -             bg #d4d6e4
+code_block_lang       fg #a1a6c5       bg #d4d6e4
+link                  fg #9854f1       bg -             underline
+quote                 fg #848cb5       bg -
+quote_gutter          fg #a1a6c5       bg -
+list_bullet           fg #a1a6c5       bg -
+table_header          fg -             bg -             bold
+table_border          fg #a1a6c5       bg -
+rule                  fg #a1a6c5       bg -
+html                  fg #a1a6c5       bg -
+header_title          fg -             bg -             bold
+status                fg -             bg -
+status_notice         fg #8c6c3e       bg -
+status_error          fg #f52a65       bg -
+cursor_line           fg -             bg #c4c8da
+search_match          fg black         bg #8c6c3e
+search_current        fg black         bg #b15c00       bold
+selection             fg #3760bf       bg #b6bfe2
+help_window           fg #3760bf       bg #e1e2e7
+scroll_progress       fg #2e7de9       bg -
+hint                  fg #a1a6c5       bg -
