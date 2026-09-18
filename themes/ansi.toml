@@ -16,3 +16,8 @@
 #     [palette]
 #     accent = "#89b4fa"
 #     notice = "#f5c2e7"
+#
+# The one key here is the name, which is identity rather than appearance: it is
+# what `--theme ansi` and `base = "ansi"` resolve to. No `syntax_theme` either,
+# so code falls back to the same one an unthemed run would use.
+name = "ansi"

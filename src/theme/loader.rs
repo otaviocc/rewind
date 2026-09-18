@@ -18,8 +18,32 @@ use crate::theme::palette::PaletteFile;
 use crate::theme::{Element, Palette, Theme};
 
 const ANSI: &str = include_str!("../../themes/ansi.toml");
+const CATPPUCCIN_LATTE: &str = include_str!("../../themes/catppuccin-latte.toml");
+const CATPPUCCIN_MOCHA: &str = include_str!("../../themes/catppuccin-mocha.toml");
+const GRUVBOX_DARK: &str = include_str!("../../themes/gruvbox-dark.toml");
+const GRUVBOX_LIGHT: &str = include_str!("../../themes/gruvbox-light.toml");
+const KANAGAWA_DRAGON: &str = include_str!("../../themes/kanagawa-dragon.toml");
+const NORD: &str = include_str!("../../themes/nord.toml");
+const SOLARIZED_DARK: &str = include_str!("../../themes/solarized-dark.toml");
+const SOLARIZED_LIGHT: &str = include_str!("../../themes/solarized-light.toml");
+const TOKYO_NIGHT: &str = include_str!("../../themes/tokyo-night.toml");
+const TOKYO_NIGHT_DAY: &str = include_str!("../../themes/tokyo-night-day.toml");
+const VESPER: &str = include_str!("../../themes/vesper.toml");
 
-pub const BUILT_INS: &[(&str, &str)] = &[("ansi", ANSI)];
+pub const BUILT_INS: &[(&str, &str)] = &[
+    ("ansi", ANSI),
+    ("catppuccin-latte", CATPPUCCIN_LATTE),
+    ("catppuccin-mocha", CATPPUCCIN_MOCHA),
+    ("gruvbox-dark", GRUVBOX_DARK),
+    ("gruvbox-light", GRUVBOX_LIGHT),
+    ("kanagawa-dragon", KANAGAWA_DRAGON),
+    ("nord", NORD),
+    ("solarized-dark", SOLARIZED_DARK),
+    ("solarized-light", SOLARIZED_LIGHT),
+    ("tokyo-night", TOKYO_NIGHT),
+    ("tokyo-night-day", TOKYO_NIGHT_DAY),
+    ("vesper", VESPER),
+];
 
 pub const IMPLICIT_BASE: &str = "ansi";
 
@@ -682,7 +706,7 @@ mod tests {
     fn the_listing_puts_the_built_ins_first_and_marks_a_user_theme_that_shadows_one() {
         let dir = config(&[("mine", ""), ("ansi", ""), ("other", "")]);
         let listing = list(Some(dir.path()));
-        assert_eq!(listing.built_in, vec!["ansi"]);
+        assert_eq!(listing.built_in.first(), Some(&"ansi"), "{:?}", listing.built_in);
         assert_eq!(listing.user, vec!["ansi", "mine", "other"], "the user themes were not sorted");
 
         let printed = listing.to_string();
@@ -695,7 +719,7 @@ mod tests {
     #[test]
     fn the_listing_says_nothing_about_user_themes_when_there_is_no_config_directory() {
         let listing = list(None);
-        assert_eq!(listing.built_in, vec!["ansi"]);
+        assert_eq!(listing.built_in.len(), BUILT_INS.len());
         assert!(listing.user.is_empty());
         assert!(!listing.to_string().contains("user"), "{listing:?}");
     }
@@ -706,6 +730,44 @@ mod tests {
         let listing = list(Some(dir.path()));
         assert!(listing.user.is_empty());
         assert!(listing.to_string().contains("none"), "{listing:?}");
+    }
+
+    #[test]
+    fn every_built_in_parses_and_resolves_and_says_nothing_unreadable() {
+        for (name, text) in BUILT_INS {
+            let origin = format!("built-in theme {name}");
+            let file = ThemeFile::parse(text, &origin).unwrap_or_else(|error| panic!("{name} does not parse: {error}"));
+            assert!(file.warnings(&origin).is_empty(), "{name} has a key nothing reads: {:?}", file.warnings(&origin));
+            assert_eq!(file.base, None, "{name} names a base, so the built-ins are no longer a flat set");
+            resolve(file, name).unwrap_or_else(|error| panic!("{name} does not resolve: {error}"));
+        }
+    }
+
+    #[test]
+    fn every_built_in_names_a_syntax_theme_that_syntect_actually_ships() {
+        const BUNDLED: [&str; 7] = [
+            "base16-ocean.dark",
+            "base16-eighties.dark",
+            "base16-mocha.dark",
+            "base16-ocean.light",
+            "InspiredGitHub",
+            "Solarized (dark)",
+            "Solarized (light)",
+        ];
+        for (name, text) in BUILT_INS {
+            let theme = resolve(ThemeFile::parse(text, name).expect("a built-in parses"), name).expect("a built-in resolves");
+            if let Some(syntax) = &theme.syntax_theme {
+                assert!(BUNDLED.contains(&syntax.as_str()), "{name} names {syntax:?}, which syntect does not bundle");
+            }
+        }
+    }
+
+    #[test]
+    fn every_built_in_is_named_after_the_file_it_came_from() {
+        for (name, text) in BUILT_INS {
+            let theme = resolve(ThemeFile::parse(text, name).expect("a built-in parses"), "wrong").expect("a built-in resolves");
+            assert_eq!(&theme.name, name, "{name} does not call itself by the name it is registered under");
+        }
     }
 
     #[test]
