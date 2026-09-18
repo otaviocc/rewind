@@ -68,6 +68,82 @@ Mouse wheel scrolls whichever column is under the pointer, not whichever has foc
 a row selects it, clicking a collapsed tool call expands it, and clicking a subagent call
 enters it. `--no-mouse` turns capture off.
 
+## Themes
+
+`rewind` reads one file. On every platform, including macOS, it lives at
+`$XDG_CONFIG_HOME/rewind/theme.toml`, or `~/.config/rewind/theme.toml` if that variable is
+unset. Named themes go beside it in `themes/<name>.toml` and are selected with `--theme`.
+
+Everything is optional. A theme states what it wants moved and inherits the rest, so this is
+a complete and valid file:
+
+```toml
+[palette]
+accent = "#89b4fa"
+```
+
+`--list-themes` prints what is available. A theme of your own in `themes/` shadows a built-in
+of the same name — including `ansi`, which every other theme inherits from.
+
+### Colors
+
+A color is one of the sixteen ANSI names (`red`, `light_blue`, `dark_gray`, …), `#rrggbb`, a
+bare number for a 256-color index, or `reset` for whatever the terminal already uses.
+
+```toml
+[palette]
+accent     = "#89b4fa"   # true color
+notice     = 208         # a 256-color index
+background = "reset"     # the terminal's own
+```
+
+The fifteen slots are `background`, `foreground`, `muted`, `muted_text`, `subtle`, `cursor`,
+`selection_background`, `selection_foreground`, `error`, `success`, `warning`, `accent`,
+`chrome`, `highlight` and `notice`. A slot left unsaid keeps its default, and `cursor`
+follows `subtle` unless you say otherwise.
+
+### Elements
+
+Elements are the surfaces those colors are used on. Each takes `fg`, `bg` and `modifiers`,
+and `fg` and `bg` may name a palette slot instead of a color:
+
+```toml
+[elements.heading]
+fg        = "accent"
+modifiers = ["bold", "underline"]
+
+[elements.cursor_line]
+bg = "none"
+```
+
+`modifiers` replaces rather than adds, so `modifiers = []` removes the bold an element
+started with. The six are `bold`, `italic`, `underline`, `dim`, `reversed` and `crossed_out`.
+`bg = "none"` removes a background; a foreground cannot be removed, only changed.
+
+The element keys are `body`, `muted`, `label`, `human_gutter`, `assistant_gutter`,
+`tool_name`, `tool_summary`, `tool_ok`, `tool_error`, `thinking`, `diff_added`,
+`diff_removed`, `diff_context`, `subagent`, `injection`, `branch_marker`, `compact_divider`,
+`project_missing`, `session_live`, `heading`, `strong`, `emphasis`, `strikethrough`,
+`inline_code`, `code_block`, `code_block_lang`, `link`, `quote`, `quote_gutter`,
+`list_bullet`, `table_header`, `table_border`, `rule`, `html`, `header_title`, `status`,
+`status_notice`, `status_error`, `cursor_line`, `search_match`, `search_current`, `selection`,
+`help_window`, `scroll_progress` and `hint`.
+
+### Inheriting
+
+`base` takes the name of another theme, which is merged underneath field by field:
+
+```toml
+base = "ansi"
+
+[palette]
+accent = "#89b4fa"
+```
+
+A key you misspell is reported on stderr and otherwise ignored, so one typo does not cost you
+the rest of the file. A color or modifier that is not one fails the run and names the key
+that carried it.
+
 ## Flags
 
 | Flag | |
