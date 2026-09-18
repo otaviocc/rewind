@@ -33,7 +33,11 @@ const fn body_style() -> Style {
 }
 
 const fn human_rail_style() -> Style {
-    Style::new()
+    Style::new().add_modifier(Modifier::BOLD)
+}
+
+const fn assistant_rail_style() -> Style {
+    Style::new().add_modifier(Modifier::DIM)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,7 +50,7 @@ impl Rail {
     const fn style(self) -> Style {
         match self {
             Self::Human => human_rail_style(),
-            Self::Assistant => dim_style(),
+            Self::Assistant => assistant_rail_style(),
         }
     }
 }
@@ -345,6 +349,14 @@ mod tests {
     #[test]
     fn a_human_rail_and_an_assistant_rail_are_two_different_styles() {
         assert_ne!(Rail::Human.style(), Rail::Assistant.style());
+    }
+
+    #[test]
+    fn neither_rail_names_a_colour_that_could_sit_on_the_background() {
+        for rail in [Rail::Human, Rail::Assistant] {
+            assert_eq!(rail.style().fg, None, "{rail:?} pins an absolute foreground");
+            assert_eq!(rail.style().bg, None, "{rail:?} pins an absolute background");
+        }
     }
 
     #[test]
