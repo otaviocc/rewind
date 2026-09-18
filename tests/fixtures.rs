@@ -92,6 +92,8 @@ fn every_nasty_case_is_still_present() {
     for (needle, what) in [
         (r#""logicalParentUuid""#, "the compaction stitch"),
         (r#""subtype":"compact_boundary""#, "compact_boundary as a system subtype"),
+        (r#""isCompactSummary":true"#, "the summary a compaction writes after its boundary"),
+        (r#""cumulativeDroppedTokens""#, "the numbers a compaction divider is made of"),
         (r#""isSidechain":true"#, "sidechain records"),
         (r#""apiBlockIndex""#, "fragment ordering"),
         (r#""type":"summary""#, "the legacy summary record"),

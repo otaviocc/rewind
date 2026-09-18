@@ -25,6 +25,8 @@ const WIDE: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const IMAGES: &str = "33333333-3333-4333-8333-333333333333";
 const MARKDOWN: &str = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const TOOLS: &str = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+const COMPACTED: &str = "22222222-2222-4222-8222-222222222222";
+const SEVERED: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const LEGACY: &str = "44444444-4444-4444-8444-444444444444";
 
 fn collect(dir: &Path, found: &mut Vec<PathBuf>) {
@@ -160,6 +162,32 @@ fn every_tool_call_renders_its_name_its_digest_and_its_outcome() {
 #[test]
 fn a_tool_call_stays_one_line_however_narrow_the_column() {
     insta::assert_snapshot!("tools-32", rendered(TOOLS, 32));
+}
+
+#[test]
+fn a_compacted_session_renders_one_thread_with_a_labelled_seam_in_it() {
+    insta::assert_snapshot!("compacted-80", rendered(COMPACTED, 80));
+}
+
+#[test]
+fn a_compacted_session_keeps_its_seam_at_a_narrow_column() {
+    insta::assert_snapshot!("compacted-32", rendered(COMPACTED, 32));
+}
+
+#[test]
+fn a_severed_record_announces_that_it_lost_its_parent() {
+    let text = rendered(SEVERED, 80);
+    assert!(text.contains("detached"), "the severed cycle has no divider:\n{text}");
+}
+
+#[test]
+fn every_line_of_a_compacted_session_fits_the_column_it_was_wrapped_for() {
+    let path = session_path(COMPACTED);
+    for width in [8, 12, 20, 32, 40, 80, 120, 200] {
+        for line in widths(&path, width) {
+            assert!(line <= width, "a line of {line} columns was wrapped for {width}");
+        }
+    }
 }
 
 #[test]

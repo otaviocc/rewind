@@ -6,16 +6,18 @@ use std::collections::HashSet;
 use ratatui::style::{Color, Modifier, Style};
 
 use crate::domain::block::{Block, Content, ImageSource};
-use crate::domain::thread::{Conversation, NodeId, NodeKind};
+use crate::domain::record::CompactMetadata;
+use crate::domain::thread::{Conversation, Node, NodeId, NodeKind};
 use crate::render::line::{RenderedLine, StyledSpan, truncate};
 use crate::render::prose;
-use crate::render::{Ctx, tool};
+use crate::render::{Ctx, divider, tool};
 use unicode_width::UnicodeWidthStr;
 
 const RAIL: &str = "▎ ";
 const RAIL_BLANK: &str = "▎";
 const HUMAN_LABEL: &str = "you";
 const PROMPT_LABEL: &str = "prompt";
+const SUMMARY_LABEL: &str = "summary";
 const ASSISTANT_LABEL: &str = "claude";
 const MODEL_PREFIX: &str = "claude-";
 const SEPARATOR: &str = " · ";
@@ -71,12 +73,13 @@ const fn tool_styles() -> tool::Styles {
 enum Rail {
     Human,
     Assistant,
+    Seam,
 }
 
 impl Rail {
     const fn style(self) -> Style {
         match self {
-            Self::Human => human_rail_style(),
+            Self::Human | Self::Seam => human_rail_style(),
             Self::Assistant => assistant_rail_style(),
         }
     }
@@ -143,9 +146,11 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
 
     for &id in &walk {
         let Some(node) = conversation.node(id) else { continue };
+        let seam = seam(node, sidechain, inner);
         match &node.kind {
             NodeKind::User(record) if record.is_human_turn() && !record.is_compact_summary => {
-                let mut lines = vec![header(human, None, inner)];
+                let mut lines = Vec::from_iter(seam);
+                lines.push(header(human, None, inner));
                 let mut anchors = Vec::new();
                 content(conversation, ctx, &record.message.content, &mut lines, &mut anchors);
                 let spans = vec![Span { node: id, line: 0 }];
@@ -161,24 +166,40 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
                 match groups.last_mut() {
                     Some(group) if group.rail == Rail::Assistant && group.model == turn.model => {
                         group.lines.push(RenderedLine::blank());
+                        let starts = group.lines.len();
+                        group.lines.extend(seam);
                         let at = group.lines.len();
                         shift(&mut anchors, at);
                         group.lines.append(&mut body);
                         group.anchors.append(&mut anchors);
-                        group.spans.push(Span { node: id, line: at });
+                        group.spans.push(Span { node: id, line: starts });
                     }
                     _ => {
                         let detail = model_label(turn.model.as_deref());
-                        let mut lines = vec![header(ASSISTANT_LABEL, detail.as_deref(), inner)];
+                        let mut lines = Vec::from_iter(seam);
+                        lines.push(header(ASSISTANT_LABEL, detail.as_deref(), inner));
                         let at = lines.len();
                         shift(&mut anchors, at);
                         lines.append(&mut body);
-                        let spans = vec![Span { node: id, line: at }];
+                        let spans = vec![Span { node: id, line: 0 }];
                         groups.push(Group { rail: Rail::Assistant, model: turn.model.clone(), lines, anchors, spans });
                     }
                 }
             }
-            NodeKind::User(_) | NodeKind::System(_) | NodeKind::Attachment(_) => {}
+            NodeKind::User(record) if record.is_compact_summary => {
+                let mut lines = Vec::from_iter(seam);
+                lines.push(header(SUMMARY_LABEL, None, inner));
+                let mut anchors = Vec::new();
+                content(conversation, ctx, &record.message.content, &mut lines, &mut anchors);
+                let spans = vec![Span { node: id, line: 0 }];
+                groups.push(Group { rail: Rail::Seam, model: None, lines, anchors, spans });
+            }
+            NodeKind::User(_) | NodeKind::System(_) | NodeKind::Attachment(_) => {
+                if let Some(line) = seam {
+                    let spans = vec![Span { node: id, line: 0 }];
+                    groups.push(Group { rail: Rail::Seam, model: None, lines: vec![line], anchors: Vec::new(), spans });
+                }
+            }
         }
     }
 
@@ -193,6 +214,19 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
     }
 
     flatten(groups)
+}
+
+fn seam(node: &Node, sidechain: bool, width: usize) -> Option<RenderedLine> {
+    if sidechain {
+        return None;
+    }
+    let label = divider::label(node.divider?, compact_metadata(node))?;
+    Some(divider::line(&label, width, dim_style()))
+}
+
+const fn compact_metadata(node: &Node) -> Option<&CompactMetadata> {
+    let NodeKind::System(record) = &node.kind else { return None };
+    record.compact_metadata.as_ref()
 }
 
 fn flatten(groups: Vec<Group>) -> Transcript {
@@ -532,17 +566,24 @@ mod tests {
     }
 
     #[test]
-    fn a_user_record_that_is_plumbing_is_not_a_turn() {
+    fn a_user_record_that_is_plumbing_is_not_a_turn_though_a_lost_parent_is_still_announced() {
         let tool_result = r#"{"type":"user","uuid":"u2","parentUuid":null,"sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:00Z","toolUseResult":{"stdout":"ok"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}"#;
         let meta = r#"{"type":"user","uuid":"u3","parentUuid":null,"sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:00Z","isMeta":true,"message":{"role":"user","content":"caveat"}}"#;
         let peer = r#"{"type":"user","uuid":"u4","parentUuid":null,"sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:00Z","origin":{"kind":"peer"},"message":{"role":"user","content":"from elsewhere"}}"#;
-        assert!(rendered(&[tool_result, meta, peer]).is_empty());
+        let lines = rendered(&[tool_result, meta, peer]);
+        assert!(!lines.iter().any(|line| line.contains(HUMAN_LABEL)), "none of the three is a turn: {lines:?}");
+        assert!(!lines.iter().any(|line| line.contains("ran the sweep")), "and none of their content shows: {lines:?}");
+        let seams = lines.iter().filter(|line| line.contains("cleared")).count();
+        assert_eq!(seams, 2, "three null-parent roots: the first is the session start, the other two are seams: {lines:?}");
     }
 
     #[test]
-    fn a_compact_summary_is_not_rendered_as_a_giant_human_turn() {
+    fn a_compact_summary_is_its_own_block_and_not_a_giant_human_turn() {
         let summary = r#"{"type":"user","uuid":"u5","parentUuid":null,"sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:00Z","isCompactSummary":true,"message":{"role":"user","content":"this session is being continued from"}}"#;
-        assert!(rendered(&[summary]).is_empty());
+        let lines = rendered(&[summary]);
+        assert!(lines.first().is_some_and(|line| line.contains(SUMMARY_LABEL)), "{lines:?}");
+        assert!(!lines.iter().any(|line| line.contains(HUMAN_LABEL)), "never under a you rail: {lines:?}");
+        assert!(lines.iter().any(|line| line.contains("this session is being continued")), "{lines:?}");
     }
 
     #[test]
@@ -565,7 +606,7 @@ mod tests {
         let built = built(&[HUMAN, &assistant("a1", "u1", PARAGRAPHS)]);
         assert_eq!(built.spans.len(), 2, "one span per node that rendered");
         let lines: Vec<usize> = built.spans.iter().map(|span| span.line).collect();
-        assert_eq!(lines, [0, 4], "the human turn at 0, the reply after the unrailed blank");
+        assert_eq!(lines, [0, 3], "the human turn at 0, the reply where its group starts");
         assert!(built.spans.windows(2).all(|pair| pair[0].line < pair[1].line), "spans are ascending");
     }
 

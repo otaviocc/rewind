@@ -38,11 +38,27 @@ fn a_compacted_session_stays_one_connected_thread_with_a_compacted_divider() {
         "the boundary's effective parent is logicalParentUuid, not the null parentUuid on the record"
     );
 
-    let first_root_path: Vec<_> =
-        (1..=8).map(|n| format!("a2222222-0000-4000-8000-00000000000{n}")).filter_map(|uuid| conversation.id_of(&uuid)).collect();
-    assert_eq!(first_root_path.len(), 8, "every node from 0001 to 0008 must resolve");
-    let thread_prefix = &conversation.thread()[..8];
+    let uuids = [
+        "a2222222-0000-4000-8000-000000000001",
+        "a2222222-0000-4000-8000-000000000002",
+        "a2222222-0000-4000-8000-000000000003",
+        "a2222222-0000-4000-8000-000000000004",
+        "a2222222-0000-4000-8000-000000000005",
+        "a2222222-0000-4000-8000-000000000051",
+        "a2222222-0000-4000-8000-000000000006",
+        "a2222222-0000-4000-8000-000000000007",
+        "a2222222-0000-4000-8000-000000000008",
+    ];
+    let first_root_path: Vec<_> = uuids.iter().filter_map(|uuid| conversation.id_of(uuid)).collect();
+    assert_eq!(first_root_path.len(), uuids.len(), "every node of the first root must resolve");
+    let thread_prefix = &conversation.thread()[..uuids.len()];
     assert_eq!(thread_prefix, first_root_path.as_slice(), "root 1's own thread must not split at the compaction boundary");
+
+    let summary = conversation.id_of("a2222222-0000-4000-8000-000000000051").expect("the compact summary");
+    let summary_node = conversation.node(summary).expect("the summary");
+    let NodeKind::User(record) = &summary_node.kind else { panic!("not a user record") };
+    assert!(record.is_compact_summary, "the record after a boundary is the summary the compaction wrote");
+    assert!(record.is_human_turn(), "and it passes is_human_turn, which is why the render guard is separate");
 }
 
 #[test]

@@ -203,6 +203,36 @@ pub struct AssistantRecord {
     pub attribution_skill: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompactMetadata {
+    #[serde(default)]
+    pub trigger: Option<String>,
+    #[serde(default)]
+    pub pre_tokens: Option<u64>,
+    #[serde(default)]
+    pub post_tokens: Option<u64>,
+    #[serde(default)]
+    pub cumulative_dropped_tokens: Option<u64>,
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
+    #[serde(default)]
+    pub pre_compact_discovered_tools: Vec<String>,
+    #[serde(default)]
+    pub preserved_messages: Option<PreservedMessages>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreservedMessages {
+    #[serde(default)]
+    pub anchor_uuid: Option<String>,
+    #[serde(default)]
+    pub uuids: Vec<String>,
+    #[serde(default)]
+    pub all_uuids: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SystemRecord {
@@ -213,7 +243,7 @@ pub struct SystemRecord {
     #[serde(default)]
     pub logical_parent_uuid: Option<String>,
     #[serde(default)]
-    pub compact_metadata: Option<serde_json::Value>,
+    pub compact_metadata: Option<CompactMetadata>,
     #[serde(default)]
     pub content: Option<String>,
     #[serde(default)]
@@ -329,6 +359,30 @@ mod tests {
         let Record::Latch(Latch::ForkContextRef(latch)) = record else { panic!("not a fork-context-ref latch") };
         assert_eq!(latch.agent_id.as_deref(), Some("b2c3d4e5f60718293"));
         assert_eq!(latch.parent_last_uuid.as_deref(), Some("u9"), "the generic latch dropped all of this");
+    }
+
+    #[test]
+    fn a_compact_boundary_carries_the_numbers_its_divider_is_made_of() {
+        let line = br#"{"parentUuid":null,"isSidechain":false,"type":"system","subtype":"compact_boundary","level":"info","compactMetadata":{"trigger":"auto","preTokens":948649,"postTokens":124177,"cumulativeDroppedTokens":824472,"durationMs":211043,"preCompactDiscoveredTools":["Bash"],"preservedMessages":{"uuids":["u1","u2"],"allUuids":["u0","u1","u2"]}},"uuid":"s1","timestamp":"2026-01-01T00:00:00Z","sessionId":"x"}"#;
+        let record = parse(line).expect("a compact boundary");
+        let Record::System(system) = record else { panic!("not a system record") };
+        let meta = system.compact_metadata.expect("compact metadata");
+        assert_eq!(meta.trigger.as_deref(), Some("auto"));
+        assert_eq!((meta.pre_tokens, meta.post_tokens), (Some(948_649), Some(124_177)));
+        assert_eq!(meta.cumulative_dropped_tokens, Some(824_472));
+        assert_eq!(meta.duration_ms, Some(211_043));
+        let preserved = meta.preserved_messages.expect("preserved messages");
+        assert_eq!((preserved.uuids.len(), preserved.all_uuids.len()), (2, 3), "which messages survived, for #15");
+    }
+
+    #[test]
+    fn every_field_of_compact_metadata_is_optional_so_a_sparser_boundary_is_not_drift() {
+        let line = br#"{"parentUuid":null,"isSidechain":false,"type":"system","subtype":"compact_boundary","compactMetadata":{},"uuid":"s1","timestamp":"2026-01-01T00:00:00Z","sessionId":"x"}"#;
+        let record = parse(line).expect("a bare compact boundary");
+        let Record::System(system) = record else { panic!("not a system record") };
+        let meta = system.compact_metadata.expect("compact metadata");
+        assert_eq!(meta.pre_tokens, None);
+        assert!(meta.pre_compact_discovered_tools.is_empty());
     }
 
     #[test]
