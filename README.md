@@ -47,11 +47,12 @@ cargo install --locked --path .
 | `j` `k` | move within a column |
 | `g` `G` | top · bottom of the column |
 | `Ctrl-d` `Ctrl-u` | half page down · up |
-| `Enter` | descend · expand a tool call · enter a subagent |
+| `Enter` | descend · expand the selected tool call · enter a subagent |
 | `Esc` | back out |
 | `f` | focus the conversation full-width |
 | `/` | filter the list |
 | `?` | search everything |
+| `n` `N` | next · previous tool call |
 | `Space` `t` | expand one tool call · all of them |
 | `i` | reveal context injections |
 | `b` | cycle alternate branches |
