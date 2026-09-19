@@ -55,20 +55,21 @@ cargo install --locked --path .
 | `h` `l` `Tab` | move between columns |
 | `j` `k` | move within a column |
 | `g` `G` | top · bottom of the column |
-| `Ctrl-d` `Ctrl-u` | half page down · up |
+| `d` `u` `Ctrl-d` `Ctrl-u` | half page down · up |
 | `Enter` | descend · expand the selected tool call · enter a subagent |
 | `Esc` | leave a subagent · back out |
 | `f` | focus the conversation full-width |
 | `/` | filter the list |
 | `?` | search everything |
 | `n` `p` | next · previous tool call |
+| `[` `]` | previous · next message |
 | `Space` `t` | expand one tool call · all of them |
 | `i` | reveal context injections |
 | `b` | cycle the alternate branches at the marker |
 | `y` `Y` | copy the message · the whole session |
 | `c` | copy `claude --resume <id>` |
 | `e` | export to a file |
-| `d` | what could not be read · `Esc` closes it |
+| `D` | what could not be read · `Esc` closes it |
 | `q` | quit |
 
 Mouse wheel scrolls whichever column is under the pointer, not whichever has focus. Clicking
