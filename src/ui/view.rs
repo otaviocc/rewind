@@ -217,7 +217,7 @@ fn search_overlay(area: Rect, buf: &mut Buffer, app: &App) {
     painted(Rect { height: 1, ..inner }, buf, &prompt);
 
     let status_row = Rect { y: inner.y.saturating_add(1), height: 1, ..inner };
-    let status = search::status_line(app.search_query(), app.corpus_loading(), app.search_results().len(), width, app.theme());
+    let status = search::status_line(app.search_query(), app.corpus_status(), app.search_results().len(), width, app.theme());
     painted(status_row, buf, &status);
 
     let list_area = Rect {

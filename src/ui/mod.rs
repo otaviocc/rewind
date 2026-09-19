@@ -150,6 +150,7 @@ fn handle(app: &mut App, wake: Wake) -> Result<()> {
         Wake::SubagentLoaded { generation, path, result } => app.set_subagent(generation, result, path),
         Wake::ScanProgress { done, total } => app.set_scan_progress(done, total),
         Wake::ScanFinished => app.scan_finished(),
+        Wake::ShardReady { generation, entry } => app.set_shard_ready(generation, entry),
         Wake::CorpusLoaded(corpus) => app.set_corpus(corpus),
         Wake::HitResolved { generation, target } => app.set_hit_resolved(generation, target),
         Wake::InputLost(error) => bail!("cannot read keyboard input: {error}"),

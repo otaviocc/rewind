@@ -39,25 +39,33 @@ pub fn prompt_line(query: &str, width: usize, theme: &Theme) -> RenderedLine {
     line
 }
 
-pub fn status_line(query: &str, corpus_loading: bool, count: usize, width: usize, theme: &Theme) -> RenderedLine {
-    let text = status_text(query, corpus_loading, count);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CorpusStatus {
+    Indexing,
+    Partial,
+    Complete,
+}
+
+pub fn status_line(query: &str, status: CorpusStatus, count: usize, width: usize, theme: &Theme) -> RenderedLine {
+    let text = status_text(query, status, count);
     let mut line = RenderedLine::default();
     line.push(StyledSpan::new(truncate(&text, width), theme.style(Element::Muted)));
     line
 }
 
-fn status_text(query: &str, corpus_loading: bool, count: usize) -> String {
-    if corpus_loading {
+fn status_text(query: &str, status: CorpusStatus, count: usize) -> String {
+    if status == CorpusStatus::Indexing {
         return "indexing…".to_owned();
     }
+    let suffix = if status == CorpusStatus::Partial { " (partial)" } else { "" };
     if query.is_empty() {
-        return HELP.to_owned();
+        return format!("{HELP}{suffix}");
     }
     if count == 0 {
-        return "no matches".to_owned();
+        return format!("no matches{suffix}");
     }
     let plural = if count == 1 { "match" } else { "matches" };
-    format!("{count} {plural}")
+    format!("{count} {plural}{suffix}")
 }
 
 pub fn rows(hits: &[Hit], width: usize, theme: &Theme) -> Vec<RenderedLine> {
@@ -124,26 +132,44 @@ mod tests {
     fn an_empty_query_shows_the_placeholder_and_the_syntax_help() {
         let prompt = prompt_line("", 80, &theme());
         assert_eq!(prompt.text(), format!("{PROMPT_PREFIX}{PLACEHOLDER}"));
-        let status = status_line("", false, 0, 80, &theme());
+        let status = status_line("", CorpusStatus::Complete, 0, 80, &theme());
         assert_eq!(status.text(), HELP);
     }
 
     #[test]
     fn a_loading_corpus_says_so_regardless_of_the_query() {
-        let status = status_line("grid", true, 0, 80, &theme());
+        let status = status_line("grid", CorpusStatus::Indexing, 0, 80, &theme());
         assert_eq!(status.text(), "indexing…");
     }
 
     #[test]
     fn zero_matches_reads_distinctly_from_no_query_typed_yet() {
-        let status = status_line("nothing-matches-this", false, 0, 80, &theme());
+        let status = status_line("nothing-matches-this", CorpusStatus::Complete, 0, 80, &theme());
         assert_eq!(status.text(), "no matches");
     }
 
     #[test]
     fn a_single_match_is_not_pluralized() {
-        let status = status_line("grid", false, 1, 80, &theme());
+        let status = status_line("grid", CorpusStatus::Complete, 1, 80, &theme());
         assert_eq!(status.text(), "1 match");
+    }
+
+    #[test]
+    fn a_partial_scan_appends_partial_to_the_match_count() {
+        let status = status_line("grid", CorpusStatus::Partial, 3, 80, &theme());
+        assert_eq!(status.text(), "3 matches (partial)");
+    }
+
+    #[test]
+    fn a_partial_scan_with_no_matches_yet_still_reads_partial() {
+        let status = status_line("nothing-yet", CorpusStatus::Partial, 0, 80, &theme());
+        assert_eq!(status.text(), "no matches (partial)");
+    }
+
+    #[test]
+    fn a_partial_scan_with_no_query_appends_partial_to_the_help_text() {
+        let status = status_line("", CorpusStatus::Partial, 0, 80, &theme());
+        assert_eq!(status.text(), format!("{HELP} (partial)"));
     }
 
     #[test]

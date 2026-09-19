@@ -16,7 +16,7 @@ use crate::domain::cache::shard::Kind;
 use crate::domain::cache::store::{self, Outcome, Plan};
 use crate::domain::cancel::Cancel;
 use crate::domain::project::{self, Project, ProjectError};
-use crate::domain::search::corpus::Corpus;
+use crate::domain::search::corpus::{self, Corpus, ShardEntry};
 use crate::domain::search::engine::Hit;
 use crate::domain::search::resolve::{self, Opened};
 use crate::domain::session::{self, Session};
@@ -36,6 +36,7 @@ pub enum Wake {
     SubagentLoaded { generation: u64, path: PathBuf, result: Result<Arc<Conversation>, ThreadError> },
     ScanProgress { done: usize, total: usize },
     ScanFinished,
+    ShardReady { generation: u64, entry: ShardEntry },
     CorpusLoaded(Arc<Corpus>),
     HitResolved { generation: u64, target: Option<Opened> },
     InputLost(String),
@@ -186,6 +187,12 @@ pub fn spawn_scan(tx: &Sender<Wake>, claude_dir: PathBuf, cache_root: PathBuf, s
         let mut tick = || {};
         let mut control = Control::new(cancel.clone(), &mut tick);
         if let Some(history) = store::build_history(&plan, &mut control) {
+            if let Outcome::History { cancelled: false, error: None, .. } = &history
+                && let Ok(bytes) = fs::read(store::shard_path(&plan, None))
+            {
+                let entry = ShardEntry { directory: None, weight: corpus::HISTORY_WEIGHT, bytes };
+                let _ = tx.send(Wake::ShardReady { generation: cancel.generation(), entry });
+            }
             outcomes.push(history);
         }
 
@@ -216,6 +223,12 @@ fn scan_worker(
         let mut tick = || {};
         let mut control = Control::new(cancel.clone(), &mut tick);
         let outcome = store::build_project(plan, &project, &mut control);
+        if let Outcome::Project { directory, cancelled: false, error: None, .. } = &outcome
+            && let Ok(bytes) = fs::read(store::shard_path(plan, Some(directory)))
+        {
+            let entry = ShardEntry { directory: Some(directory.clone()), weight: corpus::NORMAL_WEIGHT, bytes };
+            let _ = tx.send(Wake::ShardReady { generation: cancel.generation(), entry });
+        }
         if let Ok(mut outcomes) = outcomes.lock() {
             outcomes.push(outcome);
         }

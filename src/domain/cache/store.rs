@@ -45,6 +45,11 @@ impl Plan {
     }
 }
 
+pub fn shard_path(plan: &Plan, directory: Option<&str>) -> PathBuf {
+    let stem = directory.unwrap_or(HISTORY_SHARD_NAME);
+    plan.version_dir.join(stem).with_extension(SHARD_EXTENSION)
+}
+
 #[derive(Debug)]
 pub enum Outcome {
     Project {
@@ -82,9 +87,9 @@ pub fn build_project(plan: &Plan, project: &Project, control: &mut build::Contro
     let project_dir = plan.claude_dir.join("projects").join(&project.directory);
     let sessions = project::transcripts(&project_dir);
     let files = project_inputs(&project_dir, &sessions);
-    let shard_path = plan.version_dir.join(&project.directory).with_extension(SHARD_EXTENSION);
+    let path = shard_path(plan, Some(&project.directory));
 
-    let result = build_shard(&files, &shard_path, text::extract, plan.built_at_ms, control);
+    let result = build_shard(&files, &path, text::extract, plan.built_at_ms, control);
     let sessions =
         if result.cancelled { Vec::new() } else { session::discover(&project_dir).into_iter().map(session_summary).collect() };
 
@@ -129,8 +134,8 @@ pub fn build_history(plan: &Plan, control: &mut build::Control<'_>) -> Option<Ou
         return None;
     }
     let input = build::Input { path: history_path, name: HISTORY_FILE_NAME.to_owned(), kind: Kind::History };
-    let shard_path = plan.version_dir.join(HISTORY_SHARD_NAME).with_extension(SHARD_EXTENSION);
-    let result = build_shard(&[input], &shard_path, text::extract_history, plan.built_at_ms, control);
+    let path = shard_path(plan, None);
+    let result = build_shard(&[input], &path, text::extract_history, plan.built_at_ms, control);
     Some(Outcome::History {
         shard_bytes: result.shard_bytes,
         cold_rebuild: result.cold_rebuild,
@@ -489,6 +494,17 @@ mod tests {
         let version_dir = cache.path().join(format!("v{}", shard::CACHE_VERSION));
         let meta = meta::read(&version_dir.join(META_FILE_NAME)).expect("a readable meta.json");
         assert!(meta.projects.is_empty(), "a cancelled build must not claim the project was indexed");
+    }
+
+    #[test]
+    fn shard_path_names_a_project_shard_by_its_directory_and_history_by_the_reserved_stem() {
+        let (_claude_guard, claude_dir) = one_project_store();
+        let cache = TempDir::new().expect("a temporary directory");
+        let plan = prepare(&claude_dir, cache.path()).expect("a preparable cache root");
+
+        let version_dir = cache.path().join(format!("v{}", shard::CACHE_VERSION));
+        assert_eq!(shard_path(&plan, Some("-a-project")), version_dir.join("-a-project.shard"));
+        assert_eq!(shard_path(&plan, None), version_dir.join(format!("{HISTORY_SHARD_NAME}.shard")));
     }
 
     #[test]

@@ -21,7 +21,7 @@ use crate::render::message::{self, Anchor, Position, Transcript};
 use crate::render::{Branches, Ctx as RenderCtx, Expanded, Outputs, Overflow};
 use crate::theme::Theme;
 use crate::ui::input::{Action, Motion};
-use crate::ui::{Options, columns, diagnostics, listing};
+use crate::ui::{Options, columns, diagnostics, listing, search as ui_search};
 
 pub const CHROME_ROWS: u16 = 5;
 pub const DEBOUNCE: Duration = Duration::from_millis(80);
@@ -216,8 +216,9 @@ pub struct App {
     search_query: String,
     search_results: Vec<Hit>,
     search_pane: Pane,
-    corpus: Option<Arc<Corpus>>,
+    corpus: Option<Corpus>,
     corpus_requested: bool,
+    corpus_wanted: bool,
     search_hit_generation: Gate,
     pending_hit_resolve: Option<(Hit, u64)>,
     pending_scroll_uuid: Option<String>,
@@ -277,6 +278,7 @@ impl App {
             search_pane: Pane::default(),
             corpus: None,
             corpus_requested: false,
+            corpus_wanted: false,
             search_hit_generation: Gate::default(),
             pending_hit_resolve: None,
             pending_scroll_uuid: None,
@@ -557,6 +559,7 @@ impl App {
         }
         self.request_sessions_for_selection();
         if matches!(self.projects, Loadable::Ready(_)) && !self.no_cache && self.cache_root.is_some() {
+            self.scan_gate.bump();
             self.scan_requested = true;
         }
     }
@@ -1206,8 +1209,14 @@ impl App {
         self.search_pane
     }
 
-    pub const fn corpus_loading(&self) -> bool {
-        self.corpus.is_none()
+    pub const fn corpus_status(&self) -> ui_search::CorpusStatus {
+        if self.corpus.is_none() {
+            ui_search::CorpusStatus::Indexing
+        } else if self.scan_progress.is_some() {
+            ui_search::CorpusStatus::Partial
+        } else {
+            ui_search::CorpusStatus::Complete
+        }
     }
 
     pub fn text_entry(&self) -> bool {
@@ -1231,8 +1240,11 @@ impl App {
             self.search_results.clear();
             return;
         }
-        if self.corpus.is_none() && !self.corpus_requested && !self.no_cache && self.cache_root.is_some() {
-            self.corpus_requested = true;
+        if !self.no_cache && self.cache_root.is_some() {
+            self.corpus_wanted = true;
+            if self.corpus.is_none() && !self.corpus_requested {
+                self.corpus_requested = true;
+            }
         }
     }
 
@@ -1267,7 +1279,27 @@ impl App {
     }
 
     pub fn set_corpus(&mut self, corpus: Arc<Corpus>) {
-        self.corpus = Some(corpus);
+        let loaded = Arc::try_unwrap(corpus).unwrap_or_default();
+        match self.corpus.as_mut() {
+            Some(existing) => {
+                for entry in loaded.shards {
+                    if !existing.shards.iter().any(|shard| shard.directory == entry.directory) {
+                        existing.shards.push(entry);
+                    }
+                }
+            }
+            None => self.corpus = Some(loaded),
+        }
+        if self.search_open {
+            self.run_search();
+        }
+    }
+
+    pub fn set_shard_ready(&mut self, generation: u64, entry: search::corpus::ShardEntry) {
+        if !self.corpus_wanted || generation != self.scan_gate.current() {
+            return;
+        }
+        self.corpus.get_or_insert_with(Corpus::default).upsert(entry);
         if self.search_open {
             self.run_search();
         }
@@ -2597,6 +2629,134 @@ mod tests {
         assert!(app.text_entry());
         assert_eq!(app.take_corpus_load(), Some(PathBuf::from("/tmp/cache")));
         assert!(app.take_corpus_load().is_none(), "the corpus load is requested once, not on every poll");
+    }
+
+    fn cached_app() -> App {
+        App::new(
+            ctx(),
+            &Options { claude_dir: PathBuf::from("/tmp"), cache_root: Some(PathBuf::from("/tmp/cache")), ..Options::default() },
+            Size::new(120, 30),
+        )
+    }
+
+    #[test]
+    fn a_shard_ready_from_a_superseded_scan_is_dropped() {
+        let mut app = cached_app();
+        app.apply(Action::ToggleSearch);
+        let stale = app.scan_gate.current();
+        app.scan_gate.bump();
+
+        app.set_shard_ready(
+            stale,
+            search::corpus::ShardEntry {
+                directory: Some("-a".to_owned()),
+                weight: search::corpus::NORMAL_WEIGHT,
+                bytes: vec![1],
+            },
+        );
+
+        assert!(app.corpus.is_none(), "a shard from a superseded scan must not be merged into the corpus");
+    }
+
+    #[test]
+    fn a_shard_ready_before_search_has_ever_been_opened_is_dropped_to_stay_lazy() {
+        let mut app = cached_app();
+        let generation = app.scan_gate.current();
+
+        app.set_shard_ready(
+            generation,
+            search::corpus::ShardEntry {
+                directory: Some("-a".to_owned()),
+                weight: search::corpus::NORMAL_WEIGHT,
+                bytes: vec![1],
+            },
+        );
+
+        assert!(app.corpus.is_none(), "nothing has asked for the corpus yet, so streamed bytes must not accumulate");
+    }
+
+    #[test]
+    fn a_second_shard_ready_for_the_same_directory_replaces_rather_than_duplicates() {
+        let mut app = cached_app();
+        app.apply(Action::ToggleSearch);
+        let generation = app.scan_gate.current();
+
+        app.set_shard_ready(
+            generation,
+            search::corpus::ShardEntry {
+                directory: Some("-a".to_owned()),
+                weight: search::corpus::NORMAL_WEIGHT,
+                bytes: vec![1],
+            },
+        );
+        app.set_shard_ready(
+            generation,
+            search::corpus::ShardEntry {
+                directory: Some("-a".to_owned()),
+                weight: search::corpus::NORMAL_WEIGHT,
+                bytes: vec![2],
+            },
+        );
+
+        assert_eq!(app.corpus.as_ref().map(|corpus| corpus.shards.len()), Some(1));
+    }
+
+    #[test]
+    fn the_corpus_status_is_indexing_then_partial_while_scanning_then_complete_once_finished() {
+        let mut app = cached_app();
+        app.apply(Action::ToggleSearch);
+        assert_eq!(app.corpus_status(), ui_search::CorpusStatus::Indexing);
+
+        let generation = app.scan_gate.current();
+        app.set_scan_progress(1, 3);
+        app.set_shard_ready(
+            generation,
+            search::corpus::ShardEntry {
+                directory: Some("-a".to_owned()),
+                weight: search::corpus::NORMAL_WEIGHT,
+                bytes: vec![1],
+            },
+        );
+        assert_eq!(app.corpus_status(), ui_search::CorpusStatus::Partial);
+
+        app.scan_finished();
+        assert_eq!(app.corpus_status(), ui_search::CorpusStatus::Complete);
+    }
+
+    #[test]
+    fn a_disk_load_arriving_after_a_streamed_shard_does_not_clobber_it() {
+        let mut app = cached_app();
+        app.apply(Action::ToggleSearch);
+        let generation = app.scan_gate.current();
+        app.set_shard_ready(
+            generation,
+            search::corpus::ShardEntry {
+                directory: Some("-a".to_owned()),
+                weight: search::corpus::NORMAL_WEIGHT,
+                bytes: vec![9],
+            },
+        );
+
+        let stale_disk_snapshot = search::corpus::Corpus {
+            shards: vec![
+                search::corpus::ShardEntry {
+                    directory: Some("-a".to_owned()),
+                    weight: search::corpus::NORMAL_WEIGHT,
+                    bytes: vec![0],
+                },
+                search::corpus::ShardEntry {
+                    directory: Some("-b".to_owned()),
+                    weight: search::corpus::NORMAL_WEIGHT,
+                    bytes: vec![7],
+                },
+            ],
+        };
+        app.set_corpus(Arc::new(stale_disk_snapshot));
+
+        let corpus = app.corpus.as_ref().expect("a corpus after both a streamed shard and a disk load");
+        assert_eq!(corpus.shards.len(), 2, "the disk load fills in -b but must not duplicate -a");
+        let a = corpus.shards.iter().find(|shard| shard.directory.as_deref() == Some("-a")).expect("shard -a");
+        assert_eq!(a.bytes, vec![9], "the streamed shard for -a must win over the stale disk snapshot");
     }
 
     #[test]
