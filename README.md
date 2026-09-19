@@ -61,7 +61,7 @@ cargo install --locked --path .
 | `f` | focus the conversation full-width |
 | `/` | filter the list |
 | `?` | search everything |
-| `n` `N` | next · previous tool call |
+| `n` `p` | next · previous tool call |
 | `Space` `t` | expand one tool call · all of them |
 | `i` | reveal context injections |
 | `b` | cycle the alternate branches at the marker |
