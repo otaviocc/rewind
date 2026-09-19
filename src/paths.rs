@@ -37,6 +37,17 @@ fn config_dir_from(xdg: Option<PathBuf>, home: Option<PathBuf>, appdata: Option<
     present(appdata).map(|appdata| appdata.join(APP))
 }
 
+pub fn cache_dir() -> Option<PathBuf> {
+    cache_dir_from(var("XDG_CACHE_HOME"), home())
+}
+
+fn cache_dir_from(xdg: Option<PathBuf>, home: Option<PathBuf>) -> Option<PathBuf> {
+    if let Some(xdg) = present(xdg) {
+        return Some(xdg.join(APP));
+    }
+    present(home).map(|home| home.join(".cache").join(APP))
+}
+
 fn present(dir: Option<PathBuf>) -> Option<PathBuf> {
     dir.filter(|dir| !dir.as_os_str().is_empty())
 }
@@ -92,5 +103,29 @@ mod tests {
         let dir = config_dir_from(Some(PathBuf::from("")), Some(PathBuf::from("/home/someone")), None);
         assert_eq!(dir, Some(PathBuf::from("/home/someone/.config/rewind")), "an empty XDG_CONFIG_HOME was treated as set");
         assert_eq!(config_dir_from(Some(PathBuf::from("")), Some(PathBuf::from("")), Some(PathBuf::from(""))), None);
+    }
+
+    #[test]
+    fn the_cache_directory_prefers_xdg_cache_home() {
+        let dir = cache_dir_from(Some(PathBuf::from("/xdg-cache")), Some(PathBuf::from("/home/someone")));
+        assert_eq!(dir, Some(PathBuf::from("/xdg-cache/rewind")));
+    }
+
+    #[test]
+    fn the_cache_directory_is_dot_cache_under_home() {
+        let dir = cache_dir_from(None, Some(PathBuf::from("/Users/someone"))).expect("a home directory is enough");
+        assert_eq!(dir, PathBuf::from("/Users/someone/.cache/rewind"));
+    }
+
+    #[test]
+    fn there_is_no_cache_directory_when_the_environment_says_nothing() {
+        assert_eq!(cache_dir_from(None, None), None);
+    }
+
+    #[test]
+    fn an_empty_cache_variable_is_skipped_rather_than_joined_onto() {
+        let dir = cache_dir_from(Some(PathBuf::from("")), Some(PathBuf::from("/home/someone")));
+        assert_eq!(dir, Some(PathBuf::from("/home/someone/.cache/rewind")), "an empty XDG_CACHE_HOME was treated as set");
+        assert_eq!(cache_dir_from(Some(PathBuf::from("")), Some(PathBuf::from(""))), None);
     }
 }
