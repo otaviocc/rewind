@@ -11,15 +11,15 @@ expression: "rendered(TOOLS, 32)"
 ▎ then writing the new module,
 ▎ then the spec.
 ▎
-▎ ▸ Edit                      ok
+▎ ▸ Edit
 ▎   └ src/engine/deflector.rs ·…
-▎ ▸ Write                     ok
+▎ ▸ Write
 ▎   └ src/engine/coil.rs · 2 hu…
-▎ ▸ WebFetch                  ok
+▎ ▸ WebFetch
 ▎   └ https://holodeck.invalid/…
-▎ ▸ jeffries · beam_status    ok
+▎ ▸ jeffries · beam_status
 ▎   └ {"deck":9,"verbose":true}
-▎ ▸ Replicator                ok
+▎ ▸ Replicator
 ▎   └ tea, earl grey, hot
 ▎ ▸ Read                  failed
 ▎   └ {"file_path": "/Users/fix…

@@ -8,7 +8,7 @@ expression: "expanded(TOOLS, 80)"
 ▎ claude · opus-5
 ▎ Editing the coil table first, then writing the new module, then the spec.
 ▎
-▎ ▾ Edit                                                                      ok
+▎ ▾ Edit
 ▎   └ src/engine/deflector.rs · 1 hunk
 ▎   ┃ file_path      /Users/fixture/Developer/holodeck/src/engine/deflector.rs
 ▎   ┃ new_string     const COILS: usize = 12;
@@ -23,7 +23,7 @@ expression: "expanded(TOOLS, 80)"
 ▎   ┃
 ▎   ┃  pub struct Deflector {
 ▎
-▎ ▾ Write                                                                     ok
+▎ ▾ Write
 ▎   └ src/engine/coil.rs · 2 hunks
 ▎   ┃ content        //! One deflector coil.  pub struct Coil {     pub gain: f…
 ▎   ┃ file_path      /Users/fixture/Developer/holodeck/src/engine/coil.rs
@@ -36,21 +36,21 @@ expression: "expanded(TOOLS, 80)"
 ▎   ┃ +    pub gain: f32,
 ▎   ┃ +}
 ▎
-▎ ▾ WebFetch                                                                  ok
+▎ ▾ WebFetch
 ▎   └ https://holodeck.invalid/specs/deflector.html
 ▎   ┃ prompt         What is the maximum coil gain?
 ▎   ┃ url            https://holodeck.invalid/specs/deflector.html
 ▎   ┃
 ▎   ┃ The spec puts the maximum coil gain at 1.8.
 ▎
-▎ ▾ jeffries · beam_status                                                    ok
+▎ ▾ jeffries · beam_status
 ▎   └ {"deck":9,"verbose":true}
 ▎   ┃ deck           9
 ▎   ┃ verbose        true
 ▎   ┃
 ▎   ┃ Deck 9 emitter array nominal.
 ▎
-▎ ▾ Replicator                                                                ok
+▎ ▾ Replicator
 ▎   └ tea, earl grey, hot
 ▎   ┃ pattern        tea, earl grey, hot
 ▎   ┃ quantity       1

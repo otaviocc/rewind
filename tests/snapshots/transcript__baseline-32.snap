@@ -12,23 +12,23 @@ expression: "rendered(BASELINE, 32)"
 ▎ cell row at a time into a
 ▎ reused buffer.
 ▎
-▎ ▸ Bash                      ok
+▎ ▸ Bash
 ▎   └ wc -l src/engine/grid.rs
-▎ ▸ Agent                 ⏎   ok
+▎ ▸ Agent                      ⏎
 ▎   └ Explore · Trace the grid …
-▎ ▸ Bash                      ok
+▎ ▸ Bash
 ▎   └ cargo build -v 2>&1
-▎ ▸ Read                      ok
+▎ ▸ Read
 ▎   └ src/engine/grid.rs · 212 …
 ▎
 ▎ Two hundred and twelve lines,
 ▎ and no serde_json anywhere in
 ▎ it.
 ▎
-▎ ▸ Agent                 ⏎   ok
+▎ ▸ Agent                      ⏎
 ▎   └ code-review · Review the …
 
 ▎ ──────────────────────────────
 ▎ 1 forked skill ran with no sp…
-▎ ▸ code-review           ⏎   ok
+▎ ▸ code-review                ⏎
 ▎   └ Review the grid scanner

@@ -10,23 +10,23 @@ expression: "revealed(BASELINE, 80)"
 ▎ thinking · 1 line
 ▎ The grid scanner walks one cell row at a time into a reused buffer.
 ▎
-▎ ▸ Bash                                                                      ok
+▎ ▸ Bash
 ▎   └ wc -l src/engine/grid.rs
-▎ ▸ Agent                                                                 ⏎   ok
+▎ ▸ Agent                                                                      ⏎
 ▎   └ Explore · Trace the grid scanner
 ▎ · 1 injection · queued_command
 ▎
-▎ ▸ Bash                                                                      ok
+▎ ▸ Bash
 ▎   └ cargo build -v 2>&1
-▎ ▸ Read                                                                      ok
+▎ ▸ Read
 ▎   └ src/engine/grid.rs · 212 lines
 ▎
 ▎ Two hundred and twelve lines, and no serde_json anywhere in it.
 ▎
-▎ ▸ Agent                                                                 ⏎   ok
+▎ ▸ Agent                                                                      ⏎
 ▎   └ code-review · Review the grid scanner
 
 ▎ ──────────────────────────────────────────────────────────────────────────────
 ▎ 1 forked skill ran with no spawning call
-▎ ▸ code-review                                                           ⏎   ok
+▎ ▸ code-review                                                                ⏎
 ▎   └ Review the grid scanner

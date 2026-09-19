@@ -119,8 +119,7 @@ pub fn unreached_header(agents: &[&Agent], width: usize, styles: &Styles) -> Vec
 pub fn unreached_line(agent: &Agent, width: usize, styles: &Styles) -> Vec<RenderedLine> {
     let kind = Some(&*agent.kind).filter(|kind| *kind != agent.label());
     let digest = joined(kind, agent.description.as_deref());
-    let outcome = Some((label_of(Status::Ok), styles.ok));
-    head(COLLAPSED, agent.label(), &digest, Some(ENTER), outcome, width, &styles.rows())
+    head(COLLAPSED, agent.label(), &digest, Some(ENTER), None, width, &styles.rows())
 }
 
 fn body(ctx: &Ctx<'_>, id: &str, name: &str, input: &Value, outcome: Option<&Outcome<'_>>, styles: &Styles) -> Vec<RenderedLine> {
@@ -297,16 +296,20 @@ fn name_line(
         return line;
     }
 
-    let mark_width = mark.map_or(0, |mark| mark.width().saturating_add(MARK_GAP.width()));
+    let gap = if outcome_text.is_empty() { "" } else { MARK_GAP };
+    let mark_width = mark.map_or(0, |mark| mark.width().saturating_add(gap.width()));
     let outcome_width = outcome_text.width().saturating_add(mark_width);
     let affordable = head_width.saturating_add(TAIL_GAP).saturating_add(outcome_width) <= width;
     let mark = mark.filter(|_| affordable);
+    if outcome_text.is_empty() && mark.is_none() {
+        return line;
+    }
     let outcome_width = if affordable { outcome_width } else { outcome_text.width() };
 
     let pad = width.saturating_sub(head_width).saturating_sub(outcome_width).max(TAIL_GAP);
     line.push(StyledSpan::new(" ".repeat(pad), styles.muted));
     if let Some(mark) = mark {
-        line.push(StyledSpan::new(format!("{mark}{MARK_GAP}"), styles.enter));
+        line.push(StyledSpan::new(format!("{mark}{gap}"), styles.enter));
     }
     if !outcome_text.is_empty() {
         line.push(StyledSpan::new(outcome_text, outcome_style));
@@ -337,7 +340,7 @@ fn heading(name: &str) -> String {
 
 const fn label_of(status: Status) -> &'static str {
     match status {
-        Status::Ok => "ok",
+        Status::Ok => "",
         Status::Failed => "failed",
         Status::Denied => "denied",
         Status::Interrupted => "interrupted",
@@ -373,8 +376,8 @@ mod tests {
 
     #[test]
     fn a_collapsed_call_is_its_name_on_one_row_and_its_digest_dimmed_on_the_next() {
-        let rows = rendered("Bash", "wc -l src/engine/grid.rs", Status::Ok, 60);
-        assert!(rows[0].starts_with("▸ Bash") && rows[0].ends_with("ok"), "{:?}", rows[0]);
+        let rows = rendered("Bash", "wc -l src/engine/grid.rs", Status::Failed, 60);
+        assert!(rows[0].starts_with("▸ Bash") && rows[0].ends_with("failed"), "{:?}", rows[0]);
         assert_eq!(rows[0].width(), 60, "the outcome ends on the last column");
         assert_eq!(rows.get(1).map(String::as_str), Some("  └ wc -l src/engine/grid.rs"));
     }
@@ -413,6 +416,11 @@ mod tests {
     fn no_head_row_ends_in_whitespace_at_any_width() {
         for width in 1..=120_usize {
             for status in [Status::Ok, Status::Failed, Status::Denied, Status::Interrupted, Status::Pending] {
+                let styles = styles();
+                let outcome = Some((label_of(status), styles.ok));
+                let marked = name_line(COLLAPSED, "Agent", Some(ENTER), outcome, width, &styles.rows()).text();
+                assert_eq!(marked.trim_end(), marked, "width {width} left trailing whitespace: {marked:?}");
+                assert!(marked.width() <= width, "width {width} overflowed to {}", marked.width());
                 for text in rendered("mcp__jeffries__beam_status", "cargo build -v 2>&1", status, width) {
                     assert_eq!(text.trim_end(), text, "width {width} left trailing whitespace: {text:?}");
                     assert!(text.width() <= width, "width {width} overflowed to {}", text.width());
@@ -446,6 +454,31 @@ mod tests {
     fn an_ansi_escape_in_a_digest_is_stripped_before_it_is_measured() {
         let detail = joined(Some("\u{1b}[31mred\u{1b}[0m"), None);
         assert_eq!(detail, "red");
+    }
+
+    #[test]
+    fn a_call_that_worked_says_nothing_at_all_on_the_right_edge() {
+        let rows = rendered("Read", "src/engine/grid.rs · 212 lines", Status::Ok, 60);
+        assert_eq!(rows[0], "\u{25b8} Read", "a call that worked is just its name");
+        assert_eq!(rows.get(1).map(String::as_str), Some("  \u{2514} src/engine/grid.rs \u{b7} 212 lines"));
+    }
+
+    #[test]
+    fn a_call_that_worked_and_can_be_entered_ends_on_the_enter_mark() {
+        let styles = styles();
+        let line = name_line(COLLAPSED, "Agent", Some(ENTER), Some((label_of(Status::Ok), styles.ok)), 40, &styles.rows());
+        let text = line.text();
+        assert_eq!(text.trim_end(), text, "the mark gap is only earned by a word after it: {text:?}");
+        assert!(text.ends_with(ENTER), "{text:?}");
+        assert_eq!(text.width(), 40);
+    }
+
+    #[test]
+    fn only_the_calls_worth_a_word_get_one() {
+        for status in [Status::Failed, Status::Denied, Status::Interrupted, Status::Pending] {
+            assert!(!label_of(status).is_empty(), "{status:?} is worth saying");
+        }
+        assert!(label_of(Status::Ok).is_empty(), "a call that worked is not news");
     }
 
     #[test]

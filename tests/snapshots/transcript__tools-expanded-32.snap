@@ -11,7 +11,7 @@ expression: "expanded(TOOLS, 32)"
 ▎ then writing the new module,
 ▎ then the spec.
 ▎
-▎ ▾ Edit                      ok
+▎ ▾ Edit
 ▎   └ src/engine/deflector.rs ·…
 ▎   ┃ file_path      /Users/fix…
 ▎   ┃ new_string     const COIL…
@@ -26,7 +26,7 @@ expression: "expanded(TOOLS, 32)"
 ▎   ┃
 ▎   ┃  pub struct Deflector {
 ▎
-▎ ▾ Write                     ok
+▎ ▾ Write
 ▎   └ src/engine/coil.rs · 2 hu…
 ▎   ┃ content        //! One de…
 ▎   ┃ file_path      /Users/fix…
@@ -39,21 +39,21 @@ expression: "expanded(TOOLS, 32)"
 ▎   ┃ +    pub gain: f32,
 ▎   ┃ +}
 ▎
-▎ ▾ WebFetch                  ok
+▎ ▾ WebFetch
 ▎   └ https://holodeck.invalid/…
 ▎   ┃ prompt         What is th…
 ▎   ┃ url            https://ho…
 ▎   ┃
 ▎   ┃ The spec puts the maximum…
 ▎
-▎ ▾ jeffries · beam_status    ok
+▎ ▾ jeffries · beam_status
 ▎   └ {"deck":9,"verbose":true}
 ▎   ┃ deck           9
 ▎   ┃ verbose        true
 ▎   ┃
 ▎   ┃ Deck 9 emitter array nomi…
 ▎
-▎ ▾ Replicator                ok
+▎ ▾ Replicator
 ▎   └ tea, earl grey, hot
 ▎   ┃ pattern        tea, earl …
 ▎   ┃ quantity       1

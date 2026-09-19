@@ -9,7 +9,7 @@ expression: "rendered(FORKED, 80)"
 ▎ claude · opus-5
 ▎ thinking · 1 line
 ▎ Right — merge is folding the base in the wrong direction.
-▎ ▸ Grep                                                                      ok
+▎ ▸ Grep
 ▎   └ base.or\(user\) · src/safety
 ▎ ─────────── 3 alternate branches here · showing 2 · [b] to switch ────────────
 

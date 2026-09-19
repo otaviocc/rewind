@@ -938,7 +938,7 @@ mod tests {
         let lines = rendered(&[HUMAN, &assistant("a1", "u1", block), result]);
         let at = lines.iter().position(|line| line.contains("▸ Bash")).expect("a tool call line");
         let name = lines.get(at).expect("a name row");
-        assert!(name.starts_with("▎ ▸ Bash") && name.ends_with("ok"), "{name:?}");
+        assert_eq!(name, "▎ ▸ Bash", "a call that worked carries no word on the right edge");
         assert_eq!(lines.get(at.saturating_add(1)).map(String::as_str), Some("▎   └ ls -la"));
     }
 
