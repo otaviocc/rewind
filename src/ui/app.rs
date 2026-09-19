@@ -231,6 +231,7 @@ struct Filter {
     column: Column,
     query: String,
     editing: bool,
+    visible: Vec<usize>,
 }
 
 impl App {
@@ -413,12 +414,38 @@ impl App {
 
     pub fn selected_project(&self) -> Option<&Project> {
         let Loadable::Ready(projects) = &self.projects else { return None };
-        projects.get(self.projects_pane.selected)
+        let index = self.resolve_position(Column::Projects, self.projects_pane.selected)?;
+        projects.get(index)
     }
 
     pub fn selected_session(&self) -> Option<&Session> {
         let Loadable::Ready(sessions) = &self.sessions else { return None };
-        sessions.get(self.sessions_pane.selected)
+        let index = self.resolve_position(Column::Sessions, self.sessions_pane.selected)?;
+        sessions.get(index)
+    }
+
+    pub fn resolve_position(&self, column: Column, position: usize) -> Option<usize> {
+        self.filter
+            .as_ref()
+            .filter(|filter| filter.column == column)
+            .map_or(Some(position), |filter| filter.visible.get(position).copied())
+    }
+
+    pub fn visible_len(&self, column: Column) -> usize {
+        if let Some(filter) = self.filter.as_ref().filter(|filter| filter.column == column) {
+            return filter.visible.len();
+        }
+        match column {
+            Column::Projects => match &self.projects {
+                Loadable::Ready(projects) => projects.len(),
+                Loadable::Loading | Loadable::Failed(_) => 0,
+            },
+            Column::Sessions => match &self.sessions {
+                Loadable::Ready(sessions) => sessions.len(),
+                Loadable::Loading | Loadable::Failed(_) => 0,
+            },
+            Column::Conversation => self.lines().len(),
+        }
     }
 
     pub const fn take_session_load(&mut self) -> Option<(PathBuf, u64)> {
@@ -602,6 +629,9 @@ impl App {
             .map(|session| (session.path.clone(), session.diagnostics.clone()))
             .collect();
         self.sessions = Loadable::Ready(sessions);
+        if self.filter.as_ref().is_some_and(|filter| filter.column == Column::Sessions) {
+            self.recompute_filter(None);
+        }
         self.request_conversation_for_selection();
     }
 
@@ -678,7 +708,7 @@ impl App {
                         return;
                     }
                     Action::Ascend => {
-                        self.filter = None;
+                        self.clear_filter();
                         return;
                     }
                     _ => {}
@@ -746,24 +776,16 @@ impl App {
 
     fn apply_filter_editing(&mut self, action: Action) {
         match action {
-            Action::Type(character) => {
-                if let Some(filter) = &mut self.filter {
-                    filter.query.push(character);
-                }
-                self.jump_to_first_filter_match();
-            }
-            Action::Untype => {
-                if let Some(filter) = &mut self.filter {
-                    filter.query.pop();
-                }
-                self.jump_to_first_filter_match();
-            }
+            Action::Type(character) => self.edit_filter_query(|query| query.push(character)),
+            Action::Untype => self.edit_filter_query(|query| {
+                query.pop();
+            }),
             Action::Descend => {
                 if let Some(filter) = &mut self.filter {
                     filter.editing = false;
                 }
             }
-            Action::Ascend => self.filter = None,
+            Action::Ascend => self.clear_filter(),
             Action::Move(motion) => self.move_selection(motion),
             Action::Resize(size) => self.area = size,
             Action::Quit => self.quit(),
@@ -1176,17 +1198,7 @@ impl App {
     }
 
     pub fn last(&self, column: Column) -> usize {
-        match column {
-            Column::Projects => match &self.projects {
-                Loadable::Ready(projects) => projects.len().saturating_sub(1),
-                _ => 0,
-            },
-            Column::Sessions => match &self.sessions {
-                Loadable::Ready(sessions) => sessions.len().saturating_sub(1),
-                _ => 0,
-            },
-            Column::Conversation => self.lines().len().saturating_sub(1),
-        }
+        self.visible_len(column).saturating_sub(1)
     }
 
     fn pane_height(&self) -> usize {
@@ -1254,7 +1266,10 @@ impl App {
             return;
         }
         if matches!(self.focused, Column::Projects | Column::Sessions) {
-            self.filter = Some(Filter { column: self.focused, query: String::new(), editing: true });
+            let column = self.focused;
+            let previous = self.pane(column).selected;
+            self.filter = Some(Filter { column, query: String::new(), editing: true, visible: Vec::new() });
+            self.recompute_filter(Some(previous));
         }
     }
 
@@ -1323,6 +1338,7 @@ impl App {
 
     fn open_search_hit(&mut self, target: Opened) {
         self.search_open = false;
+        self.filter = None;
         let Loadable::Ready(projects) = &self.projects else { return };
         let Some(index) = projects.iter().position(|project| project.directory == target.project_directory) else { return };
         self.projects_pane.selected = index;
@@ -1340,38 +1356,24 @@ impl App {
         self.conversation_pane.top = line.min(self.last(Column::Conversation));
     }
 
-    fn jump_to_first_filter_match(&mut self) {
-        let Some(filter) = &self.filter else { return };
-        let column = filter.column;
-        if filter.query.is_empty() {
-            return;
-        }
-        let matches = self.filter_matches(column, &filter.query.clone());
-        let Some(&index) = matches.first() else { return };
-        self.select_in_column(column, index);
-    }
-
     fn jump_filter(&mut self, forward: bool) {
         let Some(filter) = &self.filter else { return };
         let column = filter.column;
-        let matches = self.filter_matches(column, &filter.query.clone());
-        if matches.is_empty() {
+        let len = filter.visible.len();
+        if len == 0 {
             return;
         }
         let current = self.pane(column).selected;
-        let position = matches.iter().position(|&index| index == current);
-        let next = match (position, forward) {
-            (Some(position), true) => position.saturating_add(1).checked_rem(matches.len()).unwrap_or(0),
-            (Some(position), false) => position.checked_sub(1).unwrap_or_else(|| matches.len().saturating_sub(1)),
-            (None, true) => 0,
-            (None, false) => matches.len().saturating_sub(1),
+        let next = if forward {
+            current.saturating_add(1).checked_rem(len).unwrap_or(0)
+        } else {
+            current.checked_sub(1).unwrap_or_else(|| len.saturating_sub(1))
         };
-        let Some(&target) = matches.get(next) else { return };
-        self.select_in_column(column, target);
+        self.select_in_column(column, next);
     }
 
-    fn select_in_column(&mut self, column: Column, index: usize) {
-        self.pane_mut(column).selected = index;
+    fn select_in_column(&mut self, column: Column, position: usize) {
+        self.pane_mut(column).selected = position;
         let height = self.pane_height();
         let pane = self.pane_mut(column);
         pane.top = listing::revealed(pane.top, pane.selected, height);
@@ -1382,15 +1384,67 @@ impl App {
         }
     }
 
-    fn filter_matches(&self, column: Column, query: &str) -> Vec<usize> {
+    fn edit_filter_query(&mut self, edit: impl FnOnce(&mut String)) {
+        let Some(column) = self.filter.as_ref().map(|filter| filter.column) else { return };
+        let previous = self.resolve_position(column, self.pane(column).selected);
+        if let Some(filter) = &mut self.filter {
+            edit(&mut filter.query);
+        }
+        self.recompute_filter(previous);
+    }
+
+    fn recompute_filter(&mut self, previous_underlying: Option<usize>) {
+        let Some((column, query)) = self.filter.as_ref().map(|filter| (filter.column, filter.query.clone())) else { return };
         let labels = self.filter_labels(column);
-        let mut scored: Vec<(i32, usize)> = labels
+        let scored: Vec<(usize, Option<i32>)> = labels
             .iter()
             .enumerate()
-            .filter_map(|(index, label)| search::fuzzy::score(query, label).map(|score| (score, index)))
+            .map(|(index, label)| {
+                let score = if query.is_empty() { Some(0) } else { search::fuzzy::score(&query, label) };
+                (index, score)
+            })
             .collect();
-        scored.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(&right.1)));
-        scored.into_iter().map(|(_, index)| index).collect()
+        let visible: Vec<usize> = scored.iter().filter(|(_, score)| score.is_some()).map(|(index, _)| *index).collect();
+
+        let best_scored = scored
+            .iter()
+            .filter(|(_, score)| score.is_some())
+            .max_by_key(|(_, score)| score.unwrap_or(i32::MIN))
+            .map(|(index, _)| *index);
+
+        let new_position = previous_underlying
+            .and_then(|underlying| visible.iter().position(|&index| index == underlying))
+            .or_else(|| best_scored.and_then(|underlying| visible.iter().position(|&index| index == underlying)))
+            .unwrap_or(0)
+            .min(visible.len().saturating_sub(1));
+        let new_underlying = visible.get(new_position).copied();
+        let selection_changed = new_underlying != previous_underlying;
+
+        if let Some(filter) = &mut self.filter {
+            filter.visible = visible;
+        }
+        let height = self.pane_height();
+        let pane = self.pane_mut(column);
+        pane.selected = new_position;
+        pane.top = listing::revealed(pane.top, pane.selected, height);
+        if selection_changed {
+            match column {
+                Column::Projects => self.request_sessions_for_selection(),
+                Column::Sessions => self.request_conversation_for_selection(),
+                Column::Conversation => {}
+            }
+        }
+    }
+
+    fn clear_filter(&mut self) {
+        let Some(filter) = self.filter.take() else { return };
+        let column = filter.column;
+        let previous_position = self.pane(column).selected;
+        let Some(&underlying) = filter.visible.get(previous_position) else { return };
+        let height = self.pane_height();
+        let pane = self.pane_mut(column);
+        pane.selected = underlying;
+        pane.top = listing::revealed(0, underlying, height);
     }
 
     fn filter_labels(&self, column: Column) -> Vec<String> {
@@ -2831,5 +2885,154 @@ mod tests {
 
         app.apply(Action::Ascend);
         assert!(app.filter_status().is_none());
+    }
+
+    #[test]
+    fn escape_on_a_locked_sessions_filter_clears_it_too() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("aaa")]));
+        app.set_sessions(app.generation(), vec![session("safety-alpha"), session("safety-beta"), session("other")]);
+        app.apply(Action::Focus { forward: true });
+        assert_eq!(app.focused(), Column::Sessions);
+        app.apply(Action::ToggleFilter);
+        for character in "safety".chars() {
+            app.apply(Action::Type(character));
+        }
+        app.apply(Action::Descend);
+        assert!(app.filter_status().is_some());
+
+        app.apply(Action::Ascend);
+        assert!(app.filter_status().is_none(), "escape must clear a locked Sessions filter too");
+        assert_eq!(app.last(Column::Sessions), 2, "the full session list is visible again");
+    }
+
+    #[test]
+    fn a_locked_filter_reduces_last_to_the_match_count_not_the_full_list() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("aaa"), project("bbb"), project("grid-scanner")]));
+        app.apply(Action::ToggleFilter);
+        for character in "grd".chars() {
+            app.apply(Action::Type(character));
+        }
+        app.apply(Action::Descend);
+
+        assert_eq!(app.last(Column::Projects), 0, "only one project matches \"grd\"");
+    }
+
+    #[test]
+    fn narrowing_a_filter_clamps_the_selection_onto_a_surviving_row() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("aaa"), project("grid-one"), project("bbb"), project("grid-two")]));
+        app.apply(Action::ToggleFilter);
+        app.apply(Action::Type('g'));
+        app.apply(Action::Move(Motion::Line(1)));
+        assert_eq!(app.selected_project().map(|project| project.directory.as_str()), Some("grid-two"));
+
+        for character in "rid-tw".chars() {
+            app.apply(Action::Type(character));
+        }
+        assert_eq!(
+            app.selected_project().map(|project| project.directory.as_str()),
+            Some("grid-two"),
+            "the same underlying project stays selected as the query narrows onto it"
+        );
+    }
+
+    #[test]
+    fn a_selection_that_no_longer_matches_falls_back_to_the_best_remaining_match() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("grid-one"), project("grid-two"), project("aaa")]));
+        app.apply(Action::ToggleFilter);
+        app.apply(Action::Type('g'));
+        app.apply(Action::Move(Motion::Line(1)));
+        assert_eq!(app.selected_project().map(|project| project.directory.as_str()), Some("grid-two"));
+
+        app.apply(Action::Untype);
+        for character in "aaa".chars() {
+            app.apply(Action::Type(character));
+        }
+        assert_eq!(app.selected_project().map(|project| project.directory.as_str()), Some("aaa"));
+    }
+
+    #[test]
+    fn a_projects_filter_that_moves_the_selection_reloads_sessions_as_it_types_not_only_on_a_step_key() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("grid-one"), project("grid-two"), project("aaa")]));
+        let generation_before = app.generation();
+        app.apply(Action::ToggleFilter);
+        for character in "aaa".chars() {
+            app.apply(Action::Type(character));
+        }
+        assert_eq!(app.selected_project().map(|project| project.directory.as_str()), Some("aaa"));
+        assert!(app.generation() > generation_before, "the selection moved to aaa, so sessions must reload for it");
+    }
+
+    #[test]
+    fn typing_a_filter_query_that_does_not_move_the_selection_reloads_nothing() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("grid-scanner"), project("aaa")]));
+        app.apply(Action::ToggleFilter);
+        app.apply(Action::Type('g'));
+        let generation_after_first_char = app.generation();
+
+        app.apply(Action::Type('r'));
+        assert_eq!(
+            app.generation(),
+            generation_after_first_char,
+            "grid-scanner was already selected and still matches, nothing to reload"
+        );
+    }
+
+    #[test]
+    fn clearing_a_filter_restores_the_underlying_index_so_browsing_resumes_from_the_same_row() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("aaa"), project("bbb"), project("grid-scanner")]));
+        app.apply(Action::ToggleFilter);
+        for character in "grd".chars() {
+            app.apply(Action::Type(character));
+        }
+        app.apply(Action::Descend);
+        assert_eq!(app.selected_project().map(|project| project.directory.as_str()), Some("grid-scanner"));
+
+        app.apply(Action::Ascend);
+        assert_eq!(app.last(Column::Projects), 2, "the full list is visible again");
+        assert_eq!(app.selected_project().map(|project| project.directory.as_str()), Some("grid-scanner"));
+    }
+
+    #[test]
+    fn stepping_a_locked_filter_wraps_through_the_visible_rows_only() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("grid-one"), project("aaa"), project("grid-two")]));
+        app.apply(Action::ToggleFilter);
+        app.apply(Action::Type('g'));
+        app.apply(Action::Descend);
+        assert_eq!(app.selected_project().map(|project| project.directory.as_str()), Some("grid-one"));
+
+        app.apply(Action::NextCall { forward: true });
+        assert_eq!(app.selected_project().map(|project| project.directory.as_str()), Some("grid-two"));
+
+        app.apply(Action::NextCall { forward: true });
+        assert_eq!(
+            app.selected_project().map(|project| project.directory.as_str()),
+            Some("grid-one"),
+            "stepping past the last match wraps to the first"
+        );
+
+        app.apply(Action::NextCall { forward: false });
+        assert_eq!(
+            app.selected_project().map(|project| project.directory.as_str()),
+            Some("grid-two"),
+            "stepping backward past the first match wraps to the last"
+        );
+    }
+
+    #[test]
+    fn an_empty_query_shows_every_row_in_its_natural_order() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("zzz"), project("aaa")]));
+        app.apply(Action::ToggleFilter);
+
+        assert_eq!(app.last(Column::Projects), 1);
+        assert_eq!(app.selected_project().map(|project| project.directory.as_str()), Some("zzz"));
     }
 }

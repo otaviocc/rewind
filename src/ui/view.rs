@@ -277,12 +277,13 @@ const fn label(column: Column) -> &'static str {
 fn projects_rows(area: Rect, buf: &mut Buffer, app: &App, focused: bool) {
     let Loadable::Ready(projects) = app.projects() else { return };
     let pane = app.pane(Column::Projects);
-    let last = projects.len().min(pane.top.saturating_add(usize::from(area.height)));
+    let last = app.visible_len(Column::Projects).min(pane.top.saturating_add(usize::from(area.height)));
 
-    for (row_index, index) in (pane.top..last).enumerate() {
+    for (row_index, position) in (pane.top..last).enumerate() {
+        let Some(index) = app.resolve_position(Column::Projects, position) else { continue };
         let Some(project) = projects.get(index) else { continue };
         let y = area.y.saturating_add(u16::try_from(row_index).unwrap_or(u16::MAX));
-        let picked = index == pane.selected;
+        let picked = position == pane.selected;
         let marker = if !project.present {
             GONE
         } else if picked && focused {
@@ -305,12 +306,13 @@ fn projects_rows(area: Rect, buf: &mut Buffer, app: &App, focused: bool) {
 fn sessions_rows(area: Rect, buf: &mut Buffer, app: &App, focused: bool) {
     let Loadable::Ready(sessions) = app.sessions() else { return };
     let pane = app.pane(Column::Sessions);
-    let last = sessions.len().min(pane.top.saturating_add(usize::from(area.height)));
+    let last = app.visible_len(Column::Sessions).min(pane.top.saturating_add(usize::from(area.height)));
 
-    for (row_index, index) in (pane.top..last).enumerate() {
+    for (row_index, position) in (pane.top..last).enumerate() {
+        let Some(index) = app.resolve_position(Column::Sessions, position) else { continue };
         let Some(session) = sessions.get(index) else { continue };
         let y = area.y.saturating_add(u16::try_from(row_index).unwrap_or(u16::MAX));
-        let picked = index == pane.selected;
+        let picked = position == pane.selected;
         let marker = if picked && focused { CHEVRON } else { " " };
         row(Rect { y, height: 1, ..area }, buf, area.x, marker, app.theme().style(Element::Body));
 
@@ -533,6 +535,54 @@ mod tests {
         let buffer = frame(&app, Size::new(120, 24));
         let row = text_row(&buffer, 3);
         assert!(row.starts_with(CHEVRON), "{row}");
+    }
+
+    #[test]
+    fn a_locked_filter_hides_non_matching_rows_rather_than_only_jumping_to_them() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("aaa", true), project("bbb", true), project("grid-scanner", true)]));
+        app.apply(Action::ToggleFilter);
+        for character in "grd".chars() {
+            app.apply(Action::Type(character));
+        }
+        app.apply(Action::Descend);
+
+        let buffer = frame(&app, Size::new(120, 24));
+        assert!(text_row(&buffer, 3).contains("grid-scanner"), "{}", text_row(&buffer, 3));
+        let second_row = text_row(&buffer, 4);
+        assert!(!second_row.contains("aaa") && !second_row.contains("bbb"), "no other row should render: {second_row}");
+    }
+
+    #[test]
+    fn clicking_a_filtered_row_selects_the_underlying_item_not_its_screen_position() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(
+            app.generation(),
+            Ok(vec![project("aaa", true), project("grid-one", true), project("bbb", true), project("grid-two", true)]),
+        );
+        app.apply(Action::ToggleFilter);
+        for character in "grid".chars() {
+            app.apply(Action::Type(character));
+        }
+        app.apply(Action::Descend);
+
+        app.apply(Action::Click { column: Column::Projects, row: 1 });
+        assert_eq!(app.selected_project().map(|project| project.directory.as_str()), Some("grid-two"));
+    }
+
+    #[test]
+    fn escape_on_a_locked_filter_restores_every_row() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("aaa", true), project("bbb", true), project("grid-scanner", true)]));
+        app.apply(Action::ToggleFilter);
+        app.apply(Action::Type('g'));
+        app.apply(Action::Descend);
+        app.apply(Action::Ascend);
+
+        let buffer = frame(&app, Size::new(120, 24));
+        assert!(text_row(&buffer, 3).contains("aaa"), "{}", text_row(&buffer, 3));
+        assert!(text_row(&buffer, 4).contains("bbb"), "{}", text_row(&buffer, 4));
+        assert!(text_row(&buffer, 5).contains("grid-scanner"), "{}", text_row(&buffer, 5));
     }
 
     #[test]

@@ -61,7 +61,7 @@ cargo install --locked --path .
 | `f` | focus the conversation full-width |
 | `/` | filter the list |
 | `?` | search everything |
-| `n` `p` | next · previous tool call |
+| `n` `p` `N` | next · previous tool call, or step through a locked `/` filter (`N` is an alias for `p`) |
 | `[` `]` | previous · next message |
 | `Space` `t` | expand one tool call · all of them |
 | `i` | reveal context injections |
