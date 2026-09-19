@@ -1,0 +1,53 @@
+---
+source: tests/themes.rs
+expression: "table(& built_in(\"default-plus\"))"
+---
+syntax_theme  base16-ocean.dark
+
+body                  fg #ffffff       bg -
+muted                 fg #4c4c4c       bg -
+label                 fg -             bg -             bold
+human_gutter          fg #35b0d8       bg -             bold
+assistant_gutter      fg #ab64ff       bg -             dim
+tool_name             fg -             bg -             bold
+tool_summary          fg -             bg -
+tool_ok               fg #4c4c4c       bg -
+tool_error            fg #f74a4a       bg -
+thinking              fg #4c4c4c       bg -
+diff_added            fg #41b645       bg -
+diff_removed          fg #f74a4a       bg -
+diff_context          fg -             bg -
+subagent              fg -             bg -             bold
+injection             fg #4c4c4c       bg -
+branch_marker         fg #4c4c4c       bg -
+compact_divider       fg #4c4c4c       bg -
+project_missing       fg #4c4c4c       bg -
+session_live          fg #41b645       bg -
+heading               fg -             bg -             bold
+strong                fg -             bg -             bold
+emphasis              fg -             bg -             italic
+strikethrough         fg -             bg -             crossed_out
+inline_code           fg #f2248c       bg #242424
+code_block            fg -             bg #242424
+code_block_lang       fg #4c4c4c       bg #242424
+link                  fg #4fa5ff       bg -             underline
+quote                 fg #8e8e8e       bg -
+quote_gutter          fg #4c4c4c       bg -
+list_bullet           fg #4c4c4c       bg -
+table_header          fg -             bg -             bold
+table_border          fg #4c4c4c       bg -
+rule                  fg #4c4c4c       bg -
+html                  fg #4c4c4c       bg -
+header_title          fg -             bg -             bold
+status                fg -             bg -
+status_notice         fg #efb759       bg -
+status_error          fg #f74a4a       bg -
+cursor_line           fg -             bg #26262c
+search_match          fg black         bg #efb759
+search_current        fg black         bg #ab64ff       bold
+selection             fg #ffffff       bg #515b70
+help_window           fg #ffffff       bg #171717
+scroll_progress       fg #35b0d8       bg -
+hint                  fg #4c4c4c       bg -
+column_title          fg #4c4c4c       bg -
+column_title_active   fg #35b0d8       bg -             bold

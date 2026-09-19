@@ -185,6 +185,7 @@ theme_snapshot!(the_spool_theme_resolves_as_it_reads, "spool");
 theme_snapshot!(the_ansi_theme_resolves_as_it_reads, "ansi");
 theme_snapshot!(the_catppuccin_latte_theme_resolves_as_it_reads, "catppuccin-latte");
 theme_snapshot!(the_catppuccin_mocha_theme_resolves_as_it_reads, "catppuccin-mocha");
+theme_snapshot!(the_default_plus_theme_resolves_as_it_reads, "default-plus");
 theme_snapshot!(the_gruvbox_dark_theme_resolves_as_it_reads, "gruvbox-dark");
 theme_snapshot!(the_gruvbox_light_theme_resolves_as_it_reads, "gruvbox-light");
 theme_snapshot!(the_kanagawa_dragon_theme_resolves_as_it_reads, "kanagawa-dragon");

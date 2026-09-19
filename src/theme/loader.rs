@@ -21,6 +21,7 @@ const SPOOL: &str = include_str!("../../themes/spool.toml");
 const ANSI: &str = include_str!("../../themes/ansi.toml");
 const CATPPUCCIN_LATTE: &str = include_str!("../../themes/catppuccin-latte.toml");
 const CATPPUCCIN_MOCHA: &str = include_str!("../../themes/catppuccin-mocha.toml");
+const DEFAULT_PLUS: &str = include_str!("../../themes/default-plus.toml");
 const GRUVBOX_DARK: &str = include_str!("../../themes/gruvbox-dark.toml");
 const GRUVBOX_LIGHT: &str = include_str!("../../themes/gruvbox-light.toml");
 const KANAGAWA_DRAGON: &str = include_str!("../../themes/kanagawa-dragon.toml");
@@ -36,6 +37,7 @@ pub const BUILT_INS: &[(&str, &str)] = &[
     ("ansi", ANSI),
     ("catppuccin-latte", CATPPUCCIN_LATTE),
     ("catppuccin-mocha", CATPPUCCIN_MOCHA),
+    ("default-plus", DEFAULT_PLUS),
     ("gruvbox-dark", GRUVBOX_DARK),
     ("gruvbox-light", GRUVBOX_LIGHT),
     ("kanagawa-dragon", KANAGAWA_DRAGON),
