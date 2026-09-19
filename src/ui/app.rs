@@ -554,6 +554,7 @@ impl App {
                 | Action::Descend
                 | Action::ToggleFocusMode
                 | Action::NextCall { .. }
+                | Action::NextTurn { .. }
                 | Action::ToggleCall
                 | Action::ToggleAllCalls
                 | Action::CycleBranch
@@ -572,6 +573,7 @@ impl App {
             Action::Ascend => self.ascend(),
             Action::Move(motion) => self.move_selection(motion),
             Action::NextCall { forward } => self.move_call_cursor(forward),
+            Action::NextTurn { forward } => self.jump_turn(forward),
             Action::ToggleCall => self.toggle_call(),
             Action::ToggleAllCalls => self.toggle_all_calls(),
             Action::CycleBranch => self.cycle_branch(),
@@ -629,6 +631,18 @@ impl App {
             (Some(cursor), false) => cursor.saturating_sub(1),
         });
         self.reveal_call_cursor();
+    }
+
+    fn jump_turn(&mut self, forward: bool) {
+        let top = self.conversation_pane.top;
+        let line = {
+            let Loadable::Ready(rendered) = &self.conversation else { return };
+            let transcript = rendered.transcript();
+            let found = if forward { transcript.turn_after(top) } else { transcript.turn_before(top) };
+            let Some(line) = found else { return };
+            line
+        };
+        self.conversation_pane.top = line.min(self.last(Column::Conversation));
     }
 
     fn reveal_call_cursor(&mut self) {
@@ -1221,6 +1235,104 @@ mod tests {
         app.set_conversation(app.conversation_generation(), Ok(Box::new(conversation)), Agents::default());
         let _ = dir.keep();
         app
+    }
+
+    fn exchanges(area: Size) -> App {
+        let dir = tempfile::TempDir::new().expect("a temporary directory");
+        let path = dir.path().join("session.jsonl");
+        let prose = "the deflector array reads back one plate at a time and then the next ".repeat(3);
+        let mut lines = Vec::new();
+        for index in 0..4u32 {
+            let parent = if index == 0 { "null".to_owned() } else { format!(r#""a{}""#, index.saturating_sub(1)) };
+            lines.push(format!(
+                r#"{{"type":"user","uuid":"u{index}","parentUuid":{parent},"sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:00Z","origin":{{"kind":"human"}},"message":{{"role":"user","content":"ask {index}"}}}}"#
+            ));
+            lines.push(format!(
+                r#"{{"type":"assistant","uuid":"a{index}","parentUuid":"u{index}","sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:01Z","requestId":"q{index}","message":{{"model":"opus-5","id":"m{index}","role":"assistant","content":[{{"type":"text","text":"{prose}"}}]}}}}"#
+            ));
+        }
+        std::fs::write(&path, lines.join("\n") + "\n").expect("a written transcript");
+        let conversation = crate::domain::thread::build(&path).expect("a built conversation");
+        let mut app = app(area);
+        app.pending_conversation_path = Some(path);
+        app.set_conversation(app.conversation_generation(), Ok(Box::new(conversation)), Agents::default());
+        let _ = dir.keep();
+        app
+    }
+
+    fn turns_of(app: &App) -> Vec<usize> {
+        let Loadable::Ready(rendered) = app.conversation() else { return Vec::new() };
+        rendered.transcript().turns.clone()
+    }
+
+    #[test]
+    fn a_step_forward_puts_the_next_header_at_the_top_of_the_conversation() {
+        let mut app = exchanges(Size::new(120, 20));
+        let turns = turns_of(&app);
+        assert!(turns.len() >= 4, "the fixture has to have headers to walk: {turns:?}");
+        assert_eq!(app.pane(Column::Conversation).top, 0);
+
+        app.apply(Action::NextTurn { forward: true });
+        assert_eq!(Some(app.pane(Column::Conversation).top), turns.get(1).copied());
+        app.apply(Action::NextTurn { forward: true });
+        assert_eq!(Some(app.pane(Column::Conversation).top), turns.get(2).copied());
+    }
+
+    #[test]
+    fn a_step_back_returns_to_the_header_it_came_from() {
+        let mut app = exchanges(Size::new(120, 20));
+        app.apply(Action::NextTurn { forward: true });
+        app.apply(Action::NextTurn { forward: true });
+        let top = app.pane(Column::Conversation).top;
+        app.apply(Action::NextTurn { forward: false });
+        assert!(app.pane(Column::Conversation).top < top);
+        app.apply(Action::NextTurn { forward: false });
+        assert_eq!(app.pane(Column::Conversation).top, 0, "back to where the reading started");
+    }
+
+    #[test]
+    fn a_step_from_inside_a_block_leaves_that_block_rather_than_landing_on_its_own_header() {
+        let mut app = exchanges(Size::new(120, 20));
+        app.apply(Action::Focus { forward: true });
+        app.apply(Action::Focus { forward: true });
+        app.apply(Action::Move(Motion::Line(1)));
+        let turns = turns_of(&app);
+        app.apply(Action::NextTurn { forward: true });
+        assert_eq!(Some(app.pane(Column::Conversation).top), turns.get(1).copied());
+    }
+
+    #[test]
+    fn a_step_past_either_end_of_the_conversation_moves_nothing() {
+        let mut app = exchanges(Size::new(120, 20));
+        app.apply(Action::NextTurn { forward: false });
+        assert_eq!(app.pane(Column::Conversation).top, 0, "nothing above the first header");
+
+        for _ in 0..turns_of(&app).len().saturating_add(2) {
+            app.apply(Action::NextTurn { forward: true });
+        }
+        let bottom = app.pane(Column::Conversation).top;
+        app.apply(Action::NextTurn { forward: true });
+        assert_eq!(app.pane(Column::Conversation).top, bottom, "and nothing below the last");
+        assert!(bottom <= app.lines().len().saturating_sub(1), "the pane never scrolls past its own last line");
+    }
+
+    #[test]
+    fn a_run_of_replies_under_one_header_is_a_single_stop() {
+        let mut app = wide_transcript(Size::new(120, 20));
+        assert_eq!(turns_of(&app).len(), 2, "one you, one claude, though twelve records rendered");
+        app.apply(Action::NextTurn { forward: true });
+        let claude = app.pane(Column::Conversation).top;
+        assert!(claude > 0);
+        app.apply(Action::NextTurn { forward: true });
+        assert_eq!(app.pane(Column::Conversation).top, claude, "the run is one block, not twelve");
+    }
+
+    #[test]
+    fn a_conversation_that_never_loaded_has_nowhere_to_step() {
+        let mut app = app(Size::new(120, 20));
+        app.apply(Action::NextTurn { forward: true });
+        app.apply(Action::NextTurn { forward: false });
+        assert_eq!(app.pane(Column::Conversation).top, 0);
     }
 
     fn node_at_top(app: &App) -> Option<crate::render::message::Position> {

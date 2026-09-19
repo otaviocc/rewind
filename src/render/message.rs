@@ -72,6 +72,7 @@ impl Rail {
 struct Group {
     rail: Rail,
     model: Option<String>,
+    turn: bool,
     lines: Vec<RenderedLine>,
     anchors: Vec<Anchor>,
     spans: Vec<Span>,
@@ -102,6 +103,7 @@ pub struct Transcript {
     pub lines: Vec<RenderedLine>,
     pub anchors: Vec<Anchor>,
     pub spans: Vec<Span>,
+    pub turns: Vec<usize>,
 }
 
 impl Transcript {
@@ -117,6 +119,14 @@ impl Transcript {
         let ceiling =
             self.spans.get(index.saturating_add(1)).map_or_else(|| self.lines.len(), |next| next.line).saturating_sub(1);
         Some(span.line.saturating_add(position.offset).min(ceiling.max(span.line)))
+    }
+
+    pub fn turn_after(&self, line: usize) -> Option<usize> {
+        self.turns.get(self.turns.partition_point(|turn| *turn <= line)).copied()
+    }
+
+    pub fn turn_before(&self, line: usize) -> Option<usize> {
+        self.turns.get(self.turns.partition_point(|turn| *turn < line).checked_sub(1)?).copied()
     }
 }
 
@@ -149,7 +159,7 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
                 let mut anchors = Vec::new();
                 content(conversation, ctx, &record.message.content, &mut lines, &mut anchors);
                 let spans = vec![Span { node: id, line: 0 }];
-                groups.push(Group { rail: Rail::Human, model: None, lines, anchors, spans });
+                groups.push(Group { rail: Rail::Human, model: None, turn: true, lines, anchors, spans });
             }
             NodeKind::Assistant(turn) => {
                 let mut body = Vec::new();
@@ -177,7 +187,8 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
                         shift(&mut anchors, at);
                         lines.append(&mut body);
                         let spans = vec![Span { node: id, line: 0 }];
-                        groups.push(Group { rail: Rail::Assistant, model: turn.model.clone(), lines, anchors, spans });
+                        let model = turn.model.clone();
+                        groups.push(Group { rail: Rail::Assistant, model, turn: true, lines, anchors, spans });
                     }
                 }
             }
@@ -187,12 +198,14 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
                 let mut anchors = Vec::new();
                 content(conversation, ctx, &record.message.content, &mut lines, &mut anchors);
                 let spans = vec![Span { node: id, line: 0 }];
-                groups.push(Group { rail: Rail::Seam, model: None, lines, anchors, spans });
+                groups.push(Group { rail: Rail::Seam, model: None, turn: true, lines, anchors, spans });
             }
             NodeKind::User(_) | NodeKind::System(_) | NodeKind::Attachment(_) => {
                 if let Some(line) = seam {
                     let spans = vec![Span { node: id, line: 0 }];
-                    groups.push(Group { rail: Rail::Seam, model: None, lines: vec![line], anchors: Vec::new(), spans });
+                    let group =
+                        Group { rail: Rail::Seam, model: None, turn: false, lines: vec![line], anchors: Vec::new(), spans };
+                    groups.push(group);
                 }
             }
         }
@@ -244,7 +257,7 @@ fn push_command(
     let anchors = vec![Anchor { id: Box::from(uuid), line: at, head: call.head, agent: None }];
     lines.extend(call.lines);
     let spans = vec![Span { node: id, line: 0 }];
-    groups.push(Group { rail: Rail::Command, model: None, lines, anchors, spans });
+    groups.push(Group { rail: Rail::Command, model: None, turn: true, lines, anchors, spans });
 }
 
 fn marker(conversation: &Conversation, id: NodeId, on: Option<NodeId>, groups: &mut [Group], width: usize, theme: &Theme) {
@@ -280,7 +293,7 @@ fn flush(conversation: &Conversation, ctx: &Ctx<'_>, pending: &mut Vec<NodeId>, 
     }
     let anchors = vec![Anchor { id: key, line: 0, head: 1, agent: None }];
     let spans = vec![Span { node: first, line: 0 }];
-    groups.push(Group { rail: Rail::Seam, model: None, lines, anchors, spans });
+    groups.push(Group { rail: Rail::Seam, model: None, turn: false, lines, anchors, spans });
 }
 
 fn seam(node: &Node, sidechain: bool, width: usize, theme: &Theme) -> Option<RenderedLine> {
@@ -304,6 +317,9 @@ fn flatten(groups: Vec<Group>, theme: &Theme) -> Transcript {
         }
         let mut anchors = group.anchors;
         let mut spans = group.spans;
+        if group.turn {
+            transcript.turns.push(transcript.lines.len());
+        }
         shift(&mut anchors, transcript.lines.len());
         for span in &mut spans {
             span.line = span.line.saturating_add(transcript.lines.len());
@@ -328,7 +344,7 @@ fn unreached(ctx: &Ctx<'_>, width: usize, reached: &HashSet<Box<str>>) -> Option
         anchors.push(Anchor { id: agent.id.clone(), line: lines.len(), head: rows.len(), agent: Some(agent.id.clone()) });
         lines.extend(rows);
     }
-    Some(Group { rail: Rail::Assistant, model: None, lines, anchors, spans: Vec::new() })
+    Some(Group { rail: Rail::Assistant, model: None, turn: false, lines, anchors, spans: Vec::new() })
 }
 
 fn shift(anchors: &mut [Anchor], by: usize) {
@@ -724,6 +740,63 @@ mod tests {
         let position = built.position(second.line).expect("a position at the reply");
         assert_eq!(position.node, second.node);
         assert_eq!(position.offset, 0);
+    }
+
+    #[test]
+    fn every_header_block_records_the_line_it_starts_on() {
+        let built = built(&[HUMAN, &assistant("a1", "u1", PARAGRAPHS)]);
+        assert_eq!(built.turns, vec![0, 3], "the you header and the claude header");
+    }
+
+    #[test]
+    fn a_run_of_replies_under_one_header_is_one_stop_and_not_three() {
+        let built = built(&[
+            HUMAN,
+            &assistant("a1", "u1", r#"[{"type":"text","text":"first"}]"#),
+            &assistant("a2", "a1", r#"[{"type":"text","text":"second"}]"#),
+            &assistant("a3", "a2", r#"[{"type":"text","text":"third"}]"#),
+        ]);
+        assert_eq!(built.spans.len(), 4, "four nodes rendered");
+        assert_eq!(built.turns.len(), 2, "but only two headers to stop at: {:?}", built.turns);
+    }
+
+    #[test]
+    fn a_change_of_model_is_a_second_stop_because_it_is_a_second_header() {
+        let second = r#"{"type":"assistant","uuid":"a2","parentUuid":"a1","sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:02Z","message":{"id":"msg_a2","model":"haiku-4-5","role":"assistant","content":[{"type":"text","text":"second"}]}}"#;
+        let built = built(&[HUMAN, &assistant("a1", "u1", r#"[{"type":"text","text":"first"}]"#), second]);
+        assert_eq!(built.turns.len(), 3, "{:?}", built.turns);
+    }
+
+    #[test]
+    fn the_turn_lines_ascend_and_each_one_opens_a_block() {
+        let built = built(&[HUMAN, &assistant("a1", "u1", PARAGRAPHS)]);
+        assert!(built.turns.windows(2).all(|pair| pair[0] < pair[1]), "{:?}", built.turns);
+        for line in &built.turns {
+            assert!(built.lines.get(*line).is_some_and(|line| !line.is_blank()), "turn at {line} is a blank line");
+        }
+    }
+
+    #[test]
+    fn a_step_forward_and_back_lands_on_the_next_and_previous_header() {
+        let built = built(&[HUMAN, &assistant("a1", "u1", PARAGRAPHS)]);
+        assert_eq!(built.turn_after(0), Some(3));
+        assert_eq!(built.turn_after(1), Some(3), "from anywhere inside the first block");
+        assert_eq!(built.turn_before(3), Some(0));
+        assert_eq!(built.turn_before(4), Some(3), "from inside a block, back to its own header");
+    }
+
+    #[test]
+    fn a_step_past_either_end_stops_rather_than_wrapping() {
+        let built = built(&[HUMAN, &assistant("a1", "u1", PARAGRAPHS)]);
+        assert_eq!(built.turn_before(0), None, "nothing above the first header");
+        assert_eq!(built.turn_after(99), None, "and nothing below the last");
+    }
+
+    #[test]
+    fn an_empty_transcript_has_nowhere_to_step() {
+        let built = Transcript::default();
+        assert_eq!(built.turn_after(0), None);
+        assert_eq!(built.turn_before(0), None);
     }
 
     #[test]
