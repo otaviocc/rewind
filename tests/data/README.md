@@ -261,10 +261,16 @@ legacy names they are.
 | `WebFetch` | `{bytes, code, codeText, result, durationMs, url}` |
 | `mcp__jeffries__beam_status` | an **MCP** name, `mcp__<server>__<tool>`, with the `[{type:"text",…}]` list result that MCP tools return |
 | `Replicator` | an **unknown** tool name. Nothing may special-case it, and it must not render blank |
+| `Read` ×3 | three **successful** reads in a row, nothing between them. The renderer stacks their digests under one name row, so this is what says the run collapses — and the failed `Read` immediately below it says a call with a word on the right edge keeps its own name |
 | `Read` | input elided to `{"__unparsedToolInput": "…"}`, a truncated fragment of the JSON the model emitted. A digest that requires `file_path` finds nothing here |
 | `Bash` | **denied** — the observed rejection string, `is_error: true` |
 | `Bash` | **interrupted** — `[Request interrupted by user for tool use]` |
 | `Bash` | **pending**: a `tool_use` with no result record after it at all, as a session that ends mid-call leaves behind. Status cannot be read off the call alone |
+
+The run of three `Read` calls is the one entry here that is not a distinct tool *shape*: it
+is the successful `Read` already observed in `11111111-….jsonl`, repeated three times with
+nothing between, because a run of one tool is a rendering case rather than a schema one and
+the corpus survey says it is the common one — 74% of adjacent call pairs share a tool name.
 
 `structuredPatch` exists in no other file in the tree, so this is its only specification.
 Both `Edit` and `Write` carry one, which is why rendering a diff needs no diff algorithm.

@@ -57,6 +57,24 @@ expression: "expanded(TOOLS, 80)"
 ▎   ┃
 ▎   ┃ Replicated 1 item.
 ▎
+▎ ▾ Read
+▎   └ src/engine/grid.rs · 212 lines
+▎   ┃ file_path      /Users/fixture/Developer/holodeck/src/engine/grid.rs
+▎   ┃
+▎   ┃ //! The holodeck grid scanner.
+▎
+▎ ▾ Read
+▎   └ src/engine/coil.rs · 64 lines
+▎   ┃ file_path      /Users/fixture/Developer/holodeck/src/engine/coil.rs
+▎   ┃
+▎   ┃ //! One deflector coil.
+▎
+▎ ▾ Read
+▎   └ src/engine/deflector.rs · 148 lines
+▎   ┃ file_path      /Users/fixture/Developer/holodeck/src/engine/deflector.rs
+▎   ┃
+▎   ┃ //! The deflector array.
+▎
 ▎ ▾ Read                                                                  failed
 ▎   └ {"file_path": "/Users/fixture/Developer/holodeck/src/engine/co
 ▎   ┃ __unparsedToo… {"file_path": "/Users/fixture/Developer/holodeck/src/engin…

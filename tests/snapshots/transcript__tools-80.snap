@@ -18,6 +18,10 @@ expression: "rendered(TOOLS, 80)"
 ▎   └ {"deck":9,"verbose":true}
 ▎ ▸ Replicator
 ▎   └ tea, earl grey, hot
+▎ ▸ Read
+▎   └ src/engine/grid.rs · 212 lines
+▎   └ src/engine/coil.rs · 64 lines
+▎   └ src/engine/deflector.rs · 148 lines
 ▎ ▸ Read                                                                  failed
 ▎   └ {"file_path": "/Users/fixture/Developer/holodeck/src/engine/co
 ▎ ▸ Bash                                                                  denied

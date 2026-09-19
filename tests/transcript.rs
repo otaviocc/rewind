@@ -198,6 +198,31 @@ fn a_file_path_digest_is_shown_relative_to_the_session_working_directory() {
 }
 
 #[test]
+fn a_run_of_one_tool_stacks_its_digests_under_a_single_name() {
+    let text = rendered(TOOLS, 80);
+    for name in ["grid.rs", "coil.rs", "deflector.rs"] {
+        assert!(text.contains(&format!("\u{2514} src/engine/{name}")), "{name} missing from:\n{text}");
+    }
+    let names = text.lines().filter(|line| line.contains("\u{25b8} Read")).count();
+    assert_eq!(names, 2, "one name for the run of three, and one for the failed call below it:\n{text}");
+}
+
+#[test]
+fn a_call_that_failed_keeps_its_own_name_even_after_a_run_of_the_same_tool() {
+    let text = rendered(TOOLS, 80);
+    assert!(text.contains("\u{25b8} Read") && text.contains("failed"), "{text}");
+    let at = text.lines().position(|line| line.contains("failed")).expect("the failed call");
+    let before = text.lines().nth(at).unwrap_or_default();
+    assert!(before.contains("\u{25b8} Read"), "a word on the right edge needs a name row to sit on: {before:?}");
+}
+
+#[test]
+fn expanding_a_run_gives_every_call_its_name_back() {
+    let text = expanded(TOOLS, 80);
+    assert_eq!(text.lines().filter(|line| line.contains("\u{25be} Read")).count(), 4, "{text}");
+}
+
+#[test]
 fn a_bash_command_is_never_rewritten_against_the_working_directory() {
     let text = rendered(BASELINE, 80);
     assert!(text.contains("wc -l src/engine/grid.rs"), "{text}");
@@ -361,7 +386,7 @@ fn every_expanded_call_is_anchored_to_the_line_its_header_is_on() {
     let path = session_path(TOOLS);
     let view = View::expanding(&path);
     let transcript = built(&path, 80, &view);
-    assert_eq!(transcript.anchors.len(), 9, "nine calls in the tool surface");
+    assert_eq!(transcript.anchors.len(), 12, "twelve calls in the tool surface");
     for anchor in &transcript.anchors {
         let line = transcript.lines.get(anchor.line).map(RenderedLine::text).unwrap_or_default();
         assert!(line.contains("▾ "), "anchor {} does not point at an expanded header: {line:?}", anchor.line);

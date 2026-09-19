@@ -8,7 +8,7 @@ use ratatui::style::Style;
 use crate::domain::block::{Block, Content, ImageSource};
 use crate::domain::command::Command as SlashCommand;
 use crate::domain::record::CompactMetadata;
-use crate::domain::thread::{Conversation, Node, NodeId, NodeKind};
+use crate::domain::thread::{AssistantTurn, Conversation, Node, NodeId, NodeKind};
 use crate::render::line::{RenderedLine, StyledSpan, truncate};
 use crate::render::prose;
 use crate::render::{Ctx, command, divider, injection, tool};
@@ -74,6 +74,7 @@ struct Group {
     model: Option<String>,
     turn: bool,
     quiet: bool,
+    run: Option<Box<str>>,
     lines: Vec<RenderedLine>,
     anchors: Vec<Anchor>,
     spans: Vec<Span>,
@@ -160,42 +161,10 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
                 let mut anchors = Vec::new();
                 content(conversation, ctx, &record.message.content, &mut lines, &mut anchors);
                 let spans = vec![Span { node: id, line: 0 }];
-                groups.push(Group { rail: Rail::Human, model: None, turn: true, quiet: false, lines, anchors, spans });
+                groups.push(Group { rail: Rail::Human, model: None, turn: true, quiet: false, run: None, lines, anchors, spans });
             }
             NodeKind::Assistant(turn) => {
-                let mut body = Vec::new();
-                let mut anchors = Vec::new();
-                blocks(conversation, ctx, &turn.content, &mut body, &mut anchors);
-                if body.is_empty() {
-                    continue;
-                }
-                let quiet = quiet(ctx, &turn.content);
-                match groups.last_mut() {
-                    Some(group) if group.rail == Rail::Assistant && group.model == turn.model => {
-                        if !(group.quiet && quiet && seam.is_none()) {
-                            group.lines.push(RenderedLine::blank());
-                        }
-                        let starts = group.lines.len();
-                        group.lines.extend(seam);
-                        let at = group.lines.len();
-                        shift(&mut anchors, at);
-                        group.lines.append(&mut body);
-                        group.anchors.append(&mut anchors);
-                        group.spans.push(Span { node: id, line: starts });
-                        group.quiet = quiet;
-                    }
-                    _ => {
-                        let detail = model_label(turn.model.as_deref());
-                        let mut lines = Vec::from_iter(seam);
-                        lines.push(header(ASSISTANT_LABEL, detail.as_deref(), inner, ctx.theme));
-                        let at = lines.len();
-                        shift(&mut anchors, at);
-                        lines.append(&mut body);
-                        let spans = vec![Span { node: id, line: 0 }];
-                        let model = turn.model.clone();
-                        groups.push(Group { rail: Rail::Assistant, model, turn: true, quiet, lines, anchors, spans });
-                    }
-                }
+                push_assistant(conversation, ctx, id, turn, seam, inner, &mut groups);
             }
             NodeKind::User(record) if record.is_compact_summary => {
                 let mut lines = Vec::from_iter(seam);
@@ -203,7 +172,7 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
                 let mut anchors = Vec::new();
                 content(conversation, ctx, &record.message.content, &mut lines, &mut anchors);
                 let spans = vec![Span { node: id, line: 0 }];
-                groups.push(Group { rail: Rail::Seam, model: None, turn: true, quiet: false, lines, anchors, spans });
+                groups.push(Group { rail: Rail::Seam, model: None, turn: true, quiet: false, run: None, lines, anchors, spans });
             }
             NodeKind::User(_) | NodeKind::System(_) | NodeKind::Attachment(_) => {
                 if let Some(line) = seam {
@@ -213,6 +182,7 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
                         model: None,
                         turn: false,
                         quiet: false,
+                        run: None,
                         lines: vec![line],
                         anchors: Vec::new(),
                         spans,
@@ -237,6 +207,53 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
     }
 
     flatten(groups, ctx.theme)
+}
+
+fn push_assistant(
+    conversation: &Conversation,
+    ctx: &Ctx<'_>,
+    id: NodeId,
+    turn: &AssistantTurn,
+    seam: Option<RenderedLine>,
+    width: usize,
+    groups: &mut Vec<Group>,
+) {
+    let merging = matches!(groups.last(), Some(group) if group.rail == Rail::Assistant && group.model == turn.model);
+    let mut run = if merging && seam.is_none() { groups.last().and_then(|group| group.run.clone()) } else { None };
+    let mut body = Vec::new();
+    let mut anchors = Vec::new();
+    blocks(conversation, ctx, &turn.content, &mut body, &mut anchors, &mut run);
+    if body.is_empty() {
+        return;
+    }
+    let quiet = quiet(ctx, &turn.content);
+    match groups.last_mut() {
+        Some(group) if merging => {
+            if !(group.quiet && quiet && seam.is_none()) {
+                group.lines.push(RenderedLine::blank());
+            }
+            let starts = group.lines.len();
+            group.lines.extend(seam);
+            let at = group.lines.len();
+            shift(&mut anchors, at);
+            group.lines.append(&mut body);
+            group.anchors.append(&mut anchors);
+            group.spans.push(Span { node: id, line: starts });
+            group.quiet = quiet;
+            group.run = run;
+        }
+        _ => {
+            let detail = model_label(turn.model.as_deref());
+            let mut lines = Vec::from_iter(seam);
+            lines.push(header(ASSISTANT_LABEL, detail.as_deref(), width, ctx.theme));
+            let at = lines.len();
+            shift(&mut anchors, at);
+            lines.append(&mut body);
+            let spans = vec![Span { node: id, line: 0 }];
+            let model = turn.model.clone();
+            groups.push(Group { rail: Rail::Assistant, model, turn: true, quiet, run, lines, anchors, spans });
+        }
+    }
 }
 
 fn push_command(
@@ -269,7 +286,7 @@ fn push_command(
     let anchors = vec![Anchor { id: Box::from(uuid), line: at, head: call.head, agent: None }];
     lines.extend(call.lines);
     let spans = vec![Span { node: id, line: 0 }];
-    groups.push(Group { rail: Rail::Command, model: None, turn: true, quiet: false, lines, anchors, spans });
+    groups.push(Group { rail: Rail::Command, model: None, turn: true, quiet: false, run: None, lines, anchors, spans });
 }
 
 fn marker(conversation: &Conversation, id: NodeId, on: Option<NodeId>, groups: &mut [Group], width: usize, theme: &Theme) {
@@ -284,6 +301,7 @@ fn marker(conversation: &Conversation, id: NodeId, on: Option<NodeId>, groups: &
     group.anchors.push(Anchor { id: Box::from(node.uuid()), line: group.lines.len(), head: 1, agent: None });
     group.lines.push(divider::line(&text, width, theme.style(Element::BranchMarker)));
     group.quiet = false;
+    group.run = None;
 }
 
 fn flush(conversation: &Conversation, ctx: &Ctx<'_>, pending: &mut Vec<NodeId>, groups: &mut Vec<Group>, width: usize) {
@@ -303,11 +321,12 @@ fn flush(conversation: &Conversation, ctx: &Ctx<'_>, pending: &mut Vec<NodeId>, 
         group.anchors.push(Anchor { id: key, line: group.lines.len(), head: 1, agent: None });
         group.lines.extend(lines);
         group.quiet = false;
+        group.run = None;
         return;
     }
     let anchors = vec![Anchor { id: key, line: 0, head: 1, agent: None }];
     let spans = vec![Span { node: first, line: 0 }];
-    groups.push(Group { rail: Rail::Seam, model: None, turn: false, quiet: false, lines, anchors, spans });
+    groups.push(Group { rail: Rail::Seam, model: None, turn: false, quiet: false, run: None, lines, anchors, spans });
 }
 
 fn seam(node: &Node, sidechain: bool, width: usize, theme: &Theme) -> Option<RenderedLine> {
@@ -358,7 +377,7 @@ fn unreached(ctx: &Ctx<'_>, width: usize, reached: &HashSet<Box<str>>) -> Option
         anchors.push(Anchor { id: agent.id.clone(), line: lines.len(), head: rows.len(), agent: Some(agent.id.clone()) });
         lines.extend(rows);
     }
-    Some(Group { rail: Rail::Assistant, model: None, turn: false, quiet: false, lines, anchors, spans: Vec::new() })
+    Some(Group { rail: Rail::Assistant, model: None, turn: false, quiet: false, run: None, lines, anchors, spans: Vec::new() })
 }
 
 fn shift(anchors: &mut [Anchor], by: usize) {
@@ -402,7 +421,7 @@ fn content(
 ) {
     match content {
         Content::Text(text) => lines.extend(markdown(text, ctx.width, ctx.theme)),
-        Content::Blocks(blocks_of) => blocks(conversation, ctx, blocks_of, lines, anchors),
+        Content::Blocks(blocks_of) => blocks(conversation, ctx, blocks_of, lines, anchors, &mut None),
     }
 }
 
@@ -412,24 +431,37 @@ fn blocks(
     blocks: &[Block],
     lines: &mut Vec<RenderedLine>,
     anchors: &mut Vec<Anchor>,
+    run: &mut Option<Box<str>>,
 ) {
     let styles = tool_styles(ctx.theme);
     for block in blocks {
         match block {
-            Block::Text { text } => lines.extend(markdown(text, ctx.width, ctx.theme)),
+            Block::Text { text } => {
+                let prose = markdown(text, ctx.width, ctx.theme);
+                if !prose.is_empty() {
+                    *run = None;
+                }
+                lines.extend(prose);
+            }
             Block::Thinking { thinking } => {
                 lines.push(one(&thinking_summary(thinking), ctx.theme.style(Element::Thinking), ctx.width));
+                *run = None;
             }
             Block::ToolUse { id, name, input } => {
                 let agent = tool::spawned(conversation, ctx, id, name)
                     .filter(|agent| agent.enterable())
                     .map(|agent| agent.id.clone())
                     .or_else(|| conversation.inline_agent(id).map(|_| Box::from(id.as_str())));
-                let call = tool::call(conversation, ctx, id, name, input, &styles);
+                let repeat = run.as_deref() == Some(name.as_str());
+                let call = tool::call(conversation, ctx, id, name, input, repeat, &styles);
                 anchors.push(Anchor { id: Box::from(id.as_str()), line: lines.len(), head: call.head, agent });
                 lines.extend(call.lines);
+                *run = (!ctx.is_expanded(id)).then(|| Box::from(name.as_str()));
             }
-            Block::Image { source } => lines.push(one(&image_summary(source), ctx.theme.style(Element::Muted), ctx.width)),
+            Block::Image { source } => {
+                lines.push(one(&image_summary(source), ctx.theme.style(Element::Muted), ctx.width));
+                *run = None;
+            }
             Block::ToolResult { .. } | Block::Other { .. } => {}
         }
     }
@@ -778,6 +810,86 @@ mod tests {
         let lines = with_expanded(&[HUMAN, &assistant("a1", "u1", &call("t1")), &assistant("a2", "a1", &call("t2"))], &expanded);
         let at = lines.iter().rposition(|line| line.contains("Read")).expect("the second call");
         assert!(lines.get(at.saturating_sub(1)).is_some_and(|line| gap(line)), "{lines:?}");
+    }
+
+    fn read(id: &str, path: &str) -> String {
+        format!(r#"[{{"type":"tool_use","id":"{id}","name":"Read","input":{{"file_path":"{path}"}}}}]"#)
+    }
+
+    fn done(uuid: &str, parent: &str, call: &str) -> String {
+        format!(
+            r#"{{"type":"user","uuid":"{uuid}","parentUuid":"{parent}","sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:02Z","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"{call}","content":"ok","is_error":false}}]}},"toolUseResult":{{"stdout":"ok","interrupted":false}}}}"#
+        )
+    }
+
+    #[test]
+    fn a_second_call_of_the_same_tool_stacks_under_the_first_name() {
+        let lines = rendered(&[
+            HUMAN,
+            &assistant("a1", "u1", &read("t1", "/holodeck/src/engine/grid.rs")),
+            &done("r1", "a1", "t1"),
+            &assistant("a2", "r1", &read("t2", "/holodeck/src/engine/coil.rs")),
+            &done("r2", "a2", "t2"),
+            &assistant("a3", "r2", &read("t3", "/holodeck/src/engine/deflector.rs")),
+            &done("r3", "a3", "t3"),
+        ]);
+        assert_eq!(lines.iter().filter(|line| line.contains("▸ Read")).count(), 1, "one name for the run: {lines:?}");
+        assert_eq!(lines.iter().filter(|line| line.contains("└ ")).count(), 3, "every call keeps its digest: {lines:?}");
+    }
+
+    #[test]
+    fn every_call_in_a_stack_keeps_its_own_anchor() {
+        let built = built(&[
+            HUMAN,
+            &assistant("a1", "u1", &read("t1", "/holodeck/a.rs")),
+            &done("r1", "a1", "t1"),
+            &assistant("a2", "r1", &read("t2", "/holodeck/b.rs")),
+            &done("r2", "a2", "t2"),
+        ]);
+        let ids: Vec<&str> = built.anchors.iter().map(|anchor| &*anchor.id).collect();
+        assert_eq!(ids, ["t1", "t2"], "both calls stay reachable and expandable");
+        assert!(built.anchors.windows(2).all(|pair| pair[0].line < pair[1].line), "{:?}", built.anchors);
+    }
+
+    #[test]
+    fn a_different_tool_starts_its_own_name() {
+        let bash = r#"[{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"ls"}}]"#;
+        let calls =
+            [HUMAN, &assistant("a1", "u1", &read("t1", "/holodeck/a.rs")), &done("r1", "a1", "t1"), &assistant("a2", "r1", bash)];
+        let lines = rendered(&calls);
+        assert!(lines.iter().any(|line| line.contains("▸ Read")), "{lines:?}");
+        assert!(lines.iter().any(|line| line.contains("▸ Bash")), "{lines:?}");
+    }
+
+    #[test]
+    fn a_thinking_row_between_two_calls_breaks_the_stack() {
+        let thinking = r#"[{"type":"thinking","thinking":"weighing it"}]"#;
+        let lines = rendered(&[
+            HUMAN,
+            &assistant("a1", "u1", &read("t1", "/holodeck/a.rs")),
+            &done("r1", "a1", "t1"),
+            &assistant("a2", "r1", thinking),
+            &assistant("a3", "a2", &read("t2", "/holodeck/b.rs")),
+            &done("r2", "a3", "t2"),
+        ]);
+        let names = lines.iter().filter(|line| line.contains("▸ Read")).count();
+        assert_eq!(names, 2, "a digest orphaned from its name would be unreadable: {lines:?}");
+    }
+
+    #[test]
+    fn an_expanded_call_does_not_lend_its_name_to_the_call_below_it() {
+        let expanded: Expanded = std::iter::once(Box::from("t1")).collect();
+        let lines = with_expanded(
+            &[
+                HUMAN,
+                &assistant("a1", "u1", &read("t1", "/holodeck/a.rs")),
+                &done("r1", "a1", "t1"),
+                &assistant("a2", "r1", &read("t2", "/holodeck/b.rs")),
+                &done("r2", "a2", "t2"),
+            ],
+            &expanded,
+        );
+        assert_eq!(lines.iter().filter(|line| line.contains("Read")).count(), 2, "{lines:?}");
     }
 
     #[test]

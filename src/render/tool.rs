@@ -72,7 +72,15 @@ pub struct Call {
     pub head: usize,
 }
 
-pub fn call(conversation: &Conversation, ctx: &Ctx<'_>, id: &str, name: &str, input: &Value, styles: &Styles) -> Call {
+pub fn call(
+    conversation: &Conversation,
+    ctx: &Ctx<'_>,
+    id: &str,
+    name: &str,
+    input: &Value,
+    repeat: bool,
+    styles: &Styles,
+) -> Call {
     let outcome = conversation.result_of(id).and_then(|node| Outcome::of(node, id));
     let detail = outcome.and_then(|outcome| outcome.detail);
     let status = tool::status(outcome.as_ref());
@@ -93,8 +101,14 @@ pub fn call(conversation: &Conversation, ctx: &Ctx<'_>, id: &str, name: &str, in
     let glyph = if expanded { EXPANDED } else { COLLAPSED };
     let inline = AGENT_TOOLS.contains(&name) && conversation.inline_agent(id).is_some();
     let mark = (agent.is_some_and(Agent::enterable) || inline).then_some(ENTER);
-    let outcome_mark = Some((label_of(status), if status.is_error() { styles.error } else { styles.ok }));
-    let mut lines = head(glyph, name, &digest, mark, outcome_mark, ctx.width, &styles.rows());
+    let word = label_of(status);
+    let outcome_mark = Some((word, if status.is_error() { styles.error } else { styles.ok }));
+    let rows = styles.rows();
+    let under = repeat && !expanded && mark.is_none() && word.is_empty();
+    let mut lines = under
+        .then(|| digest_row(&digest, ctx.width, &rows).map(|row| vec![row]))
+        .flatten()
+        .unwrap_or_else(|| head(glyph, name, &digest, mark, outcome_mark, ctx.width, &rows));
     let head = lines.len();
     if expanded {
         lines.extend(body(ctx, id, name, input, outcome.as_ref(), styles));
