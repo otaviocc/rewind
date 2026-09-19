@@ -32,19 +32,24 @@ fn index_file(builder: &mut Builder, path: &Path, kind: Kind, extract_line: fn(&
         .map_or(0, |duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX));
     let head = fs::read(path).expect("a readable fixture file");
     let head_fnv = fnv::hash(head.get(..HEAD_SIZE.min(head.len())).unwrap_or_default());
-    let file_idx = builder.push_file(&path.to_string_lossy(), metadata.len(), mtime_ms, head_fnv);
 
     let mut lines = Lines::open(path).expect("a readable fixture file");
     let mut line_no: u32 = 0;
-    let mut seq: u32 = 0;
     let mut start = lines.complete_offset();
+    let mut pending: Vec<(u32, u64, Extracted)> = Vec::new();
     while let Some(line) = lines.next_line().expect("an in-memory-backed file read") {
         line_no = line_no.saturating_add(1);
         for extracted in extract_line(line) {
-            builder.push_record(file_idx, line_no, start, 0, kind, extracted.field, extracted.flags, seq, &extracted.text);
-            seq = seq.saturating_add(1);
+            pending.push((line_no, start, extracted));
         }
         start = lines.complete_offset();
+    }
+
+    let file_idx = builder.push_file(&path.to_string_lossy(), metadata.len(), mtime_ms, head_fnv, line_no);
+    let mut seq: u32 = 0;
+    for (line_no, byte_off, extracted) in pending {
+        builder.push_record(file_idx, line_no, byte_off, 0, kind, extracted.field, extracted.flags, seq, &extracted.text);
+        seq = seq.saturating_add(1);
     }
 }
 

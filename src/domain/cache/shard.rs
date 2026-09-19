@@ -123,6 +123,7 @@ pub struct FileStamp {
     pub len: u64,
     pub mtime_ms: i64,
     pub head_fnv: u64,
+    pub line_count: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,9 +152,9 @@ impl Builder {
         Self::default()
     }
 
-    pub fn push_file(&mut self, path: &str, len: u64, mtime_ms: i64, head_fnv: u64) -> u32 {
+    pub fn push_file(&mut self, path: &str, len: u64, mtime_ms: i64, head_fnv: u64, line_count: u32) -> u32 {
         let idx = u32::try_from(self.files.len()).unwrap_or(u32::MAX);
-        self.files.push(FileStamp { path: path.to_owned(), len, mtime_ms, head_fnv });
+        self.files.push(FileStamp { path: path.to_owned(), len, mtime_ms, head_fnv, line_count });
         idx
     }
 
@@ -187,6 +188,7 @@ impl Builder {
             stamps.extend_from_slice(&file.len.to_le_bytes());
             stamps.extend_from_slice(&file.mtime_ms.to_le_bytes());
             stamps.extend_from_slice(&file.head_fnv.to_le_bytes());
+            stamps.extend_from_slice(&file.line_count.to_le_bytes());
         }
 
         let records_len = self.records.len().saturating_mul(RECORD_SIZE);
@@ -314,7 +316,8 @@ fn parse_stamps(bytes: &[u8], file_count: u32) -> Result<Vec<FileStamp>, ShardEr
         let len = cursor.u64().ok_or(ShardError::Truncated)?;
         let mtime_ms = cursor.i64().ok_or(ShardError::Truncated)?;
         let head_fnv = cursor.u64().ok_or(ShardError::Truncated)?;
-        files.push(FileStamp { path, len, mtime_ms, head_fnv });
+        let line_count = cursor.u32().ok_or(ShardError::Truncated)?;
+        files.push(FileStamp { path, len, mtime_ms, head_fnv, line_count });
     }
 
     if !cursor.is_empty() {
@@ -365,7 +368,7 @@ fn parse_records(bytes: &[u8], count: usize, blob_len: usize, file_count: usize)
 mod tests {
     use super::*;
 
-    const STAMP_LEN_A_JSONL: usize = 2 + 7 + 8 + 8 + 8;
+    const STAMP_LEN_A_JSONL: usize = 2 + 7 + 8 + 8 + 8 + 4;
 
     #[test]
     fn the_header_is_exactly_sixty_four_bytes_and_the_record_is_exactly_forty() {
@@ -373,14 +376,14 @@ mod tests {
         assert_eq!(bytes.len(), HEADER_SIZE);
 
         let mut builder = Builder::new();
-        let file = builder.push_file("a.jsonl", 10, 0, 0);
+        let file = builder.push_file("a.jsonl", 10, 0, 0, 0);
         builder.push_record(file, 1, 0, 0, Kind::Transcript, Field::UserPrompt, 0, 0, "hi");
         let with_one_record = builder.finish(0);
-        let stamp_len = 2 + 7 + 8 + 8 + 8;
+        let stamp_len = 2 + 7 + 8 + 8 + 8 + 4;
         assert_eq!(
             with_one_record.len(),
             HEADER_SIZE + stamp_len + RECORD_SIZE + 2,
-            "stamp = 2 (path_len) + 7 (path) + 8 (len) + 8 (mtime) + 8 (head_fnv)"
+            "stamp = 2 (path_len) + 7 (path) + 8 (len) + 8 (mtime) + 8 (head_fnv) + 4 (line_count)"
         );
     }
 
@@ -397,12 +400,15 @@ mod tests {
     #[test]
     fn a_single_record_shard_round_trips_its_text() {
         let mut builder = Builder::new();
-        let file = builder.push_file("session.jsonl", 100, 5, 99);
+        let file = builder.push_file("session.jsonl", 100, 5, 99, 0);
         builder.push_record(file, 3, 40, 1000, Kind::Transcript, Field::UserPrompt, 0, 0, "Read The Grid Scanner");
         let bytes = builder.finish(7);
 
         let shard = Shard::parse(&bytes).expect("a well-formed single-record shard");
-        assert_eq!(shard.files(), [FileStamp { path: "session.jsonl".to_owned(), len: 100, mtime_ms: 5, head_fnv: 99 }]);
+        assert_eq!(
+            shard.files(),
+            [FileStamp { path: "session.jsonl".to_owned(), len: 100, mtime_ms: 5, head_fnv: 99, line_count: 0 }]
+        );
         let record = shard.records().first().expect("one record");
         assert_eq!(record.file_idx, 0);
         assert_eq!(record.line_no, 3);
@@ -416,8 +422,8 @@ mod tests {
     #[test]
     fn many_records_across_several_files_all_read_back() {
         let mut builder = Builder::new();
-        let a = builder.push_file("a.jsonl", 1, 0, 1);
-        let b = builder.push_file("b.jsonl", 2, 0, 2);
+        let a = builder.push_file("a.jsonl", 1, 0, 1, 0);
+        let b = builder.push_file("b.jsonl", 2, 0, 2, 0);
         for index in 0..50 {
             let file = if index % 2 == 0 { a } else { b };
             builder.push_record(file, index, u64::from(index), 0, Kind::Subagent, Field::ToolResult, 0, index, "payload");
@@ -460,7 +466,7 @@ mod tests {
     #[test]
     fn a_file_truncated_inside_the_stamp_table_is_rejected() {
         let mut builder = Builder::new();
-        builder.push_file("a-long-enough-path.jsonl", 1, 0, 0);
+        builder.push_file("a-long-enough-path.jsonl", 1, 0, 0, 0);
         let bytes = builder.finish(0);
         let cut = bytes.get(..bytes.len().saturating_sub(5)).expect("bytes to cut");
         assert_eq!(Shard::parse(cut), Err(ShardError::LengthMismatch));
@@ -469,7 +475,7 @@ mod tests {
     #[test]
     fn a_file_truncated_inside_the_record_section_is_rejected() {
         let mut builder = Builder::new();
-        let file = builder.push_file("a.jsonl", 1, 0, 0);
+        let file = builder.push_file("a.jsonl", 1, 0, 0, 0);
         builder.push_record(file, 0, 0, 0, Kind::Transcript, Field::UserPrompt, 0, 0, "x");
         let bytes = builder.finish(0);
         let cut = bytes.get(..bytes.len().saturating_sub(1)).expect("bytes to cut");
@@ -479,7 +485,7 @@ mod tests {
     #[test]
     fn a_file_truncated_inside_the_blob_is_rejected() {
         let mut builder = Builder::new();
-        let file = builder.push_file("a.jsonl", 1, 0, 0);
+        let file = builder.push_file("a.jsonl", 1, 0, 0, 0);
         builder.push_record(file, 0, 0, 0, Kind::Transcript, Field::UserPrompt, 0, 0, "hello");
         let bytes = builder.finish(0);
         let cut = bytes.get(..bytes.len().saturating_sub(2)).expect("bytes to cut");
@@ -489,7 +495,7 @@ mod tests {
     #[test]
     fn a_record_pointing_past_the_blob_is_rejected() {
         let mut builder = Builder::new();
-        let file = builder.push_file("a.jsonl", 1, 0, 0);
+        let file = builder.push_file("a.jsonl", 1, 0, 0, 0);
         builder.push_record(file, 0, 0, 0, Kind::Transcript, Field::UserPrompt, 0, 0, "hi");
         let mut bytes = builder.finish(0);
 
@@ -503,7 +509,7 @@ mod tests {
     #[test]
     fn header_lengths_that_disagree_with_the_file_length_are_rejected() {
         let mut builder = Builder::new();
-        let file = builder.push_file("a.jsonl", 1, 0, 0);
+        let file = builder.push_file("a.jsonl", 1, 0, 0, 0);
         builder.push_record(file, 0, 0, 0, Kind::Transcript, Field::UserPrompt, 0, 0, "hi");
         let mut bytes = builder.finish(0);
         bytes.push(0);
@@ -513,7 +519,7 @@ mod tests {
     #[test]
     fn an_unknown_record_kind_byte_is_rejected() {
         let mut builder = Builder::new();
-        let file = builder.push_file("a.jsonl", 1, 0, 0);
+        let file = builder.push_file("a.jsonl", 1, 0, 0, 0);
         builder.push_record(file, 0, 0, 0, Kind::Transcript, Field::UserPrompt, 0, 0, "hi");
         let mut bytes = builder.finish(0);
 
@@ -527,7 +533,7 @@ mod tests {
     #[test]
     fn an_unknown_record_field_byte_is_rejected() {
         let mut builder = Builder::new();
-        let file = builder.push_file("a.jsonl", 1, 0, 0);
+        let file = builder.push_file("a.jsonl", 1, 0, 0, 0);
         builder.push_record(file, 0, 0, 0, Kind::Transcript, Field::UserPrompt, 0, 0, "hi");
         let mut bytes = builder.finish(0);
 
@@ -541,7 +547,7 @@ mod tests {
     #[test]
     fn a_record_naming_a_file_index_outside_the_stamp_table_is_rejected() {
         let mut builder = Builder::new();
-        let file = builder.push_file("a.jsonl", 1, 0, 0);
+        let file = builder.push_file("a.jsonl", 1, 0, 0, 0);
         builder.push_record(file, 0, 0, 0, Kind::Transcript, Field::UserPrompt, 0, 0, "hi");
         let mut bytes = builder.finish(0);
 
@@ -564,7 +570,7 @@ mod tests {
     #[test]
     fn non_ascii_text_passes_through_the_blob_unchanged() {
         let mut builder = Builder::new();
-        let file = builder.push_file("a.jsonl", 1, 0, 0);
+        let file = builder.push_file("a.jsonl", 1, 0, 0, 0);
         builder.push_record(file, 0, 0, 0, Kind::Transcript, Field::AssistantText, 0, 0, "café ☕ HÉLLO");
         let bytes = builder.finish(0);
 
@@ -577,12 +583,23 @@ mod tests {
     #[test]
     fn flag_bits_round_trip() {
         let mut builder = Builder::new();
-        let file = builder.push_file("a.jsonl", 1, 0, 0);
+        let file = builder.push_file("a.jsonl", 1, 0, 0, 0);
         builder.push_record(file, 0, 0, 0, Kind::Transcript, Field::ToolResult, TRUNCATED | SIDECHAIN, 0, "x");
         let bytes = builder.finish(0);
 
         let shard = Shard::parse(&bytes).expect("valid shard");
         let record = shard.records().first().expect("one record");
         assert_eq!(record.flags, TRUNCATED | SIDECHAIN);
+    }
+
+    #[test]
+    fn a_file_stamps_line_count_round_trips_so_an_append_can_resume_numbering_without_a_rescan() {
+        let mut builder = Builder::new();
+        builder.push_file("a.jsonl", 500, 0, 0, 42);
+        let bytes = builder.finish(0);
+
+        let shard = Shard::parse(&bytes).expect("valid shard");
+        let file = shard.files().first().expect("one file stamp");
+        assert_eq!(file.line_count, 42);
     }
 }
