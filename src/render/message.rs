@@ -152,43 +152,50 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
         let Some(node) = conversation.node(id) else { continue };
         let seam = seam(node, sidechain, inner, ctx.theme);
         match &node.kind {
-            NodeKind::User(record) if let Some(command) = record.command() => {
-                push_command(id, node.uuid(), command, seam, ctx, &mut groups);
-            }
-            NodeKind::User(record) if record.is_human_turn() && !record.is_compact_summary => {
-                let mut lines = Vec::from_iter(seam);
-                lines.push(header(human, None, inner, ctx.theme));
-                let mut anchors = Vec::new();
-                content(conversation, ctx, &record.message.content, &mut lines, &mut anchors);
-                let spans = vec![Span { node: id, line: 0 }];
-                groups.push(Group { rail: Rail::Human, model: None, turn: true, quiet: false, run: None, lines, anchors, spans });
+            NodeKind::User(record) => {
+                if let Some(command) = record.command() {
+                    push_command(id, node.uuid(), command, seam, ctx, &mut groups);
+                } else if record.is_human_turn() && !record.is_compact_summary {
+                    let mut lines = Vec::from_iter(seam);
+                    lines.push(header(human, None, inner, ctx.theme));
+                    let mut anchors = Vec::new();
+                    content(conversation, ctx, &record.message.content, &mut lines, &mut anchors);
+                    let spans = vec![Span { node: id, line: 0 }];
+                    groups.push(Group {
+                        rail: Rail::Human,
+                        model: None,
+                        turn: true,
+                        quiet: false,
+                        run: None,
+                        lines,
+                        anchors,
+                        spans,
+                    });
+                } else if record.is_compact_summary {
+                    let mut lines = Vec::from_iter(seam);
+                    lines.push(header(SUMMARY_LABEL, None, inner, ctx.theme));
+                    let mut anchors = Vec::new();
+                    content(conversation, ctx, &record.message.content, &mut lines, &mut anchors);
+                    let spans = vec![Span { node: id, line: 0 }];
+                    groups.push(Group {
+                        rail: Rail::Seam,
+                        model: None,
+                        turn: true,
+                        quiet: false,
+                        run: None,
+                        lines,
+                        anchors,
+                        spans,
+                    });
+                } else {
+                    push_seam_only(id, seam, &mut groups);
+                }
             }
             NodeKind::Assistant(turn) => {
                 push_assistant(conversation, ctx, id, turn, seam, inner, &mut groups);
             }
-            NodeKind::User(record) if record.is_compact_summary => {
-                let mut lines = Vec::from_iter(seam);
-                lines.push(header(SUMMARY_LABEL, None, inner, ctx.theme));
-                let mut anchors = Vec::new();
-                content(conversation, ctx, &record.message.content, &mut lines, &mut anchors);
-                let spans = vec![Span { node: id, line: 0 }];
-                groups.push(Group { rail: Rail::Seam, model: None, turn: true, quiet: false, run: None, lines, anchors, spans });
-            }
-            NodeKind::User(_) | NodeKind::System(_) | NodeKind::Attachment(_) => {
-                if let Some(line) = seam {
-                    let spans = vec![Span { node: id, line: 0 }];
-                    let group = Group {
-                        rail: Rail::Seam,
-                        model: None,
-                        turn: false,
-                        quiet: false,
-                        run: None,
-                        lines: vec![line],
-                        anchors: Vec::new(),
-                        spans,
-                    };
-                    groups.push(group);
-                }
+            NodeKind::System(_) | NodeKind::Attachment(_) => {
+                push_seam_only(id, seam, &mut groups);
             }
         }
         let on = walk.get(index.saturating_add(1)).copied();
@@ -254,6 +261,22 @@ fn push_assistant(
             groups.push(Group { rail: Rail::Assistant, model, turn: true, quiet, run, lines, anchors, spans });
         }
     }
+}
+
+fn push_seam_only(id: NodeId, seam: Option<RenderedLine>, groups: &mut Vec<Group>) {
+    let Some(line) = seam else { return };
+    let spans = vec![Span { node: id, line: 0 }];
+    let group = Group {
+        rail: Rail::Seam,
+        model: None,
+        turn: false,
+        quiet: false,
+        run: None,
+        lines: vec![line],
+        anchors: Vec::new(),
+        spans,
+    };
+    groups.push(group);
 }
 
 fn push_command(
