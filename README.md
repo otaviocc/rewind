@@ -22,12 +22,15 @@ never writes to `~/.claude`.
                      │                          │ ▎ Right — `merge` is folding the
                      │                          │ ▎ base in the wrong direction.
                      │                          │ ▎
-                     │                          │ ▎ ▸ Read  src/theme/loader.rs · 903 lines   ok
-                     │                          │ ▎ ▾ Edit  src/theme/loader.rs · 1 hunk       ok
+                     │                          │ ▎ ▸ Read                                    ok
+                     │                          │ ▎   └ src/theme/loader.rs · 903 lines
+                     │                          │ ▎ ▾ Edit                                    ok
+                     │                          │ ▎   └ src/theme/loader.rs · 1 hunk
                      │                          │ ▎   ┃ @@ -18,3 +18,3 @@
                      │                          │ ▎   ┃ -    base.or(user)
                      │                          │ ▎   ┃ +    user.or(base)
-                     │                          │ ▎ ▸ Agent  code-review · check the fix  ⏎   ok
+                     │                          │ ▎ ▸ Agent                              ⏎   ok
+                     │                          │ ▎   └ code-review · check the fix
                      │                          │ ▎ ── 2 alternate branches · [b] ──
 ────────────────────────────────────────────────────────────────────────────
  vademecum · 61 msgs · main · 148.2k in / 22.9k out · 12/61 · 19%
