@@ -106,7 +106,7 @@ fn elided(segments: &[String], room: usize) -> Vec<String> {
 }
 
 fn breadcrumb(pieces: &[String], app: &App) -> RenderedLine {
-    let quiet = app.theme().style(Element::Hint);
+    let quiet = app.theme().style(Element::Status);
     let mut line = RenderedLine::blank();
     for (index, piece) in pieces.iter().enumerate() {
         if index > 0 {
@@ -834,8 +834,10 @@ mod tests {
         let buffer = frame(&app, Size::new(120, 24));
 
         let name = app.theme().style(Element::HeaderTitle).fg.expect("the header title names a foreground");
-        let quiet = app.theme().style(Element::Hint).fg.expect("the hint style names a foreground");
+        let quiet = app.theme().style(Element::Status).fg.expect("the status style names a foreground");
+        let hairline = app.theme().style(Element::Hint).fg.expect("the hint style names a foreground");
         assert_ne!(name, quiet, "the two must differ or the accent says nothing");
+        assert_ne!(quiet, hairline, "the trail must read above the hairlines, not with them");
 
         let row = text_row(&buffer, 0);
         let crumb = " rewind · /Users/fixture/holodeck";
@@ -860,6 +862,19 @@ mod tests {
         let body = app.theme().style(Element::Body).fg.unwrap_or_default();
         assert_ne!(status, body, "the status line reads at the same weight as a project name");
         assert_eq!(buffer[(1, 23)].fg, status, "the status line is not the status colour");
+    }
+
+    #[test]
+    fn the_breadcrumb_trail_and_the_status_line_read_at_one_weight() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("holodeck", true)]));
+        let generation = app.generation();
+        app.set_sessions(generation, vec![session("s1", "a session")]);
+        let buffer = frame(&app, Size::new(120, 24));
+
+        let trail = buffer[(10, 0)].fg;
+        assert_eq!(buffer[(10, 0)].symbol(), "/", "the cell sampled is not the start of the project path");
+        assert_eq!(trail, buffer[(1, 23)].fg, "the top bar and the status bar drifted apart");
     }
 
     #[test]
