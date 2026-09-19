@@ -12,14 +12,12 @@ expression: "revealed(BASELINE, 80)"
 ▎
 ▎ ▸ Bash                                                                      ok
 ▎   └ wc -l src/engine/grid.rs
-▎
 ▎ ▸ Agent                                                                 ⏎   ok
 ▎   └ Explore · Trace the grid scanner
 ▎ · 1 injection · queued_command
 ▎
 ▎ ▸ Bash                                                                      ok
 ▎   └ cargo build -v 2>&1
-▎
 ▎ ▸ Read                                                                      ok
 ▎   └ /Users/fixture/Developer/holodeck/src/engine/grid.rs · 212 lines
 ▎

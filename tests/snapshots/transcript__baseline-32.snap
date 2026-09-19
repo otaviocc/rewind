@@ -14,13 +14,10 @@ expression: "rendered(BASELINE, 32)"
 ▎
 ▎ ▸ Bash                      ok
 ▎   └ wc -l src/engine/grid.rs
-▎
 ▎ ▸ Agent                 ⏎   ok
 ▎   └ Explore · Trace the grid …
-▎
 ▎ ▸ Bash                      ok
 ▎   └ cargo build -v 2>&1
-▎
 ▎ ▸ Read                      ok
 ▎   └ /Users/fixture/Developer/…
 ▎

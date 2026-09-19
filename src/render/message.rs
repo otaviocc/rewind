@@ -73,6 +73,7 @@ struct Group {
     rail: Rail,
     model: Option<String>,
     turn: bool,
+    quiet: bool,
     lines: Vec<RenderedLine>,
     anchors: Vec<Anchor>,
     spans: Vec<Span>,
@@ -159,7 +160,7 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
                 let mut anchors = Vec::new();
                 content(conversation, ctx, &record.message.content, &mut lines, &mut anchors);
                 let spans = vec![Span { node: id, line: 0 }];
-                groups.push(Group { rail: Rail::Human, model: None, turn: true, lines, anchors, spans });
+                groups.push(Group { rail: Rail::Human, model: None, turn: true, quiet: false, lines, anchors, spans });
             }
             NodeKind::Assistant(turn) => {
                 let mut body = Vec::new();
@@ -168,9 +169,12 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
                 if body.is_empty() {
                     continue;
                 }
+                let quiet = quiet(ctx, &turn.content);
                 match groups.last_mut() {
                     Some(group) if group.rail == Rail::Assistant && group.model == turn.model => {
-                        group.lines.push(RenderedLine::blank());
+                        if !(group.quiet && quiet && seam.is_none()) {
+                            group.lines.push(RenderedLine::blank());
+                        }
                         let starts = group.lines.len();
                         group.lines.extend(seam);
                         let at = group.lines.len();
@@ -178,6 +182,7 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
                         group.lines.append(&mut body);
                         group.anchors.append(&mut anchors);
                         group.spans.push(Span { node: id, line: starts });
+                        group.quiet = quiet;
                     }
                     _ => {
                         let detail = model_label(turn.model.as_deref());
@@ -188,7 +193,7 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
                         lines.append(&mut body);
                         let spans = vec![Span { node: id, line: 0 }];
                         let model = turn.model.clone();
-                        groups.push(Group { rail: Rail::Assistant, model, turn: true, lines, anchors, spans });
+                        groups.push(Group { rail: Rail::Assistant, model, turn: true, quiet, lines, anchors, spans });
                     }
                 }
             }
@@ -198,13 +203,20 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
                 let mut anchors = Vec::new();
                 content(conversation, ctx, &record.message.content, &mut lines, &mut anchors);
                 let spans = vec![Span { node: id, line: 0 }];
-                groups.push(Group { rail: Rail::Seam, model: None, turn: true, lines, anchors, spans });
+                groups.push(Group { rail: Rail::Seam, model: None, turn: true, quiet: false, lines, anchors, spans });
             }
             NodeKind::User(_) | NodeKind::System(_) | NodeKind::Attachment(_) => {
                 if let Some(line) = seam {
                     let spans = vec![Span { node: id, line: 0 }];
-                    let group =
-                        Group { rail: Rail::Seam, model: None, turn: false, lines: vec![line], anchors: Vec::new(), spans };
+                    let group = Group {
+                        rail: Rail::Seam,
+                        model: None,
+                        turn: false,
+                        quiet: false,
+                        lines: vec![line],
+                        anchors: Vec::new(),
+                        spans,
+                    };
                     groups.push(group);
                 }
             }
@@ -257,7 +269,7 @@ fn push_command(
     let anchors = vec![Anchor { id: Box::from(uuid), line: at, head: call.head, agent: None }];
     lines.extend(call.lines);
     let spans = vec![Span { node: id, line: 0 }];
-    groups.push(Group { rail: Rail::Command, model: None, turn: true, lines, anchors, spans });
+    groups.push(Group { rail: Rail::Command, model: None, turn: true, quiet: false, lines, anchors, spans });
 }
 
 fn marker(conversation: &Conversation, id: NodeId, on: Option<NodeId>, groups: &mut [Group], width: usize, theme: &Theme) {
@@ -271,6 +283,7 @@ fn marker(conversation: &Conversation, id: NodeId, on: Option<NodeId>, groups: &
     let text = format!("{} alternate branches here{SEPARATOR}showing {showing}{SEPARATOR}[b] to switch", alternates.len());
     group.anchors.push(Anchor { id: Box::from(node.uuid()), line: group.lines.len(), head: 1, agent: None });
     group.lines.push(divider::line(&text, width, theme.style(Element::BranchMarker)));
+    group.quiet = false;
 }
 
 fn flush(conversation: &Conversation, ctx: &Ctx<'_>, pending: &mut Vec<NodeId>, groups: &mut Vec<Group>, width: usize) {
@@ -289,11 +302,12 @@ fn flush(conversation: &Conversation, ctx: &Ctx<'_>, pending: &mut Vec<NodeId>, 
     if let Some(group) = groups.last_mut() {
         group.anchors.push(Anchor { id: key, line: group.lines.len(), head: 1, agent: None });
         group.lines.extend(lines);
+        group.quiet = false;
         return;
     }
     let anchors = vec![Anchor { id: key, line: 0, head: 1, agent: None }];
     let spans = vec![Span { node: first, line: 0 }];
-    groups.push(Group { rail: Rail::Seam, model: None, turn: false, lines, anchors, spans });
+    groups.push(Group { rail: Rail::Seam, model: None, turn: false, quiet: false, lines, anchors, spans });
 }
 
 fn seam(node: &Node, sidechain: bool, width: usize, theme: &Theme) -> Option<RenderedLine> {
@@ -344,7 +358,7 @@ fn unreached(ctx: &Ctx<'_>, width: usize, reached: &HashSet<Box<str>>) -> Option
         anchors.push(Anchor { id: agent.id.clone(), line: lines.len(), head: rows.len(), agent: Some(agent.id.clone()) });
         lines.extend(rows);
     }
-    Some(Group { rail: Rail::Assistant, model: None, turn: false, lines, anchors, spans: Vec::new() })
+    Some(Group { rail: Rail::Assistant, model: None, turn: false, quiet: false, lines, anchors, spans: Vec::new() })
 }
 
 fn shift(anchors: &mut [Anchor], by: usize) {
@@ -431,6 +445,14 @@ fn one(text: &str, style: Style, width: usize) -> RenderedLine {
     line
 }
 
+fn quiet(ctx: &Ctx<'_>, blocks: &[Block]) -> bool {
+    blocks.iter().all(|block| match block {
+        Block::Text { text } => text.trim().is_empty(),
+        Block::ToolUse { id, .. } => !ctx.is_expanded(id),
+        _ => true,
+    })
+}
+
 fn thinking_summary(thinking: &str) -> String {
     let count = thinking.lines().filter(|line| !line.trim().is_empty()).count().max(1);
     let plural = if count == 1 { "line" } else { "lines" };
@@ -481,6 +503,7 @@ mod tests {
 
     use super::*;
     use crate::domain::thread;
+    use crate::render::Expanded;
 
     fn plain(width: usize) -> Ctx<'static> {
         static THEME: std::sync::OnceLock<Theme> = std::sync::OnceLock::new();
@@ -707,6 +730,79 @@ mod tests {
         let attachment = r#"{"type":"attachment","uuid":"x1","parentUuid":"u1","sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:02Z","attachment":{"type":"date","date":"2026-01-05"}}"#;
         let lines = rendered(&[HUMAN, attachment]);
         assert_eq!(lines, vec!["▎ you".to_owned(), "▎ read the grid scanner back to me".to_owned()]);
+    }
+
+    fn call(id: &str) -> String {
+        format!(r#"[{{"type":"tool_use","id":"{id}","name":"Read","input":{{"file_path":"/holodeck/src/engine/grid.rs"}}}}]"#)
+    }
+
+    fn gap(line: &str) -> bool {
+        line.trim_end() == RAIL_BLANK || line.trim_end().is_empty()
+    }
+
+    fn with_expanded(lines: &[&str], expanded: &Expanded) -> Vec<String> {
+        let dir = TempDir::new().expect("a temporary directory");
+        let path = dir.path().join("session.jsonl");
+        fs::write(&path, lines.join("\n") + "\n").expect("a written transcript");
+        let conversation = thread::build(&path).expect("a built conversation");
+        let ctx = Ctx { expanded, ..plain(60) };
+        transcript(&conversation, &ctx).lines.iter().map(RenderedLine::text).collect()
+    }
+
+    #[test]
+    fn a_run_of_tool_calls_costs_no_blank_line_between_them() {
+        let lines = rendered(&[
+            HUMAN,
+            &assistant("a1", "u1", &call("t1")),
+            &assistant("a2", "a1", &call("t2")),
+            &assistant("a3", "a2", &call("t3")),
+        ]);
+        assert_eq!(lines.iter().filter(|line| line.contains("Read")).count(), 3, "{lines:?}");
+        let head = lines.iter().position(|line| line.contains("Read")).expect("a first call");
+        let tail = lines.iter().rposition(|line| line.contains("grid.rs")).expect("a last digest");
+        let run = lines.get(head..=tail).expect("the whole run");
+        assert!(run.iter().all(|line| !gap(line)), "a gap survived inside the run: {lines:?}");
+    }
+
+    #[test]
+    fn prose_on_either_side_of_a_call_keeps_its_blank_line() {
+        let prose = r#"[{"type":"text","text":"reading the scanner"}]"#;
+        let lines = rendered(&[HUMAN, &assistant("a1", "u1", prose), &assistant("a2", "a1", &call("t1"))]);
+        let at = lines.iter().position(|line| line.contains("reading the scanner")).expect("the prose");
+        assert!(lines.get(at.saturating_add(1)).is_some_and(|line| gap(line)), "{lines:?}");
+    }
+
+    #[test]
+    fn an_expanded_call_keeps_the_blank_line_that_separates_its_body_from_the_next_call() {
+        let expanded: Expanded = std::iter::once(Box::from("t1")).collect();
+        let lines = with_expanded(&[HUMAN, &assistant("a1", "u1", &call("t1")), &assistant("a2", "a1", &call("t2"))], &expanded);
+        let at = lines.iter().rposition(|line| line.contains("Read")).expect("the second call");
+        assert!(lines.get(at.saturating_sub(1)).is_some_and(|line| gap(line)), "{lines:?}");
+    }
+
+    #[test]
+    fn an_injection_run_is_not_welded_to_the_call_below_it() {
+        let dir = TempDir::new().expect("a temporary directory");
+        let path = dir.path().join("session.jsonl");
+        let attachment = r#"{"type":"attachment","uuid":"x1","parentUuid":"a1","sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:02Z","attachment":{"type":"date","date":"2026-01-05"}}"#;
+        let records = [HUMAN, &assistant("a1", "u1", &call("t1")), attachment, &assistant("a2", "x1", &call("t2"))];
+        fs::write(&path, records.join("\n") + "\n").expect("a written transcript");
+        let conversation = thread::build(&path).expect("a built conversation");
+        let lines: Vec<String> = transcript(&conversation, &revealing(60)).lines.iter().map(RenderedLine::text).collect();
+
+        let at = lines.iter().position(|line| line.contains("injection")).expect("the run");
+        assert!(lines.get(at.saturating_add(1)).is_some_and(|line| gap(line)), "{lines:?}");
+    }
+
+    #[test]
+    fn a_divider_between_two_calls_keeps_its_air() {
+        let cleared = format!(
+            r#"{{"type":"assistant","uuid":"a2","parentUuid":null,"sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:02Z","message":{{"id":"msg_a2","model":"opus-5","role":"assistant","content":{}}}}}"#,
+            call("t2")
+        );
+        let lines = rendered(&[HUMAN, &assistant("a1", "u1", &call("t1")), &cleared]);
+        let at = lines.iter().position(|line| line.contains("──")).expect("a divider");
+        assert!(lines.get(at.saturating_sub(1)).is_some_and(|line| gap(line)), "{lines:?}");
     }
 
     #[test]

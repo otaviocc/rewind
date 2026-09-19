@@ -10,25 +10,18 @@ expression: "rendered(TOOLS, 80)"
 ▎
 ▎ ▸ Edit                                                                      ok
 ▎   └ /Users/fixture/Developer/holodeck/src/engine/deflector.rs · 1 hunk
-▎
 ▎ ▸ Write                                                                     ok
 ▎   └ /Users/fixture/Developer/holodeck/src/engine/coil.rs · 2 hunks
-▎
 ▎ ▸ WebFetch                                                                  ok
 ▎   └ https://holodeck.invalid/specs/deflector.html
-▎
 ▎ ▸ jeffries · beam_status                                                    ok
 ▎   └ {"deck":9,"verbose":true}
-▎
 ▎ ▸ Replicator                                                                ok
 ▎   └ tea, earl grey, hot
-▎
 ▎ ▸ Read                                                                  failed
 ▎   └ {"file_path": "/Users/fixture/Developer/holodeck/src/engine/co
-▎
 ▎ ▸ Bash                                                                  denied
 ▎   └ rm -rf target
-▎
 ▎ ▸ Bash                                                             interrupted
 ▎   └ cargo test -- --nocapture
 ▎
