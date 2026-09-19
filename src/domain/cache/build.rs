@@ -61,20 +61,20 @@ pub struct Output {
     pub cancelled: bool,
 }
 
-pub fn build(
-    files: &[PathBuf],
-    previous: Option<&Shard<'_>>,
-    kind: Kind,
-    extract: fn(&[u8]) -> Vec<Extracted>,
-    built_at_ms: i64,
-) -> Output {
-    build_with(files, previous, kind, extract, built_at_ms, &mut Control::inert())
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Input {
+    pub path: PathBuf,
+    pub name: String,
+    pub kind: Kind,
+}
+
+pub fn build(files: &[Input], previous: Option<&Shard<'_>>, extract: fn(&[u8]) -> Vec<Extracted>, built_at_ms: i64) -> Output {
+    build_with(files, previous, extract, built_at_ms, &mut Control::inert())
 }
 
 pub fn build_with(
-    files: &[PathBuf],
+    files: &[Input],
     previous: Option<&Shard<'_>>,
-    kind: Kind,
     extract: fn(&[u8]) -> Vec<Extracted>,
     built_at_ms: i64,
     control: &mut Control<'_>,
@@ -83,24 +83,24 @@ pub fn build_with(
     let mut reports = Vec::with_capacity(files.len());
     let mut cancelled = false;
 
-    for path in files {
+    for input in files {
         if control.cancel.cancelled() {
             cancelled = true;
             break;
         }
 
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else { continue };
+        let Input { path, name, kind } = input;
         let Ok(metadata) = fs::metadata(path) else { continue };
         let len = metadata.len();
         let mtime_ms = mtime_ms_of(&metadata);
 
         let old = previous.and_then(|shard| {
-            let index = shard.files().iter().position(|stamp| stamp.path == name)?;
+            let index = shard.files().iter().position(|stamp| &stamp.path == name)?;
             shard.files().get(index).map(|stamp| (index, stamp.clone()))
         });
 
-        let action = process_file(&mut builder, path, name, len, mtime_ms, previous, old.as_ref(), kind, extract);
-        reports.push(FileReport { name: name.to_owned(), action });
+        let action = process_file(&mut builder, path, name, len, mtime_ms, previous, old.as_ref(), *kind, extract);
+        reports.push(FileReport { name: name.clone(), action });
         control.tick();
     }
 
@@ -301,6 +301,11 @@ mod tests {
         path
     }
 
+    fn transcript_input(path: &Path) -> Input {
+        let name = path.file_name().and_then(|name| name.to_str()).expect("a utf-8 file name").to_owned();
+        Input { path: path.to_path_buf(), name, kind: Kind::Transcript }
+    }
+
     const HUMAN: &str = r#"{"type":"user","message":{"role":"user","content":"first line"},"origin":{"kind":"human"}}"#;
     const HUMAN_2: &str = r#"{"type":"user","message":{"role":"user","content":"second line"},"origin":{"kind":"human"}}"#;
 
@@ -314,7 +319,7 @@ mod tests {
         let dir = TempDir::new().expect("a temporary directory");
         let path = write_session(dir.path(), "s1.jsonl", &[HUMAN]);
 
-        let output = build(&[path], None, Kind::Transcript, text::extract, 0);
+        let output = build(&[transcript_input(&path)], None, text::extract, 0);
 
         assert_eq!(output.reports, [FileReport { name: "s1.jsonl".to_owned(), action: FileAction::Fresh }]);
         let shard = Shard::parse(&output.shard_bytes).expect("a well-formed shard");
@@ -326,10 +331,10 @@ mod tests {
         let dir = TempDir::new().expect("a temporary directory");
         let path = write_session(dir.path(), "s1.jsonl", &[HUMAN]);
 
-        let first = build(std::slice::from_ref(&path), None, Kind::Transcript, text::extract, 0);
+        let first = build(&[transcript_input(&path)], None, text::extract, 0);
         let previous = Shard::parse(&first.shard_bytes).expect("a well-formed shard");
 
-        let second = build(&[path], Some(&previous), Kind::Transcript, text::extract, 1);
+        let second = build(&[transcript_input(&path)], Some(&previous), text::extract, 1);
 
         assert_eq!(second.reports, [FileReport { name: "s1.jsonl".to_owned(), action: FileAction::Unchanged }]);
         let shard = Shard::parse(&second.shard_bytes).expect("a well-formed shard");
@@ -344,7 +349,7 @@ mod tests {
         let big = big_line("original");
         let path = write_session(dir.path(), "s1.jsonl", &[&big]);
 
-        let first = build(std::slice::from_ref(&path), None, Kind::Transcript, text::extract, 0);
+        let first = build(&[transcript_input(&path)], None, text::extract, 0);
         let previous = Shard::parse(&first.shard_bytes).expect("a well-formed shard");
 
         let mut file = std::fs::OpenOptions::new().append(true).open(&path).expect("an appendable file");
@@ -352,7 +357,7 @@ mod tests {
         drop(file);
         filetime::set_file_mtime(&path, filetime::FileTime::from_unix_time(1, 0)).expect("a settable mtime");
 
-        let second = build(&[path], Some(&previous), Kind::Transcript, text::extract, 1);
+        let second = build(&[transcript_input(&path)], Some(&previous), text::extract, 1);
 
         assert_eq!(second.reports, [FileReport { name: "s1.jsonl".to_owned(), action: FileAction::Appended }]);
         let shard = Shard::parse(&second.shard_bytes).expect("a well-formed shard");
@@ -368,7 +373,7 @@ mod tests {
         let big = big_line("original");
         let path = write_session(dir.path(), "s1.jsonl", &[&big]);
 
-        let first = build(std::slice::from_ref(&path), None, Kind::Transcript, text::extract, 0);
+        let first = build(&[transcript_input(&path)], None, text::extract, 0);
         let previous = Shard::parse(&first.shard_bytes).expect("a well-formed shard");
 
         let mut file = std::fs::OpenOptions::new().append(true).open(&path).expect("an appendable file");
@@ -376,7 +381,7 @@ mod tests {
         drop(file);
         filetime::set_file_mtime(&path, filetime::FileTime::from_unix_time(1, 0)).expect("a settable mtime");
 
-        let second = build(&[path], Some(&previous), Kind::Transcript, text::extract, 1);
+        let second = build(&[transcript_input(&path)], Some(&previous), text::extract, 1);
         assert_eq!(second.reports, [FileReport { name: "s1.jsonl".to_owned(), action: FileAction::Appended }]);
         let shard = Shard::parse(&second.shard_bytes).expect("a well-formed shard");
 
@@ -391,14 +396,14 @@ mod tests {
         let original = big_line("original");
         let path = write_session(dir.path(), "s1.jsonl", &[&original]);
 
-        let first = build(std::slice::from_ref(&path), None, Kind::Transcript, text::extract, 0);
+        let first = build(&[transcript_input(&path)], None, text::extract, 0);
         let previous = Shard::parse(&first.shard_bytes).expect("a well-formed shard");
 
         let edited = big_line("edited");
         fs::write(&path, format!("{edited}\n{HUMAN_2}\n")).expect("an edited file that happens to be longer");
         filetime::set_file_mtime(&path, filetime::FileTime::from_unix_time(1, 0)).expect("a settable mtime");
 
-        let second = build(&[path], Some(&previous), Kind::Transcript, text::extract, 1);
+        let second = build(&[transcript_input(&path)], Some(&previous), text::extract, 1);
 
         assert_eq!(second.reports, [FileReport { name: "s1.jsonl".to_owned(), action: FileAction::Fresh }]);
         let shard = Shard::parse(&second.shard_bytes).expect("a well-formed shard");
@@ -415,13 +420,13 @@ mod tests {
         let dir = TempDir::new().expect("a temporary directory");
         let path = write_session(dir.path(), "s1.jsonl", &[HUMAN, HUMAN_2]);
 
-        let first = build(std::slice::from_ref(&path), None, Kind::Transcript, text::extract, 0);
+        let first = build(&[transcript_input(&path)], None, text::extract, 0);
         let previous = Shard::parse(&first.shard_bytes).expect("a well-formed shard");
 
         fs::write(&path, format!("{HUMAN}\n")).expect("a truncated file");
         filetime::set_file_mtime(&path, filetime::FileTime::from_unix_time(1, 0)).expect("a settable mtime");
 
-        let second = build(&[path], Some(&previous), Kind::Transcript, text::extract, 1);
+        let second = build(&[transcript_input(&path)], Some(&previous), text::extract, 1);
 
         assert_eq!(second.reports, [FileReport { name: "s1.jsonl".to_owned(), action: FileAction::Fresh }]);
     }
@@ -430,11 +435,11 @@ mod tests {
     fn a_missing_previous_stamp_for_a_new_file_is_fresh_even_alongside_an_unrelated_previous_shard() {
         let dir = TempDir::new().expect("a temporary directory");
         let existing = write_session(dir.path(), "s1.jsonl", &[HUMAN]);
-        let first = build(std::slice::from_ref(&existing), None, Kind::Transcript, text::extract, 0);
+        let first = build(&[transcript_input(&existing)], None, text::extract, 0);
         let previous = Shard::parse(&first.shard_bytes).expect("a well-formed shard");
 
         let new_file = write_session(dir.path(), "s2.jsonl", &[HUMAN_2]);
-        let second = build(&[existing, new_file], Some(&previous), Kind::Transcript, text::extract, 1);
+        let second = build(&[transcript_input(&existing), transcript_input(&new_file)], Some(&previous), text::extract, 1);
 
         let actions: Vec<FileAction> = second.reports.iter().map(|report| report.action).collect();
         assert_eq!(actions, [FileAction::Unchanged, FileAction::Fresh]);
@@ -449,7 +454,7 @@ mod tests {
             format!(r#"{{"type":"user","message":{{"role":"user","content":"sentinel {filler}"}},"origin":{{"kind":"human"}}}}"#);
         fs::write(&path, format!("{sentinel}\n")).expect("a large fixture file");
 
-        let first = build(std::slice::from_ref(&path), None, Kind::Transcript, text::extract, 0);
+        let first = build(&[transcript_input(&path)], None, text::extract, 0);
         let previous = Shard::parse(&first.shard_bytes).expect("a well-formed shard");
         let old_len = fs::metadata(&path).expect("fixture metadata").len();
 
@@ -458,7 +463,7 @@ mod tests {
         drop(file);
         filetime::set_file_mtime(&path, filetime::FileTime::from_unix_time(1, 0)).expect("a settable mtime");
 
-        let second = build(&[path], Some(&previous), Kind::Transcript, text::extract, 1);
+        let second = build(&[transcript_input(&path)], Some(&previous), text::extract, 1);
         assert_eq!(second.reports, [FileReport { name: "big.jsonl".to_owned(), action: FileAction::Appended }]);
 
         let shard = Shard::parse(&second.shard_bytes).expect("a well-formed shard");
@@ -492,7 +497,8 @@ mod tests {
         let mut noop = || {};
         let mut control = Control::new(token, &mut noop);
 
-        let output = build_with(&[first_path, second_path], None, Kind::Transcript, text::extract, 0, &mut control);
+        let output =
+            build_with(&[transcript_input(&first_path), transcript_input(&second_path)], None, text::extract, 0, &mut control);
 
         assert!(output.cancelled);
         assert_eq!(output.reports, []);
@@ -509,7 +515,8 @@ mod tests {
         let mut tick = || ticks = ticks.saturating_add(1);
         let mut control = Control::new(gate.token(), &mut tick);
 
-        let output = build_with(&[first_path, second_path], None, Kind::Transcript, text::extract, 0, &mut control);
+        let output =
+            build_with(&[transcript_input(&first_path), transcript_input(&second_path)], None, text::extract, 0, &mut control);
 
         assert!(!output.cancelled);
         assert_eq!(ticks, 2);

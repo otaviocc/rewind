@@ -14,6 +14,7 @@ use crate::domain::lines::Lines;
 use crate::domain::project::Project;
 use crate::domain::scan;
 use crate::domain::session;
+use crate::domain::subagent;
 use crate::domain::{project, text};
 
 const HISTORY_FILE_NAME: &str = "history.jsonl";
@@ -79,10 +80,11 @@ pub fn prepare(claude_dir: &Path, cache_root: &Path) -> Result<Plan, String> {
 
 pub fn build_project(plan: &Plan, project: &Project, control: &mut build::Control<'_>) -> Outcome {
     let project_dir = plan.claude_dir.join("projects").join(&project.directory);
-    let files = project::transcripts(&project_dir);
+    let sessions = project::transcripts(&project_dir);
+    let files = project_inputs(&project_dir, &sessions);
     let shard_path = plan.version_dir.join(&project.directory).with_extension(SHARD_EXTENSION);
 
-    let result = build_shard(&files, &shard_path, Kind::Transcript, text::extract, plan.built_at_ms, control);
+    let result = build_shard(&files, &shard_path, text::extract, plan.built_at_ms, control);
     let sessions =
         if result.cancelled { Vec::new() } else { session::discover(&project_dir).into_iter().map(session_summary).collect() };
 
@@ -96,13 +98,39 @@ pub fn build_project(plan: &Plan, project: &Project, control: &mut build::Contro
     }
 }
 
+fn project_inputs(project_dir: &Path, sessions: &[PathBuf]) -> Vec<build::Input> {
+    let mut files: Vec<build::Input> = sessions
+        .iter()
+        .filter_map(|path| {
+            let name = path.file_name()?.to_str()?.to_owned();
+            Some(build::Input { path: path.clone(), name, kind: Kind::Transcript })
+        })
+        .collect();
+
+    for session_path in sessions {
+        for agent in subagent::discover(session_path).all() {
+            let Some(transcript) = &agent.transcript else { continue };
+            let Some(name) = relative_name(project_dir, transcript) else { continue };
+            files.push(build::Input { path: transcript.clone(), name, kind: Kind::Subagent });
+        }
+    }
+    files
+}
+
+fn relative_name(base: &Path, path: &Path) -> Option<String> {
+    let relative = path.strip_prefix(base).ok()?;
+    let parts: Vec<&str> = relative.components().filter_map(|part| part.as_os_str().to_str()).collect();
+    if parts.is_empty() { None } else { Some(parts.join("/")) }
+}
+
 pub fn build_history(plan: &Plan, control: &mut build::Control<'_>) -> Option<Outcome> {
     let history_path = plan.claude_dir.join(HISTORY_FILE_NAME);
     if !history_path.is_file() {
         return None;
     }
+    let input = build::Input { path: history_path, name: HISTORY_FILE_NAME.to_owned(), kind: Kind::History };
     let shard_path = plan.version_dir.join(HISTORY_SHARD_NAME).with_extension(SHARD_EXTENSION);
-    let result = build_shard(&[history_path], &shard_path, Kind::History, text::extract_history, plan.built_at_ms, control);
+    let result = build_shard(&[input], &shard_path, text::extract_history, plan.built_at_ms, control);
     Some(Outcome::History {
         shard_bytes: result.shard_bytes,
         cold_rebuild: result.cold_rebuild,
@@ -199,9 +227,8 @@ pub fn purge(cache_root: &Path) {
 }
 
 fn build_shard(
-    files: &[PathBuf],
+    files: &[build::Input],
     shard_path: &Path,
-    kind: Kind,
     extract: fn(&[u8]) -> Vec<text::Extracted>,
     built_at_ms: i64,
     control: &mut build::Control<'_>,
@@ -211,7 +238,7 @@ fn build_shard(
     let previous = previous_bytes.as_deref().and_then(|bytes| Shard::parse(bytes).ok());
     let was_corrupt = was_corrupt && previous.is_none();
 
-    let output = build::build_with(files, previous.as_ref(), kind, extract, built_at_ms, control);
+    let output = build::build_with(files, previous.as_ref(), extract, built_at_ms, control);
     if output.cancelled {
         return ShardResult { shard_bytes: 0, cold_rebuild: false, cancelled: true, error: None };
     }

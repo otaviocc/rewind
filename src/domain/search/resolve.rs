@@ -24,6 +24,7 @@ pub struct Opened {
     pub project_directory: String,
     pub session_id: String,
     pub uuid: Option<String>,
+    pub agent_id: Option<String>,
 }
 
 pub fn file_path(claude_dir: &Path, hit: &Hit) -> PathBuf {
@@ -94,10 +95,16 @@ fn truncate_chars(text: &str, max_bytes: usize) -> String {
 pub fn resolve_transcript(claude_dir: &Path, hit: &Hit) -> Option<Opened> {
     let directory = hit.directory.clone()?;
     let path = file_path(claude_dir, hit);
-    let session_id = path.file_stem()?.to_str()?.to_owned();
+    let (session_id, agent_id) = if hit.kind == Kind::Subagent {
+        let session_id = hit.file_name.split('/').next().filter(|part| !part.is_empty())?.to_owned();
+        let agent_id = path.file_stem()?.to_str()?.strip_prefix("agent-").map(str::to_owned);
+        (session_id, agent_id)
+    } else {
+        (path.file_stem()?.to_str()?.to_owned(), None)
+    };
     let line = read_line_at(&path, hit.byte_off)?;
     let uuid = scan::top_level_str(&line, "uuid").map(str::to_owned);
-    Some(Opened { project_directory: directory, session_id, uuid })
+    Some(Opened { project_directory: directory, session_id, uuid, agent_id })
 }
 
 pub fn resolve_history(claude_dir: &Path, hit: &Hit) -> Option<(String, String)> {
@@ -144,6 +151,25 @@ mod tests {
         assert_eq!(opened.project_directory, "-a-project");
         assert_eq!(opened.session_id, "s1");
         assert_eq!(opened.uuid.as_deref(), Some("u1"));
+        assert_eq!(opened.agent_id, None);
+    }
+
+    #[test]
+    fn a_subagent_hit_resolves_the_owning_session_and_the_agent_id_not_the_bare_stem() {
+        let claude = TempDir::new().expect("a temporary directory");
+        let subagent_dir = claude.path().join("projects").join("-a-project").join("s1").join("subagents");
+        fs::create_dir_all(&subagent_dir).expect("a subagent directory");
+        let line =
+            br#"{"type":"user","uuid":"u2","message":{"role":"user","content":"find every caller"},"origin":{"kind":"human"}}"#;
+        fs::write(subagent_dir.join("agent-abc123.jsonl"), [line.as_slice(), b"\n"].concat())
+            .expect("a written subagent transcript");
+
+        let hit = hit(Some("-a-project"), "s1/subagents/agent-abc123.jsonl", 0, Kind::Subagent, Field::UserPrompt);
+        let opened = resolve_transcript(claude.path(), &hit).expect("a resolved hit");
+        assert_eq!(opened.project_directory, "-a-project");
+        assert_eq!(opened.session_id, "s1", "the owning session, not the agent file's own stem");
+        assert_eq!(opened.agent_id.as_deref(), Some("abc123"));
+        assert_eq!(opened.uuid.as_deref(), Some("u2"));
     }
 
     #[test]

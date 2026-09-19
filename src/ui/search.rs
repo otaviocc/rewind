@@ -66,7 +66,11 @@ pub fn rows(hits: &[Hit], width: usize, theme: &Theme) -> Vec<RenderedLine> {
 
 fn row(hit: &Hit, width: usize, theme: &Theme) -> RenderedLine {
     let place = hit.directory.as_deref().unwrap_or("history");
-    let text = format!("{place} · {} · L{}", field_label(hit.kind, hit.field), hit.line_no);
+    let text = if hit.kind == Kind::Subagent {
+        format!("{place} · subagent · {} · L{}", field_label(hit.kind, hit.field), hit.line_no)
+    } else {
+        format!("{place} · {} · L{}", field_label(hit.kind, hit.field), hit.line_no)
+    };
     let mut line = RenderedLine::default();
     line.push(StyledSpan::new(truncate(&text, width), theme.style(Element::Body)));
     line
@@ -152,6 +156,12 @@ mod tests {
     fn a_transcript_hit_shows_its_project_field_and_line() {
         let rendered = row(&hit(Some("-a-project"), Kind::Transcript, Field::ToolResult, 12), 80, &theme());
         assert_eq!(rendered.text(), "-a-project · tool result · L12");
+    }
+
+    #[test]
+    fn a_subagent_hit_is_distinguished_from_a_transcript_hit() {
+        let rendered = row(&hit(Some("-a-project"), Kind::Subagent, Field::UserPrompt, 5), 80, &theme());
+        assert_eq!(rendered.text(), "-a-project · subagent · prompt · L5");
     }
 
     #[test]

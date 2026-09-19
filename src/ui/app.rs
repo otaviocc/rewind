@@ -221,6 +221,7 @@ pub struct App {
     search_hit_generation: Gate,
     pending_hit_resolve: Option<(Hit, u64)>,
     pending_scroll_uuid: Option<String>,
+    pending_hit_agent: Option<String>,
     filter: Option<Filter>,
 }
 
@@ -279,6 +280,7 @@ impl App {
             search_hit_generation: Gate::default(),
             pending_hit_resolve: None,
             pending_scroll_uuid: None,
+            pending_hit_agent: None,
             filter: None,
         }
     }
@@ -442,6 +444,9 @@ impl App {
             }
             Err(error) => Loadable::Failed(error.to_string()),
         };
+        if let Some(uuid) = self.pending_scroll_uuid.take() {
+            self.scroll_to_uuid(&uuid);
+        }
     }
 
     fn record_drift(&mut self, conversation: &Conversation) {
@@ -513,6 +518,11 @@ impl App {
             }
             Err(error) => Loadable::Failed(error.to_string()),
         };
+        if let Some(agent_id) = self.pending_hit_agent.take()
+            && self.enter_subagent_by_id(&agent_id)
+        {
+            return;
+        }
         if let Some(uuid) = self.pending_scroll_uuid.take() {
             self.scroll_to_uuid(&uuid);
         }
@@ -985,8 +995,15 @@ impl App {
         if self.enter_inline_subagent() {
             return true;
         }
-        let Some((id, path, label)) = self
-            .selected_agent()
+        let Some(id) = self.selected_agent().map(|agent| agent.id.clone()) else { return false };
+        self.enter_subagent_by_id(&id)
+    }
+
+    fn enter_subagent_by_id(&mut self, agent_id: &str) -> bool {
+        let Loadable::Ready(rendered) = &self.conversation else { return false };
+        let Some((id, path, label)) = rendered
+            .agents()
+            .by_id(agent_id)
             .and_then(|agent| Some((agent.id.clone(), agent.transcript.clone()?, Box::<str>::from(agent.label()))))
         else {
             return false;
@@ -1279,6 +1296,7 @@ impl App {
         self.projects_pane.selected = index;
         self.pending_session = Some(target.session_id);
         self.pending_scroll_uuid = target.uuid;
+        self.pending_hit_agent = target.agent_id;
         self.focused = Column::Conversation;
         self.request_sessions_for_selection();
     }

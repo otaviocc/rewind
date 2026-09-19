@@ -256,7 +256,7 @@ fn resolve_hit(claude_dir: &Path, hit: &Hit) -> Option<Opened> {
     match hit.kind {
         Kind::History => {
             let (session_id, cwd) = resolve::resolve_history(claude_dir, hit)?;
-            Some(Opened { project_directory: project::encode(&cwd), session_id, uuid: None })
+            Some(Opened { project_directory: project::encode(&cwd), session_id, uuid: None, agent_id: None })
         }
         Kind::Transcript | Kind::Subagent => resolve::resolve_transcript(claude_dir, hit),
     }
