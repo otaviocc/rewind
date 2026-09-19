@@ -38,8 +38,8 @@ table_header          fg -             bg -             bold
 table_border          fg darkgray      bg -
 rule                  fg darkgray      bg -
 html                  fg darkgray      bg -
-header_title          fg -             bg -             bold
-status                fg -             bg -
+header_title          fg cyan          bg -             bold
+status                fg gray          bg -
 status_notice         fg yellow        bg -
 status_error          fg red           bg -
 cursor_line           fg -             bg darkgray

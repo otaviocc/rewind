@@ -194,21 +194,21 @@ pub fn default_style(element: Element, palette: &Palette) -> Style {
         | Element::Html
         | Element::Hint
         | Element::ColumnTitle => style.fg(palette.muted),
-        Element::Label | Element::Heading | Element::Strong | Element::TableHeader | Element::HeaderTitle | Element::Subagent => {
+        Element::Label | Element::Heading | Element::Strong | Element::TableHeader | Element::Subagent => {
             style.add_modifier(Modifier::BOLD)
         }
-        Element::ToolName | Element::HumanGutter | Element::ColumnTitleActive => {
+        Element::ToolName | Element::HumanGutter | Element::ColumnTitleActive | Element::HeaderTitle => {
             style.fg(palette.accent).add_modifier(Modifier::BOLD)
         }
         Element::AssistantGutter => style.fg(palette.notice).add_modifier(Modifier::DIM),
-        Element::DiffContext | Element::Status | Element::CodeBlock => style,
+        Element::DiffContext | Element::CodeBlock => style,
         Element::ToolError | Element::StatusError | Element::DiffRemoved => style.fg(palette.error),
         Element::DiffAdded | Element::SessionLive => style.fg(palette.success),
         Element::Emphasis => style.add_modifier(Modifier::ITALIC),
         Element::Strikethrough => style.add_modifier(Modifier::CROSSED_OUT),
         Element::InlineCode | Element::ScrollProgress => style.fg(palette.accent),
         Element::Link => style.fg(palette.highlight).add_modifier(Modifier::UNDERLINED),
-        Element::Quote => style.fg(palette.muted_text),
+        Element::Quote | Element::Status => style.fg(palette.muted_text),
         Element::StatusNotice => style.fg(palette.warning),
         Element::CursorLine => style.bg(palette.cursor),
         Element::SearchMatch => style.fg(Color::Black).bg(palette.warning),

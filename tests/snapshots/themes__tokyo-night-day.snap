@@ -38,8 +38,8 @@ table_header          fg -             bg -             bold
 table_border          fg #a1a6c5       bg -
 rule                  fg #a1a6c5       bg -
 html                  fg #a1a6c5       bg -
-header_title          fg -             bg -             bold
-status                fg -             bg -
+header_title          fg #2e7de9       bg -             bold
+status                fg #848cb5       bg -
 status_notice         fg #8c6c3e       bg -
 status_error          fg #f52a65       bg -
 cursor_line           fg -             bg #c4c8da

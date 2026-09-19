@@ -7,7 +7,7 @@ use ratatui::widgets::{Block, Clear, Widget};
 use ratatui::{Frame, symbols};
 use unicode_width::UnicodeWidthStr;
 
-use crate::render::line::{RenderedLine, truncate};
+use crate::render::line::{RenderedLine, StyledSpan, truncate};
 use crate::theme::Element;
 use crate::ui::age;
 use crate::ui::app::{App, Column, Loadable};
@@ -71,8 +71,8 @@ fn header(area: Rect, buf: &mut Buffer, app: &App) {
     segments.extend(app.trail().into_iter().map(str::to_owned));
     let hints = HINTS.width();
     let room = usize::from(area.width).saturating_sub(HINT_GAP).saturating_sub(hints);
-    let title = elided(&segments, room);
-    row(area, buf, area.x, &title, app.theme().style(Element::HeaderTitle));
+    let title = breadcrumb(&elided(&segments, room), app);
+    painted(area, buf, &title);
 
     if title.width().saturating_add(HINT_GAP).saturating_add(hints) <= usize::from(area.width) {
         let x = area.right().saturating_sub(u16::try_from(hints).unwrap_or(area.width));
@@ -80,22 +80,42 @@ fn header(area: Rect, buf: &mut Buffer, app: &App) {
     }
 }
 
-fn elided(segments: &[String], room: usize) -> String {
-    let joined = |from: usize, lead: bool| {
-        let tail = segments.get(from..).unwrap_or_default().join(SEPARATOR);
-        if lead { format!("{ELIDED}{SEPARATOR}{tail}") } else { tail }
+fn elided(segments: &[String], room: usize) -> Vec<String> {
+    let pieces = |from: usize, lead: bool| {
+        let tail = segments.get(from..).unwrap_or_default().iter().cloned();
+        if lead { std::iter::once(ELIDED.to_owned()).chain(tail).collect() } else { tail.collect::<Vec<String>>() }
     };
-    let whole = joined(0, false);
-    if whole.width() <= room {
+    let width = |pieces: &[String]| {
+        pieces
+            .iter()
+            .map(|piece| piece.width())
+            .fold(0, usize::saturating_add)
+            .saturating_add(SEPARATOR.width().saturating_mul(pieces.len().saturating_sub(1)))
+    };
+    let whole = pieces(0, false);
+    if width(&whole) <= room {
         return whole;
     }
     for from in 1..segments.len() {
-        let candidate = joined(from, true);
-        if candidate.width() <= room {
+        let candidate = pieces(from, true);
+        if width(&candidate) <= room {
             return candidate;
         }
     }
-    segments.last().map_or_else(String::new, |last| truncate(last, room))
+    segments.last().map_or_else(Vec::new, |last| vec![truncate(last, room)])
+}
+
+fn breadcrumb(pieces: &[String], app: &App) -> RenderedLine {
+    let quiet = app.theme().style(Element::Hint);
+    let mut line = RenderedLine::blank();
+    for (index, piece) in pieces.iter().enumerate() {
+        if index > 0 {
+            line.push(StyledSpan::new(SEPARATOR, quiet));
+        }
+        let style = if index == 0 && piece == TITLE_PREFIX { app.theme().style(Element::HeaderTitle) } else { quiet };
+        line.push(StyledSpan::new(piece.clone(), style));
+    }
+    line
 }
 
 fn rule(area: Rect, buf: &mut Buffer, style: Style) {
@@ -215,7 +235,7 @@ fn projects_rows(area: Rect, buf: &mut Buffer, app: &App, focused: bool) {
         } else {
             " "
         };
-        row(Rect { y, height: 1, ..area }, buf, area.x, marker, app.theme().style(Element::Status));
+        row(Rect { y, height: 1, ..area }, buf, area.x, marker, app.theme().style(Element::Body));
 
         let name = project
             .path
@@ -237,7 +257,7 @@ fn sessions_rows(area: Rect, buf: &mut Buffer, app: &App, focused: bool) {
         let y = area.y.saturating_add(u16::try_from(row_index).unwrap_or(u16::MAX));
         let picked = index == pane.selected;
         let marker = if picked && focused { CHEVRON } else { " " };
-        row(Rect { y, height: 1, ..area }, buf, area.x, marker, app.theme().style(Element::Status));
+        row(Rect { y, height: 1, ..area }, buf, area.x, marker, app.theme().style(Element::Body));
 
         let age = session.last_activity.map_or_else(|| "-".to_owned(), |at| age::relative(app.ctx.now, at));
         let info = format!("{age} {}", session.messages);
@@ -284,7 +304,7 @@ fn text_and_info(area: Rect, buf: &mut Buffer, text: &str, info: &str, app: &App
     let x = area.x.saturating_add(2);
     let info_width = INFO_WIDTH.min(area.width);
     let text_width = area.width.saturating_sub(2).saturating_sub(info_width);
-    row(Rect { width: text_width, ..area }, buf, x, text, app.theme().style(Element::Status));
+    row(Rect { width: text_width, ..area }, buf, x, text, app.theme().style(Element::Body));
 
     let info_x = area.right().saturating_sub(u16::try_from(info.width()).unwrap_or(info_width).min(info_width));
     row(area, buf, info_x, info, app.theme().style(Element::Hint));
@@ -780,16 +800,20 @@ mod tests {
         assert_eq!(pane_of(&app, Column::Projects), Pane::default());
     }
 
+    fn joined(segments: &[String], room: usize) -> String {
+        elided(segments, room).join(SEPARATOR)
+    }
+
     #[test]
     fn a_breadcrumb_that_fits_keeps_every_segment() {
         let segments = ["rewind".to_owned(), "holodeck".to_owned(), "The tool surface".to_owned(), "Explore".to_owned()];
-        assert_eq!(elided(&segments, 60), "rewind · holodeck · The tool surface · Explore");
+        assert_eq!(joined(&segments, 60), "rewind · holodeck · The tool surface · Explore");
     }
 
     #[test]
     fn a_breadcrumb_too_wide_elides_from_the_left_so_the_deepest_segment_survives() {
         let segments = ["rewind".to_owned(), "holodeck".to_owned(), "The tool surface".to_owned(), "code-review".to_owned()];
-        let elided = elided(&segments, 34);
+        let elided = joined(&segments, 34);
         assert!(elided.starts_with("…"), "{elided:?}");
         assert!(elided.ends_with("code-review"), "the segment being read is the one that must not go: {elided:?}");
         assert!(elided.width() <= 34);
@@ -798,8 +822,56 @@ mod tests {
     #[test]
     fn a_breadcrumb_with_no_room_at_all_keeps_a_truncated_last_segment() {
         let segments = ["rewind".to_owned(), "holodeck".to_owned(), "code-review".to_owned()];
-        let elided = elided(&segments, 6);
+        let elided = joined(&segments, 6);
         assert!(elided.width() <= 6, "{elided:?}");
         assert!(!elided.is_empty());
+    }
+
+    #[test]
+    fn only_the_name_at_the_head_of_the_breadcrumb_carries_the_accent() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("holodeck", true)]));
+        let buffer = frame(&app, Size::new(120, 24));
+
+        let name = app.theme().style(Element::HeaderTitle).fg.expect("the header title names a foreground");
+        let quiet = app.theme().style(Element::Hint).fg.expect("the hint style names a foreground");
+        assert_ne!(name, quiet, "the two must differ or the accent says nothing");
+
+        let row = text_row(&buffer, 0);
+        let crumb = " rewind · /Users/fixture/holodeck";
+        assert!(row.starts_with(crumb), "{row}");
+        for x in 1..7 {
+            assert_eq!(buffer[(x, 0)].fg, name, "the name at {x} is not the accent");
+        }
+        for x in 7..u16::try_from(crumb.width()).unwrap_or(0) {
+            assert_eq!(buffer[(x, 0)].fg, quiet, "the trail at {x} did not recede");
+        }
+    }
+
+    #[test]
+    fn the_status_line_sits_a_step_below_the_rows_it_describes() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("holodeck", true)]));
+        let generation = app.generation();
+        app.set_sessions(generation, vec![session("s1", "a session")]);
+        let buffer = frame(&app, Size::new(120, 24));
+
+        let status = app.theme().style(Element::Status).fg.expect("the status style names a foreground");
+        let body = app.theme().style(Element::Body).fg.unwrap_or_default();
+        assert_ne!(status, body, "the status line reads at the same weight as a project name");
+        assert_eq!(buffer[(1, 23)].fg, status, "the status line is not the status colour");
+    }
+
+    #[test]
+    fn a_project_name_keeps_the_body_colour_while_its_age_stays_a_hint() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("a", true), project("holodeck", true)]));
+        let buffer = frame(&app, Size::new(120, 24));
+
+        let body = app.theme().style(Element::Body).fg.unwrap_or_default();
+        let quiet = app.theme().style(Element::Hint).fg.unwrap_or_default();
+        assert_eq!(buffer[(2, 4)].fg, body, "the unselected project name left the body colour");
+        assert_eq!(buffer[(2, 4)].bg, ratatui::style::Color::Reset, "row 4 should be the unselected project");
+        assert_ne!(body, quiet);
     }
 }
