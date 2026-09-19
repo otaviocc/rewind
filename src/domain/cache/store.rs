@@ -27,16 +27,25 @@ pub struct Report {
     pub shard_bytes: u64,
     pub wall: Duration,
     pub failures: Vec<(String, String)>,
+    pub cold_rebuilds: Vec<String>,
 }
 
 pub fn rebuild(claude_dir: &Path, cache_root: &Path) -> Report {
     let started = Instant::now();
     let version_dir = cache_root.join(format!("v{}", shard::CACHE_VERSION));
     let mut failures = Vec::new();
+    let mut cold_rebuilds = Vec::new();
 
     if fs::create_dir_all(&version_dir).is_err() {
         failures.push(("<cache>".to_owned(), format!("cannot create {}", version_dir.display())));
-        return Report { projects_total: 0, projects_indexed: 0, shard_bytes: 0, wall: started.elapsed(), failures };
+        return Report {
+            projects_total: 0,
+            projects_indexed: 0,
+            shard_bytes: 0,
+            wall: started.elapsed(),
+            failures,
+            cold_rebuilds,
+        };
     }
 
     prune_other_versions(cache_root, &version_dir);
@@ -59,9 +68,12 @@ pub fn rebuild(claude_dir: &Path, cache_root: &Path) -> Report {
         let shard_path = version_dir.join(&project.directory).with_extension(SHARD_EXTENSION);
 
         match rebuild_shard(&files, &shard_path, Kind::Transcript, text::extract, built_at_ms) {
-            Ok(bytes) => {
+            Ok((bytes, was_corrupt)) => {
                 shard_bytes_total = shard_bytes_total.saturating_add(bytes);
                 projects_indexed = projects_indexed.saturating_add(1);
+                if was_corrupt {
+                    cold_rebuilds.push(project.directory.clone());
+                }
             }
             Err(message) => failures.push((project.directory.clone(), message)),
         }
@@ -74,7 +86,12 @@ pub fn rebuild(claude_dir: &Path, cache_root: &Path) -> Report {
     if history_path.is_file() {
         let shard_path = version_dir.join(HISTORY_SHARD_NAME).with_extension(SHARD_EXTENSION);
         match rebuild_shard(&[history_path], &shard_path, Kind::History, text::extract_history, built_at_ms) {
-            Ok(bytes) => shard_bytes_total = shard_bytes_total.saturating_add(bytes),
+            Ok((bytes, was_corrupt)) => {
+                shard_bytes_total = shard_bytes_total.saturating_add(bytes);
+                if was_corrupt {
+                    cold_rebuilds.push(HISTORY_SHARD_NAME.to_owned());
+                }
+            }
             Err(message) => failures.push((HISTORY_SHARD_NAME.to_owned(), message)),
         }
     }
@@ -85,7 +102,7 @@ pub fn rebuild(claude_dir: &Path, cache_root: &Path) -> Report {
         failures.push((META_FILE_NAME.to_owned(), error.to_string()));
     }
 
-    Report { projects_total, projects_indexed, shard_bytes: shard_bytes_total, wall: started.elapsed(), failures }
+    Report { projects_total, projects_indexed, shard_bytes: shard_bytes_total, wall: started.elapsed(), failures, cold_rebuilds }
 }
 
 pub fn purge(cache_root: &Path) {
@@ -98,14 +115,16 @@ fn rebuild_shard(
     kind: Kind,
     extract: fn(&[u8]) -> Vec<text::Extracted>,
     built_at_ms: i64,
-) -> Result<u64, String> {
+) -> Result<(u64, bool), String> {
     let previous_bytes = fs::read(shard_path).ok();
+    let was_corrupt = previous_bytes.is_some();
     let previous = previous_bytes.as_deref().and_then(|bytes| Shard::parse(bytes).ok());
+    let was_corrupt = was_corrupt && previous.is_none();
 
     let output = build::build(files, previous.as_ref(), kind, extract, built_at_ms);
     let len = u64::try_from(output.shard_bytes.len()).unwrap_or(u64::MAX);
     atomic::write(shard_path, &output.shard_bytes).map_err(|error| error.to_string())?;
-    Ok(len)
+    Ok((len, was_corrupt))
 }
 
 fn session_summary(session: session::Session) -> meta::MetaSession {

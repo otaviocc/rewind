@@ -51,6 +51,7 @@ fn a_deleted_shard_degrades_to_a_full_rebuild_of_just_that_project() {
 
     let report = store::rebuild(&tree.claude_dir(), cache.path());
     assert!(report.failures.is_empty(), "{:?}", report.failures);
+    assert!(report.cold_rebuilds.is_empty(), "a missing shard is a normal cold build, not a corruption to note");
     assert!(shard_path.is_file(), "the shard must be rebuilt from scratch");
     let rebuilt = fs::read(&shard_path).expect("a readable shard");
     let shard = Shard::parse(&rebuilt).expect("a well-formed rebuilt shard");
@@ -69,6 +70,7 @@ fn a_truncated_shard_degrades_to_a_full_rebuild() {
 
     let report = store::rebuild(&tree.claude_dir(), cache.path());
     assert!(report.failures.is_empty(), "{:?}", report.failures);
+    assert_eq!(report.cold_rebuilds, [tree.project_dir("Developer/holodeck")], "a truncated shard must be noted, not silent");
     Shard::parse(&fs::read(&shard_path).expect("a readable shard")).expect("a well-formed rebuilt shard");
 }
 
@@ -87,6 +89,7 @@ fn a_shard_with_a_corrupted_magic_degrades_to_a_full_rebuild() {
 
     let report = store::rebuild(&tree.claude_dir(), cache.path());
     assert!(report.failures.is_empty(), "{:?}", report.failures);
+    assert_eq!(report.cold_rebuilds, [tree.project_dir("Developer/holodeck")], "a bad-magic shard must be noted, not silent");
     Shard::parse(&fs::read(&shard_path).expect("a readable shard")).expect("a well-formed rebuilt shard");
 }
 

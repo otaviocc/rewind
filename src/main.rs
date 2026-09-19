@@ -74,6 +74,9 @@ fn rebuild_cache(claude: &std::path::Path, no_cache: bool) -> Result<()> {
         report.shard_bytes,
         report.wall.as_secs_f64()
     );
+    for name in &report.cold_rebuilds {
+        eprintln!("rewind: {name}: previous shard was unreadable, rebuilt cold");
+    }
     for (name, message) in &report.failures {
         eprintln!("rewind: {name}: {message}");
     }
