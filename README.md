@@ -74,17 +74,17 @@ enters it. `--no-mouse` turns capture off.
 
 ## Themes
 
-Thirteen themes are built in. `spool` is the default — written for `rewind` rather than
+Fourteen themes are built in. `spool` is the default — written for `rewind` rather than
 borrowed from an editor, and it leaves the background and foreground alone so a transcript
 sits on your own terminal ground. `ansi` is the other end: it asserts no colour at all and
 takes everything from your terminal's scheme.
 
 ```
 spool             ansi              catppuccin-latte
-catppuccin-mocha  gruvbox-dark      gruvbox-light
-kanagawa-dragon   nord              solarized-dark
-solarized-light   tokyo-night       tokyo-night-day
-vesper
+catppuccin-mocha  default-plus      gruvbox-dark
+gruvbox-light     kanagawa-dragon   nord
+solarized-dark    solarized-light   tokyo-night
+tokyo-night-day   vesper
 ```
 
 `--theme <name>` picks one, `--list-themes` prints them.
