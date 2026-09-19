@@ -79,6 +79,8 @@ fn key_action(key: KeyEvent) -> Option<Action> {
     match key.code {
         KeyCode::Char('j') | KeyCode::Down => Some(Action::Move(Motion::Line(1))),
         KeyCode::Char('k') | KeyCode::Up => Some(Action::Move(Motion::Line(-1))),
+        KeyCode::Char('d') => Some(Action::Move(Motion::HalfPage(1))),
+        KeyCode::Char('u') => Some(Action::Move(Motion::HalfPage(-1))),
         KeyCode::Char('g') | KeyCode::Home => Some(Action::Move(Motion::Top)),
         KeyCode::Char('G') | KeyCode::End => Some(Action::Move(Motion::Bottom)),
         KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => Some(Action::Focus { forward: false }),
@@ -94,7 +96,7 @@ fn key_action(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('t') => Some(Action::ToggleAllCalls),
         KeyCode::Char('b') => Some(Action::CycleBranch),
         KeyCode::Char('i') => Some(Action::ToggleInjections),
-        KeyCode::Char('d') => Some(Action::ToggleDiagnostics),
+        KeyCode::Char('D') => Some(Action::ToggleDiagnostics),
         KeyCode::Char('q') => Some(Action::Quit),
         _ => None,
     }
@@ -131,6 +133,8 @@ mod tests {
             (press(KeyCode::Home), Action::Move(Motion::Top)),
             (press(KeyCode::Char('G')), Action::Move(Motion::Bottom)),
             (press(KeyCode::End), Action::Move(Motion::Bottom)),
+            (press(KeyCode::Char('d')), Action::Move(Motion::HalfPage(1))),
+            (press(KeyCode::Char('u')), Action::Move(Motion::HalfPage(-1))),
             (control('d'), Action::Move(Motion::HalfPage(1))),
             (control('u'), Action::Move(Motion::HalfPage(-1))),
             (press(KeyCode::Char('h')), Action::Focus { forward: false }),
@@ -150,7 +154,7 @@ mod tests {
             (press(KeyCode::Char('t')), Action::ToggleAllCalls),
             (press(KeyCode::Char('b')), Action::CycleBranch),
             (press(KeyCode::Char('i')), Action::ToggleInjections),
-            (press(KeyCode::Char('d')), Action::ToggleDiagnostics),
+            (press(KeyCode::Char('D')), Action::ToggleDiagnostics),
             (press(KeyCode::Char('q')), Action::Quit),
             (control('c'), Action::Quit),
         ];
@@ -179,8 +183,15 @@ mod tests {
     }
 
     #[test]
-    fn control_d_still_pages_rather_than_opening_the_diagnostics() {
-        assert_eq!(action(&control('d'), viewport()), Some(Action::Move(Motion::HalfPage(1))));
+    fn a_half_page_answers_to_both_of_its_spellings() {
+        assert_eq!(action(&press(KeyCode::Char('d')), viewport()), action(&control('d'), viewport()));
+        assert_eq!(action(&press(KeyCode::Char('u')), viewport()), action(&control('u'), viewport()));
+    }
+
+    #[test]
+    fn the_diagnostics_answer_to_the_capital_and_never_to_the_letter_that_now_pages() {
+        assert_eq!(action(&press(KeyCode::Char('D')), viewport()), Some(Action::ToggleDiagnostics));
+        assert_eq!(action(&press(KeyCode::Char('d')), viewport()), Some(Action::Move(Motion::HalfPage(1))));
     }
 
     #[test]
