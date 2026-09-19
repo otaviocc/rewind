@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use ratatui::layout::Size;
 
 use crate::ctx::Ctx;
+use crate::domain::cancel::{Cancel, Gate};
 use crate::domain::diagnostics::Diagnostics;
 use crate::domain::project::{Project, ProjectError};
 use crate::domain::session::Session;
@@ -22,7 +23,7 @@ use crate::ui::input::{Action, Motion};
 use crate::ui::{Options, columns, diagnostics, listing};
 
 pub const CHROME_ROWS: u16 = 5;
-pub const DEBOUNCE: Duration = Duration::from_millis(120);
+pub const DEBOUNCE: Duration = Duration::from_millis(80);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Column {
@@ -46,7 +47,7 @@ pub struct Pane {
 
 #[derive(Debug, Clone)]
 pub struct Rendered {
-    conversation: Conversation,
+    conversation: Arc<Conversation>,
     path: PathBuf,
     agents: Agents,
     root: Option<NodeId>,
@@ -56,14 +57,14 @@ pub struct Rendered {
 }
 
 impl Rendered {
-    fn new(conversation: Conversation, path: PathBuf, agents: Agents, width: u16, view: &View, theme: &Theme) -> Self {
+    fn new(conversation: Arc<Conversation>, path: PathBuf, agents: Agents, width: u16, view: &View, theme: &Theme) -> Self {
         let transcript = message::transcript(&conversation, &view.ctx(usize::from(width), &agents, None, theme));
         Self { conversation, path, agents, root: None, transcript, wrapped_at: width, revision: view.revision }
     }
 
     fn rooted(&self, root: NodeId, width: u16, view: &View, theme: &Theme) -> Self {
         let mut rendered = Self {
-            conversation: self.conversation.clone(),
+            conversation: Arc::clone(&self.conversation),
             path: self.path.clone(),
             agents: self.agents.clone(),
             root: Some(root),
@@ -93,7 +94,7 @@ impl Rendered {
         &self.transcript
     }
 
-    pub const fn conversation(&self) -> &Conversation {
+    pub fn conversation(&self) -> &Conversation {
         &self.conversation
     }
 
@@ -172,6 +173,7 @@ struct Anchored {
     row: Option<usize>,
 }
 
+#[allow(clippy::struct_excessive_bools)]
 pub struct App {
     pub ctx: Ctx,
     pub quit: bool,
@@ -186,8 +188,8 @@ pub struct App {
     pre_focus: Column,
     mode: Mode,
     area: Size,
-    generation: u64,
-    conversation_generation: u64,
+    generation: Gate,
+    conversation_generation: Gate,
     pending_project: Option<String>,
     pending_session: Option<String>,
     pending_session_load: Option<(PathBuf, u64)>,
@@ -204,6 +206,11 @@ pub struct App {
     diagnostics_open: bool,
     diagnostics_pane: Pane,
     theme: Theme,
+    cache_root: Option<PathBuf>,
+    no_cache: bool,
+    scan_requested: bool,
+    scan_gate: Gate,
+    scan_progress: Option<(usize, usize)>,
 }
 
 impl App {
@@ -223,8 +230,8 @@ impl App {
             pre_focus: Column::Projects,
             mode: Mode::Browse,
             area,
-            generation: 0,
-            conversation_generation: 0,
+            generation: Gate::default(),
+            conversation_generation: Gate::default(),
             pending_project: options.project.clone(),
             pending_session: options.session.clone(),
             pending_session_load: None,
@@ -240,6 +247,11 @@ impl App {
             drift: BTreeMap::new(),
             diagnostics_open: false,
             diagnostics_pane: Pane::default(),
+            cache_root: options.cache_root.clone(),
+            no_cache: options.no_cache,
+            scan_requested: false,
+            scan_gate: Gate::default(),
+            scan_progress: None,
         }
     }
 
@@ -251,8 +263,12 @@ impl App {
         &self.theme
     }
 
-    pub const fn generation(&self) -> u64 {
-        self.generation
+    pub fn generation(&self) -> u64 {
+        self.generation.current()
+    }
+
+    pub fn project_cancel(&self, generation: u64) -> Cancel {
+        self.generation.token_at(generation)
     }
 
     pub const fn projects(&self) -> &Loadable<Vec<Project>> {
@@ -267,8 +283,12 @@ impl App {
         &self.conversation
     }
 
-    pub const fn conversation_generation(&self) -> u64 {
-        self.conversation_generation
+    pub fn conversation_generation(&self) -> u64 {
+        self.conversation_generation.current()
+    }
+
+    pub fn conversation_cancel(&self, generation: u64) -> Cancel {
+        self.conversation_generation.token_at(generation)
     }
 
     pub fn lines(&self) -> &[RenderedLine] {
@@ -381,8 +401,8 @@ impl App {
         self.pending_subagent_load.take()
     }
 
-    pub fn set_subagent(&mut self, generation: u64, result: Result<Box<Conversation>, ThreadError>, path: PathBuf) {
-        if generation != self.conversation_generation {
+    pub fn set_subagent(&mut self, generation: u64, result: Result<Arc<Conversation>, ThreadError>, path: PathBuf) {
+        if generation != self.conversation_generation.current() {
             return;
         }
         let width = columns::conversation_width(self.area, self.mode);
@@ -390,7 +410,7 @@ impl App {
         self.conversation = match result {
             Ok(conversation) => {
                 self.record_drift(&conversation);
-                Loadable::Ready(Rendered::new(*conversation, path, agents, width, &self.view, &self.theme))
+                Loadable::Ready(Rendered::new(conversation, path, agents, width, &self.view, &self.theme))
             }
             Err(error) => Loadable::Failed(error.to_string()),
         };
@@ -429,7 +449,7 @@ impl App {
     }
 
     pub fn set_tool_output(&mut self, generation: u64, id: Box<str>, result: Result<Vec<String>, String>) {
-        if generation != self.conversation_generation {
+        if generation != self.conversation_generation.current() {
             return;
         }
         let overflow = match result {
@@ -452,8 +472,8 @@ impl App {
         self.pending_conversation_load.take()
     }
 
-    pub fn set_conversation(&mut self, generation: u64, result: Result<Box<Conversation>, ThreadError>, agents: Agents) {
-        if generation != self.conversation_generation {
+    pub fn set_conversation(&mut self, generation: u64, result: Result<Arc<Conversation>, ThreadError>, agents: Agents) {
+        if generation != self.conversation_generation.current() {
             return;
         }
         let width = columns::conversation_width(self.area, self.mode);
@@ -461,7 +481,7 @@ impl App {
         self.conversation = match result {
             Ok(conversation) => {
                 self.record_drift(&conversation);
-                Loadable::Ready(Rendered::new(*conversation, path, agents, width, &self.view, &self.theme))
+                Loadable::Ready(Rendered::new(conversation, path, agents, width, &self.view, &self.theme))
             }
             Err(error) => Loadable::Failed(error.to_string()),
         };
@@ -481,7 +501,7 @@ impl App {
     }
 
     pub fn set_projects(&mut self, generation: u64, result: Result<Vec<Project>, ProjectError>) {
-        if generation != self.generation {
+        if generation != self.generation.current() {
             return;
         }
         self.projects = match result {
@@ -495,10 +515,35 @@ impl App {
             self.projects_pane.selected = index;
         }
         self.request_sessions_for_selection();
+        if matches!(self.projects, Loadable::Ready(_)) && !self.no_cache && self.cache_root.is_some() {
+            self.scan_requested = true;
+        }
+    }
+
+    pub fn take_scan(&mut self) -> Option<(PathBuf, PathBuf, Option<String>, Cancel)> {
+        if !self.scan_requested {
+            return None;
+        }
+        self.scan_requested = false;
+        let cache_root = self.cache_root.clone()?;
+        let selected = self.selected_project().map(|project| project.directory.clone());
+        Some((self.claude_dir.clone(), cache_root, selected, self.scan_gate.token()))
+    }
+
+    pub const fn set_scan_progress(&mut self, done: usize, total: usize) {
+        self.scan_progress = Some((done, total));
+    }
+
+    pub const fn scan_finished(&mut self) {
+        self.scan_progress = None;
+    }
+
+    pub const fn scan_status(&self) -> Option<(usize, usize)> {
+        self.scan_progress
     }
 
     pub fn set_sessions(&mut self, generation: u64, sessions: Vec<Session>) {
-        if generation != self.generation {
+        if generation != self.generation.current() {
             return;
         }
         self.sessions_pane = Pane::default();
@@ -532,6 +577,11 @@ impl App {
         Size::new(self.area.width, self.area.height.saturating_sub(CHROME_ROWS))
     }
 
+    fn quit(&mut self) {
+        self.quit = true;
+        self.scan_gate.bump();
+    }
+
     fn toggle_diagnostics(&mut self) {
         self.diagnostics_open = !self.diagnostics_open;
         self.diagnostics_pane = Pane::default();
@@ -546,7 +596,7 @@ impl App {
     pub fn apply(&mut self, action: Action) {
         if self.diagnostics_open {
             match action {
-                Action::Quit => self.quit = true,
+                Action::Quit => self.quit(),
                 Action::Resize(size) => self.area = size,
                 Action::ToggleDiagnostics | Action::Ascend => self.toggle_diagnostics(),
                 Action::Move(motion) => self.scroll_diagnostics(motion),
@@ -565,7 +615,7 @@ impl App {
             return;
         }
         match action {
-            Action::Quit => self.quit = true,
+            Action::Quit => self.quit(),
             Action::Resize(size) => self.area = size,
             Action::ToggleFocusMode => self.toggle_focus_mode(),
             Action::Focus { forward } => self.move_focus(forward),
@@ -721,7 +771,7 @@ impl App {
         }
         let path = tool::overflow_path(rendered.path(), found.name);
         self.view.outputs.insert(Box::from(id), Overflow::Pending);
-        self.pending_tool_output.push_back((Box::from(id), path, self.conversation_generation));
+        self.pending_tool_output.push_back((Box::from(id), path, self.conversation_generation.current()));
     }
 
     const fn toggle_focus_mode(&mut self) {
@@ -806,7 +856,7 @@ impl App {
             return false;
         };
 
-        self.conversation_generation = self.conversation_generation.saturating_add(1);
+        self.conversation_generation.bump();
         self.pending_tool_output.clear();
         self.stack.push(Frame {
             conversation: std::mem::replace(&mut self.conversation, Loadable::Loading),
@@ -816,13 +866,13 @@ impl App {
             label: self.label.replace(label),
         });
         self.conversation_pane = Pane::default();
-        self.pending_subagent_load = Some((id, path, self.conversation_generation));
+        self.pending_subagent_load = Some((id, path, self.conversation_generation.current()));
         true
     }
 
     fn leave_subagent(&mut self) -> bool {
         let Some(frame) = self.stack.pop() else { return false };
-        self.conversation_generation = self.conversation_generation.saturating_add(1);
+        self.conversation_generation.bump();
         self.pending_subagent_load = None;
         self.pending_tool_output.clear();
         self.conversation = frame.conversation;
@@ -931,12 +981,12 @@ impl App {
     }
 
     fn request_sessions_for_selection(&mut self) {
-        self.generation = self.generation.saturating_add(1);
+        self.generation.bump();
         self.sessions = Loadable::Loading;
         self.sessions_pane = Pane::default();
         if let Some(project) = self.selected_project() {
             let dir = self.claude_dir.join("projects").join(&project.directory);
-            self.pending_session_load = Some((dir, self.generation));
+            self.pending_session_load = Some((dir, self.generation.current()));
         } else {
             self.pending_session_load = None;
             self.sessions = Loadable::Ready(Vec::new());
@@ -948,7 +998,7 @@ impl App {
         self.stack.clear();
         self.label = None;
         self.pending_subagent_load = None;
-        self.conversation_generation = self.conversation_generation.saturating_add(1);
+        self.conversation_generation.bump();
         self.conversation = Loadable::Loading;
         self.conversation_pane = Pane::default();
         self.view = View::default();
@@ -956,7 +1006,7 @@ impl App {
         self.pending_tool_output.clear();
         self.pending_conversation_path = self.selected_session().map(|session| session.path.clone());
         self.pending_conversation_load =
-            self.selected_session().map(|session| (session.path.clone(), self.conversation_generation));
+            self.selected_session().map(|session| (session.path.clone(), self.conversation_generation.current()));
         self.conversation_due =
             self.pending_conversation_load.as_ref().map(|_| Instant::now().checked_add(DEBOUNCE).unwrap_or_else(Instant::now));
     }
@@ -1056,7 +1106,7 @@ mod tests {
         let conversation = crate::domain::thread::build(&path).expect("a built conversation");
         let mut app = app(area);
         app.pending_conversation_path = Some(path);
-        app.set_conversation(app.conversation_generation(), Ok(Box::new(conversation)), Agents::default());
+        app.set_conversation(app.conversation_generation(), Ok(Arc::new(conversation)), Agents::default());
         let _ = dir.keep();
         app
     }
@@ -1072,7 +1122,7 @@ mod tests {
         let agents = crate::domain::subagent::discover(&path);
         let mut app = app(area);
         app.pending_conversation_path = Some(path);
-        app.set_conversation(app.conversation_generation(), Ok(Box::new(conversation)), agents);
+        app.set_conversation(app.conversation_generation(), Ok(Arc::new(conversation)), agents);
         app
     }
 
@@ -1130,7 +1180,7 @@ mod tests {
         app.apply(Action::Ascend);
 
         let conversation = crate::domain::thread::build(&path).expect("the agent");
-        app.set_subagent(stale, Ok(Box::new(conversation)), path);
+        app.set_subagent(stale, Ok(Arc::new(conversation)), path);
         assert_eq!(app.depth(), 0);
         assert!(app.lines().iter().any(|line| line.text().contains("read the grid scanner")), "the parent is still on screen");
     }
@@ -1189,7 +1239,7 @@ mod tests {
         let agents = crate::domain::subagent::discover(&path);
         let mut app = app(area);
         app.pending_conversation_path = Some(path);
-        app.set_conversation(app.conversation_generation(), Ok(Box::new(conversation)), agents);
+        app.set_conversation(app.conversation_generation(), Ok(Arc::new(conversation)), agents);
         app
     }
 
@@ -1232,7 +1282,7 @@ mod tests {
         let conversation = crate::domain::thread::build(&path).expect("a built conversation");
         let mut app = app(area);
         app.pending_conversation_path = Some(path);
-        app.set_conversation(app.conversation_generation(), Ok(Box::new(conversation)), Agents::default());
+        app.set_conversation(app.conversation_generation(), Ok(Arc::new(conversation)), Agents::default());
         let _ = dir.keep();
         app
     }
@@ -1255,7 +1305,7 @@ mod tests {
         let conversation = crate::domain::thread::build(&path).expect("a built conversation");
         let mut app = app(area);
         app.pending_conversation_path = Some(path);
-        app.set_conversation(app.conversation_generation(), Ok(Box::new(conversation)), Agents::default());
+        app.set_conversation(app.conversation_generation(), Ok(Arc::new(conversation)), Agents::default());
         let _ = dir.keep();
         app
     }
@@ -1401,7 +1451,7 @@ mod tests {
         let agents = crate::domain::subagent::discover(&path);
         let mut app = app(area);
         app.pending_conversation_path = Some(path);
-        app.set_conversation(app.conversation_generation(), Ok(Box::new(conversation)), agents);
+        app.set_conversation(app.conversation_generation(), Ok(Arc::new(conversation)), agents);
         app.apply(Action::ToggleFocusMode);
         app.reflow();
         app
@@ -1645,7 +1695,7 @@ mod tests {
 
         let conversation = crate::domain::thread::build(&path).expect("a built conversation");
         app.pending_conversation_path = Some(path);
-        app.set_conversation(app.conversation_generation(), Ok(Box::new(conversation)), Agents::default());
+        app.set_conversation(app.conversation_generation(), Ok(Arc::new(conversation)), Agents::default());
         assert!(call_lines(&app).iter().all(|text| text.contains('▸')), "expansion is per session, not global");
     }
 
@@ -1926,7 +1976,7 @@ mod tests {
 
     fn loaded(app: &mut App, text: &str) {
         let generation = app.conversation_generation();
-        app.set_conversation(generation, Ok(Box::new(conversation(text))), Agents::default());
+        app.set_conversation(generation, Ok(Arc::new(conversation(text))), Agents::default());
     }
 
     #[test]
@@ -1970,7 +2020,7 @@ mod tests {
         app.apply(Action::Focus { forward: true });
         app.apply(Action::Move(Motion::Line(1)));
 
-        app.set_conversation(stale, Ok(Box::new(conversation("stale"))), Agents::default());
+        app.set_conversation(stale, Ok(Arc::new(conversation("stale"))), Agents::default());
         assert!(matches!(app.conversation(), Loadable::Loading), "the stale result must not land");
     }
 
@@ -2000,6 +2050,22 @@ mod tests {
         let (path, _) = app.take_conversation_load(elapsed()).expect("the last stop loads");
         assert!(path.ends_with("s3.jsonl"), "{path:?}");
         assert!(app.take_conversation_load(elapsed()).is_none(), "the stops passed through queued nothing");
+    }
+
+    #[test]
+    fn holding_a_motion_key_through_thirty_stops_still_arms_only_the_last_load() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("a")]));
+        app.set_sessions(app.generation(), (0..31).map(|index| session(&format!("s{index}"))).collect());
+        app.apply(Action::Focus { forward: true });
+
+        for _ in 0..30 {
+            app.apply(Action::Move(Motion::Line(1)));
+        }
+
+        let (path, _) = app.take_conversation_load(elapsed()).expect("thirty stops still arm exactly one load");
+        assert!(path.ends_with("s30.jsonl"), "{path:?}");
+        assert!(app.take_conversation_load(elapsed()).is_none(), "one arming is one load, however many stops preceded it");
     }
 
     #[test]
@@ -2103,5 +2169,54 @@ mod tests {
         let mut app = app(Size::new(120, 30));
         app.apply(Action::Resize(Size::new(80, 24)));
         assert_eq!(app.area(), Size::new(80, 24));
+    }
+
+    #[test]
+    fn no_scan_is_requested_without_a_cache_root() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("a")]));
+        assert!(app.take_scan().is_none(), "there is nowhere to build the corpus without a cache root");
+    }
+
+    #[test]
+    fn no_scan_is_requested_with_no_cache() {
+        let mut app = App::new(
+            ctx(),
+            &Options {
+                claude_dir: PathBuf::from("/tmp"),
+                cache_root: Some(PathBuf::from("/tmp/cache")),
+                no_cache: true,
+                ..Options::default()
+            },
+            Size::new(120, 30),
+        );
+        app.set_projects(app.generation(), Ok(vec![project("a")]));
+        assert!(app.take_scan().is_none(), "--no-cache must skip the pool entirely");
+    }
+
+    #[test]
+    fn a_scan_is_requested_once_the_projects_load_and_only_once() {
+        let mut app = App::new(
+            ctx(),
+            &Options { claude_dir: PathBuf::from("/tmp"), cache_root: Some(PathBuf::from("/tmp/cache")), ..Options::default() },
+            Size::new(120, 30),
+        );
+        app.set_projects(app.generation(), Ok(vec![project("a"), project("b")]));
+
+        let (claude_dir, cache_root, selected, _cancel) = app.take_scan().expect("a scan is requested");
+        assert_eq!(claude_dir, PathBuf::from("/tmp"));
+        assert_eq!(cache_root, PathBuf::from("/tmp/cache"));
+        assert_eq!(selected.as_deref(), Some("a"), "the selected project leads the scan queue");
+        assert!(app.take_scan().is_none(), "one projects load arms exactly one scan");
+    }
+
+    #[test]
+    fn scan_progress_reports_until_finish_clears_it() {
+        let mut app = app(Size::new(120, 30));
+        assert!(app.scan_status().is_none());
+        app.set_scan_progress(3, 10);
+        assert_eq!(app.scan_status(), Some((3, 10)));
+        app.scan_finished();
+        assert!(app.scan_status().is_none());
     }
 }

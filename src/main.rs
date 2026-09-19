@@ -39,6 +39,8 @@ fn main() -> Result<()> {
             session: cli.session,
             mouse: !cli.no_mouse,
             theme: loaded.theme,
+            cache_root: paths::cache_dir(),
+            no_cache: cli.no_cache,
         };
         return ui::run(Ctx { now: Timestamp::now() }, &options);
     }

@@ -318,7 +318,8 @@ fn statusbar(area: Rect, buf: &mut Buffer, app: &App) {
     let area = padded(area);
     if let Some(status) = app.subagent_status() {
         row(area, buf, area.x, &status, app.theme().style(Element::Status));
-        unreadable(area, buf, app, status.width());
+        let used = status.width().saturating_add(unreadable(area, buf, app, status.width()));
+        indexing(area, buf, app, used);
         return;
     }
     let Some(session) = app.selected_session() else { return };
@@ -327,22 +328,32 @@ fn statusbar(area: Rect, buf: &mut Buffer, app: &App) {
     let age = session.last_activity.map_or_else(|| "-".to_owned(), |at| age::relative(app.ctx.now, at));
     let text = format!("{} · {} {plural} · {branch} · {age}", session.id, session.messages);
     row(area, buf, area.x, &text, app.theme().style(Element::Status));
-    unreadable(area, buf, app, text.width());
+    let used = text.width().saturating_add(unreadable(area, buf, app, text.width()));
+    indexing(area, buf, app, used);
 }
 
-fn unreadable(area: Rect, buf: &mut Buffer, app: &App, used: usize) {
+fn unreadable(area: Rect, buf: &mut Buffer, app: &App, used: usize) -> usize {
     let count = app.unreadable();
     if count == 0 {
-        return;
+        return 0;
     }
     let text = format!("{SEPARATOR}{count} unreadable");
     let x = area.x.saturating_add(u16::try_from(used).unwrap_or(area.width));
     row(area, buf, x, &text, app.theme().style(Element::StatusNotice));
+    text.width()
+}
+
+fn indexing(area: Rect, buf: &mut Buffer, app: &App, used: usize) {
+    let Some((done, total)) = app.scan_status() else { return };
+    let text = format!("{SEPARATOR}indexing {done}/{total}");
+    let x = area.x.saturating_add(u16::try_from(used).unwrap_or(area.width));
+    row(area, buf, x, &text, app.theme().style(Element::Hint));
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
+    use std::sync::Arc;
     use std::time::SystemTime;
 
     use ratatui::Terminal;
@@ -522,6 +533,31 @@ mod tests {
         assert!(!status.contains("unreadable"), "{status}");
     }
 
+    #[test]
+    fn a_scan_in_progress_shows_an_indexing_segment_at_the_end_of_the_status_line() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("a", true)]));
+        let generation = app.generation();
+        app.set_sessions(generation, vec![session("s1", "a session")]);
+        app.set_scan_progress(3, 10);
+        let buffer = frame(&app, Size::new(120, 24));
+        let status = text_row(&buffer, 23);
+        assert!(status.ends_with("· indexing 3/10"), "{status}");
+    }
+
+    #[test]
+    fn a_finished_scan_says_nothing_about_indexing() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("a", true)]));
+        let generation = app.generation();
+        app.set_sessions(generation, vec![session("s1", "a session")]);
+        app.set_scan_progress(10, 10);
+        app.scan_finished();
+        let buffer = frame(&app, Size::new(120, 24));
+        let status = text_row(&buffer, 23);
+        assert!(!status.contains("indexing"), "{status}");
+    }
+
     fn screen(buffer: &Buffer) -> String {
         (0..buffer.area.height).map(|y| text_row(buffer, y)).collect::<Vec<String>>().join("\n")
     }
@@ -607,7 +643,7 @@ mod tests {
         fs::write(&path, format!("{user}\n{assistant}\n")).expect("a written transcript");
         let conversation = crate::domain::thread::build(&path).expect("a built conversation");
         let generation = app.conversation_generation();
-        app.set_conversation(generation, Ok(Box::new(conversation)), crate::domain::subagent::Agents::default());
+        app.set_conversation(generation, Ok(Arc::new(conversation)), crate::domain::subagent::Agents::default());
         app.reflow();
     }
 
@@ -624,7 +660,7 @@ mod tests {
         fs::write(&path, line + "\n").expect("a written transcript");
         let conversation = crate::domain::thread::build(&path).expect("a built conversation");
         let generation = app.conversation_generation();
-        app.set_conversation(generation, Ok(Box::new(conversation)), crate::domain::subagent::Agents::default());
+        app.set_conversation(generation, Ok(Arc::new(conversation)), crate::domain::subagent::Agents::default());
         app.reflow();
     }
 

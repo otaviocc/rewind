@@ -183,6 +183,54 @@ fn forest_tally_matches_thread_builds_root_and_fork_count_on_the_fragmentation_f
     assert!(expected_branches > 0, "sanity: this fixture is documented to contain a fork");
 }
 
+#[test]
+fn assembling_the_build_from_its_pieces_matches_the_serial_rebuild_byte_for_byte() {
+    use rewind::domain::cache::build;
+    use rewind::domain::project;
+
+    let tree = fixture_tree();
+    let serial_cache = tempfile::TempDir::new().expect("a temporary cache directory");
+    let serial_report = store::rebuild(&tree.claude_dir(), serial_cache.path());
+    assert!(serial_report.failures.is_empty(), "{:?}", serial_report.failures);
+
+    let assembled_cache = tempfile::TempDir::new().expect("a temporary cache directory");
+    let plan = store::prepare(&tree.claude_dir(), assembled_cache.path()).expect("a preparable cache root");
+    let projects = project::discover(&tree.claude_dir()).expect("discoverable fixture projects");
+    let mut outcomes: Vec<store::Outcome> =
+        projects.iter().map(|project| store::build_project(&plan, project, &mut build::Control::inert())).collect();
+    if let Some(history) = store::build_history(&plan, &mut build::Control::inert()) {
+        outcomes.push(history);
+    }
+    let assembled_report = store::finish(&plan, projects.len(), outcomes, serial_report.wall);
+    assert!(assembled_report.failures.is_empty(), "{:?}", assembled_report.failures);
+    assert_eq!(assembled_report.projects_indexed, serial_report.projects_indexed);
+
+    let serial_version_dir = version_dir(serial_cache.path());
+    let assembled_version_dir = version_dir(assembled_cache.path());
+    let mut names: Vec<String> = fs::read_dir(&serial_version_dir)
+        .expect("a readable serial version directory")
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| Path::new(name).extension().is_some_and(|extension| extension.eq_ignore_ascii_case("shard")))
+        .collect();
+    names.sort();
+    assert!(!names.is_empty(), "the fixture tree must produce at least one shard to compare");
+
+    for name in names {
+        let serial_bytes = fs::read(serial_version_dir.join(&name)).expect("a readable serial shard");
+        let assembled_bytes = fs::read(assembled_version_dir.join(&name)).expect("a readable assembled shard");
+        let serial_shard = Shard::parse(&serial_bytes).expect("a well-formed serial shard");
+        let assembled_shard = Shard::parse(&assembled_bytes).expect("a well-formed assembled shard");
+
+        assert_eq!(serial_shard.files(), assembled_shard.files(), "{name}: file stamps must match");
+        assert_eq!(serial_shard.records().len(), assembled_shard.records().len(), "{name}: record counts must match");
+        let serial_texts: Vec<&[u8]> = serial_shard.records().iter().filter_map(|record| serial_shard.text(record)).collect();
+        let assembled_texts: Vec<&[u8]> =
+            assembled_shard.records().iter().filter_map(|record| assembled_shard.text(record)).collect();
+        assert_eq!(serial_texts, assembled_texts, "{name}: extracted text must be identical between the two builds");
+    }
+}
+
 fn fork_points(conversation: &Conversation) -> usize {
     let mut count: usize = 0;
     let mut stack: Vec<NodeId> = conversation.roots().to_vec();

@@ -8,15 +8,20 @@ use jiff::Timestamp;
 use thiserror::Error;
 
 use crate::domain::block::{Block, Content, Usage};
+use crate::domain::cancel::Cancel;
 use crate::domain::diagnostics::{Defect, Diagnostics};
 use crate::domain::latch::{CostStateLatch, ForkContextRefLatch, Latch};
 use crate::domain::lines::Lines;
 use crate::domain::record::{self, AssistantRecord, AttachmentRecord, Envelope, ParseError, Record, SystemRecord, UserRecord};
 
+const CANCEL_CHECK_MASK: u64 = 0xFF;
+
 #[derive(Debug, Error)]
 pub enum ThreadError {
     #[error("cannot read {0}")]
     Unreadable(PathBuf),
+    #[error("cancelled")]
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -235,6 +240,10 @@ struct Provisional {
 }
 
 pub fn build(path: &Path) -> Result<Conversation, ThreadError> {
+    build_with(path, &Cancel::never())
+}
+
+pub fn build_with(path: &Path, cancel: &Cancel) -> Result<Conversation, ThreadError> {
     let mut lines = Lines::open(path).map_err(|_| ThreadError::Unreadable(path.to_path_buf()))?;
     let mut diagnostics = Diagnostics::new(path);
     let mut nodes: Vec<Node> = Vec::new();
@@ -250,6 +259,9 @@ pub fn build(path: &Path) -> Result<Conversation, ThreadError> {
     while let Some(line) = lines.next_line().map_err(|_| ThreadError::Unreadable(path.to_path_buf()))? {
         let line = line.to_vec();
         line_number = line_number.saturating_add(1);
+        if line_number & CANCEL_CHECK_MASK == 0 && cancel.cancelled() {
+            return Err(ThreadError::Cancelled);
+        }
         line_offsets.push(lines.complete_offset());
         let parsed = record::parse(&line);
         if let Ok(record) = &parsed {
@@ -971,5 +983,37 @@ mod tests {
         let (_dir, path) = write(&borrowed);
         let conversation = build(&path).expect("a conversation");
         assert_eq!(conversation.thread().len(), 4000);
+    }
+
+    #[test]
+    fn a_cancelled_token_stops_a_build_partway_through() {
+        let mut lines: Vec<String> = vec![
+            r#"{"parentUuid":null,"isSidechain":false,"message":{"role":"user","content":"hi"},"type":"user","origin":{"kind":"human"},"uuid":"n0","timestamp":"2026-01-01T00:00:00Z","sessionId":"s1"}"#.to_owned(),
+        ];
+        for index in 1..4000u32 {
+            lines.push(format!(
+                r#"{{"parentUuid":"n{prev}","isSidechain":false,"message":{{"role":"user","content":"x"}},"type":"user","origin":{{"kind":"human"}},"uuid":"n{index}","timestamp":"2026-01-01T00:00:00Z","sessionId":"s1"}}"#,
+                prev = index.saturating_sub(1)
+            ));
+        }
+        let borrowed: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let (_dir, path) = write(&borrowed);
+
+        let gate = crate::domain::cancel::Gate::default();
+        let token = gate.token();
+        gate.bump();
+
+        let result = build_with(&path, &token);
+        assert!(matches!(result, Err(ThreadError::Cancelled)));
+    }
+
+    #[test]
+    fn a_live_token_does_not_interfere_with_a_normal_build() {
+        let (_dir, path) = write(&[
+            r#"{"parentUuid":null,"isSidechain":false,"message":{"role":"user","content":"hi"},"type":"user","origin":{"kind":"human"},"uuid":"u1","timestamp":"2026-01-01T00:00:00Z","sessionId":"s1"}"#,
+        ]);
+        let gate = crate::domain::cancel::Gate::default();
+        let conversation = build_with(&path, &gate.token()).expect("a conversation");
+        assert_eq!(conversation.roots().len(), 1);
     }
 }

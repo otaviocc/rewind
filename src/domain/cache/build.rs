@@ -12,10 +12,34 @@ use std::time::UNIX_EPOCH;
 
 use crate::domain::cache::fnv;
 use crate::domain::cache::shard::{Builder, Kind, Shard};
+use crate::domain::cancel::Cancel;
 use crate::domain::lines::Lines;
 use crate::domain::text::Extracted;
 
 const HEAD_SIZE: usize = 4 * 1024;
+
+pub struct Control<'a> {
+    pub cancel: Cancel,
+    tick: Option<&'a mut dyn FnMut()>,
+}
+
+impl Control<'static> {
+    pub fn inert() -> Self {
+        Self { cancel: Cancel::never(), tick: None }
+    }
+}
+
+impl<'a> Control<'a> {
+    pub fn new(cancel: Cancel, tick: &'a mut dyn FnMut()) -> Self {
+        Self { cancel, tick: Some(tick) }
+    }
+
+    fn tick(&mut self) {
+        if let Some(tick) = &mut self.tick {
+            tick();
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileAction {
@@ -34,6 +58,7 @@ pub struct FileReport {
 pub struct Output {
     pub shard_bytes: Vec<u8>,
     pub reports: Vec<FileReport>,
+    pub cancelled: bool,
 }
 
 pub fn build(
@@ -43,10 +68,27 @@ pub fn build(
     extract: fn(&[u8]) -> Vec<Extracted>,
     built_at_ms: i64,
 ) -> Output {
+    build_with(files, previous, kind, extract, built_at_ms, &mut Control::inert())
+}
+
+pub fn build_with(
+    files: &[PathBuf],
+    previous: Option<&Shard<'_>>,
+    kind: Kind,
+    extract: fn(&[u8]) -> Vec<Extracted>,
+    built_at_ms: i64,
+    control: &mut Control<'_>,
+) -> Output {
     let mut builder = Builder::new();
     let mut reports = Vec::with_capacity(files.len());
+    let mut cancelled = false;
 
     for path in files {
+        if control.cancel.cancelled() {
+            cancelled = true;
+            break;
+        }
+
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else { continue };
         let Ok(metadata) = fs::metadata(path) else { continue };
         let len = metadata.len();
@@ -59,9 +101,10 @@ pub fn build(
 
         let action = process_file(&mut builder, path, name, len, mtime_ms, previous, old.as_ref(), kind, extract);
         reports.push(FileReport { name: name.to_owned(), action });
+        control.tick();
     }
 
-    Output { shard_bytes: builder.finish(built_at_ms), reports }
+    Output { shard_bytes: builder.finish(built_at_ms), reports, cancelled }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -221,7 +264,7 @@ fn ends_in_newline(path: &Path, at: u64) -> Option<bool> {
     Some(byte[0] == b'\n')
 }
 
-fn mtime_ms_of(metadata: &fs::Metadata) -> i64 {
+pub fn mtime_ms_of(metadata: &fs::Metadata) -> i64 {
     metadata
         .modified()
         .ok()
@@ -425,5 +468,40 @@ mod tests {
             new_record.byte_off >= old_len,
             "the appended record's byte offset must land inside the new tail, not the old prefix"
         );
+    }
+
+    #[test]
+    fn a_cancelled_build_stops_before_the_next_file_and_says_so() {
+        let dir = TempDir::new().expect("a temporary directory");
+        let first_path = write_session(dir.path(), "s1.jsonl", &[HUMAN]);
+        let second_path = write_session(dir.path(), "s2.jsonl", &[HUMAN_2]);
+
+        let gate = crate::domain::cancel::Gate::default();
+        let token = gate.token();
+        gate.bump();
+        let mut noop = || {};
+        let mut control = Control::new(token, &mut noop);
+
+        let output = build_with(&[first_path, second_path], None, Kind::Transcript, text::extract, 0, &mut control);
+
+        assert!(output.cancelled);
+        assert_eq!(output.reports, []);
+    }
+
+    #[test]
+    fn ticking_counts_one_file_at_a_time() {
+        let dir = TempDir::new().expect("a temporary directory");
+        let first_path = write_session(dir.path(), "s1.jsonl", &[HUMAN]);
+        let second_path = write_session(dir.path(), "s2.jsonl", &[HUMAN_2]);
+
+        let gate = crate::domain::cancel::Gate::default();
+        let mut ticks: u32 = 0;
+        let mut tick = || ticks = ticks.saturating_add(1);
+        let mut control = Control::new(gate.token(), &mut tick);
+
+        let output = build_with(&[first_path, second_path], None, Kind::Transcript, text::extract, 0, &mut control);
+
+        assert!(!output.cancelled);
+        assert_eq!(ticks, 2);
     }
 }

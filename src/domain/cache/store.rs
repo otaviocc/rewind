@@ -11,6 +11,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::domain::cache::shard::{self, Kind, Shard};
 use crate::domain::cache::{atomic, build, meta};
 use crate::domain::lines::Lines;
+use crate::domain::project::Project;
 use crate::domain::scan;
 use crate::domain::session;
 use crate::domain::{project, text};
@@ -30,101 +31,195 @@ pub struct Report {
     pub cold_rebuilds: Vec<String>,
 }
 
-pub fn rebuild(claude_dir: &Path, cache_root: &Path) -> Report {
-    let started = Instant::now();
-    let version_dir = cache_root.join(format!("v{}", shard::CACHE_VERSION));
-    let mut failures = Vec::new();
-    let mut cold_rebuilds = Vec::new();
+#[derive(Debug, Clone)]
+pub struct Plan {
+    claude_dir: PathBuf,
+    version_dir: PathBuf,
+    built_at_ms: i64,
+}
 
-    if fs::create_dir_all(&version_dir).is_err() {
-        failures.push(("<cache>".to_owned(), format!("cannot create {}", version_dir.display())));
-        return Report {
-            projects_total: 0,
-            projects_indexed: 0,
-            shard_bytes: 0,
-            wall: started.elapsed(),
-            failures,
-            cold_rebuilds,
-        };
+impl Plan {
+    pub fn version_dir(&self) -> &Path {
+        &self.version_dir
     }
+}
 
+#[derive(Debug)]
+pub enum Outcome {
+    Project {
+        directory: String,
+        shard_bytes: u64,
+        cold_rebuild: bool,
+        cancelled: bool,
+        error: Option<String>,
+        sessions: Vec<meta::MetaSession>,
+    },
+    History {
+        shard_bytes: u64,
+        cold_rebuild: bool,
+        cancelled: bool,
+        error: Option<String>,
+    },
+}
+
+struct ShardResult {
+    shard_bytes: u64,
+    cold_rebuild: bool,
+    cancelled: bool,
+    error: Option<String>,
+}
+
+pub fn prepare(claude_dir: &Path, cache_root: &Path) -> Result<Plan, String> {
+    let version_dir = cache_root.join(format!("v{}", shard::CACHE_VERSION));
+    fs::create_dir_all(&version_dir).map_err(|_| format!("cannot create {}", version_dir.display()))?;
     prune_other_versions(cache_root, &version_dir);
     atomic::clean_stray_tmp_files(&version_dir);
+    Ok(Plan { claude_dir: claude_dir.to_path_buf(), version_dir, built_at_ms: now_ms() })
+}
 
-    let built_at_ms = now_ms();
+pub fn build_project(plan: &Plan, project: &Project, control: &mut build::Control<'_>) -> Outcome {
+    let project_dir = plan.claude_dir.join("projects").join(&project.directory);
+    let files = project::transcripts(&project_dir);
+    let shard_path = plan.version_dir.join(&project.directory).with_extension(SHARD_EXTENSION);
+
+    let result = build_shard(&files, &shard_path, Kind::Transcript, text::extract, plan.built_at_ms, control);
+    let sessions =
+        if result.cancelled { Vec::new() } else { session::discover(&project_dir).into_iter().map(session_summary).collect() };
+
+    Outcome::Project {
+        directory: project.directory.clone(),
+        shard_bytes: result.shard_bytes,
+        cold_rebuild: result.cold_rebuild,
+        cancelled: result.cancelled,
+        error: result.error,
+        sessions,
+    }
+}
+
+pub fn build_history(plan: &Plan, control: &mut build::Control<'_>) -> Option<Outcome> {
+    let history_path = plan.claude_dir.join(HISTORY_FILE_NAME);
+    if !history_path.is_file() {
+        return None;
+    }
+    let shard_path = plan.version_dir.join(HISTORY_SHARD_NAME).with_extension(SHARD_EXTENSION);
+    let result = build_shard(&[history_path], &shard_path, Kind::History, text::extract_history, plan.built_at_ms, control);
+    Some(Outcome::History {
+        shard_bytes: result.shard_bytes,
+        cold_rebuild: result.cold_rebuild,
+        cancelled: result.cancelled,
+        error: result.error,
+    })
+}
+
+pub fn finish(plan: &Plan, projects_total: usize, outcomes: Vec<Outcome>, wall: Duration) -> Report {
+    let mut failures = Vec::new();
+    let mut cold_rebuilds = Vec::new();
     let mut meta_projects = Vec::new();
     let mut shard_bytes_total: u64 = 0;
-
-    let projects = project::discover(claude_dir).unwrap_or_else(|_| {
-        failures.push(("<projects>".to_owned(), "cannot read the projects directory".to_owned()));
-        Vec::new()
-    });
-    let projects_total = projects.len();
     let mut projects_indexed = 0_usize;
 
-    for project in &projects {
-        let project_dir = claude_dir.join("projects").join(&project.directory);
-        let files = project::transcripts(&project_dir);
-        let shard_path = version_dir.join(&project.directory).with_extension(SHARD_EXTENSION);
-
-        match rebuild_shard(&files, &shard_path, Kind::Transcript, text::extract, built_at_ms) {
-            Ok((bytes, was_corrupt)) => {
-                shard_bytes_total = shard_bytes_total.saturating_add(bytes);
-                projects_indexed = projects_indexed.saturating_add(1);
-                if was_corrupt {
-                    cold_rebuilds.push(project.directory.clone());
+    for outcome in outcomes {
+        match outcome {
+            Outcome::Project { directory, shard_bytes, cold_rebuild, cancelled, error, sessions } => {
+                if let Some(error) = error {
+                    failures.push((directory, error));
+                    continue;
                 }
+                if cancelled {
+                    continue;
+                }
+                shard_bytes_total = shard_bytes_total.saturating_add(shard_bytes);
+                projects_indexed = projects_indexed.saturating_add(1);
+                if cold_rebuild {
+                    cold_rebuilds.push(directory.clone());
+                }
+                meta_projects.push(meta::MetaProject { directory, sessions });
             }
-            Err(message) => failures.push((project.directory.clone(), message)),
-        }
-
-        let sessions = session::discover(&project_dir).into_iter().map(session_summary).collect();
-        meta_projects.push(meta::MetaProject { directory: project.directory.clone(), sessions });
-    }
-
-    let history_path = claude_dir.join(HISTORY_FILE_NAME);
-    if history_path.is_file() {
-        let shard_path = version_dir.join(HISTORY_SHARD_NAME).with_extension(SHARD_EXTENSION);
-        match rebuild_shard(&[history_path], &shard_path, Kind::History, text::extract_history, built_at_ms) {
-            Ok((bytes, was_corrupt)) => {
-                shard_bytes_total = shard_bytes_total.saturating_add(bytes);
-                if was_corrupt {
+            Outcome::History { shard_bytes, cold_rebuild, cancelled, error } => {
+                if let Some(error) = error {
+                    failures.push((HISTORY_SHARD_NAME.to_owned(), error));
+                    continue;
+                }
+                if cancelled {
+                    continue;
+                }
+                shard_bytes_total = shard_bytes_total.saturating_add(shard_bytes);
+                if cold_rebuild {
                     cold_rebuilds.push(HISTORY_SHARD_NAME.to_owned());
                 }
             }
-            Err(message) => failures.push((HISTORY_SHARD_NAME.to_owned(), message)),
         }
     }
 
-    let built_seconds = built_at_ms.checked_div(1000).unwrap_or(0);
+    let built_seconds = plan.built_at_ms.checked_div(1000).unwrap_or(0);
     let meta = meta::Meta { cache_version: shard::CACHE_VERSION, built_at_s: built_seconds, projects: meta_projects };
-    if let Err(error) = meta::write(&version_dir.join(META_FILE_NAME), &meta) {
+    if let Err(error) = meta::write(&plan.version_dir.join(META_FILE_NAME), &meta) {
         failures.push((META_FILE_NAME.to_owned(), error.to_string()));
     }
 
-    Report { projects_total, projects_indexed, shard_bytes: shard_bytes_total, wall: started.elapsed(), failures, cold_rebuilds }
+    Report { projects_total, projects_indexed, shard_bytes: shard_bytes_total, wall, failures, cold_rebuilds }
+}
+
+pub fn rebuild(claude_dir: &Path, cache_root: &Path) -> Report {
+    let started = Instant::now();
+    let plan = match prepare(claude_dir, cache_root) {
+        Ok(plan) => plan,
+        Err(message) => {
+            return Report {
+                projects_total: 0,
+                projects_indexed: 0,
+                shard_bytes: 0,
+                wall: started.elapsed(),
+                failures: vec![("<cache>".to_owned(), message)],
+                cold_rebuilds: Vec::new(),
+            };
+        }
+    };
+
+    let mut leading_failures = Vec::new();
+    let projects = project::discover(claude_dir).unwrap_or_else(|_| {
+        leading_failures.push(("<projects>".to_owned(), "cannot read the projects directory".to_owned()));
+        Vec::new()
+    });
+    let projects_total = projects.len();
+
+    let mut outcomes: Vec<Outcome> =
+        projects.iter().map(|project| build_project(&plan, project, &mut build::Control::inert())).collect();
+    if let Some(history) = build_history(&plan, &mut build::Control::inert()) {
+        outcomes.push(history);
+    }
+
+    let mut report = finish(&plan, projects_total, outcomes, started.elapsed());
+    report.failures.splice(0..0, leading_failures);
+    report
 }
 
 pub fn purge(cache_root: &Path) {
     let _ = fs::remove_dir_all(cache_root);
 }
 
-fn rebuild_shard(
+fn build_shard(
     files: &[PathBuf],
     shard_path: &Path,
     kind: Kind,
     extract: fn(&[u8]) -> Vec<text::Extracted>,
     built_at_ms: i64,
-) -> Result<(u64, bool), String> {
+    control: &mut build::Control<'_>,
+) -> ShardResult {
     let previous_bytes = fs::read(shard_path).ok();
     let was_corrupt = previous_bytes.is_some();
     let previous = previous_bytes.as_deref().and_then(|bytes| Shard::parse(bytes).ok());
     let was_corrupt = was_corrupt && previous.is_none();
 
-    let output = build::build(files, previous.as_ref(), kind, extract, built_at_ms);
+    let output = build::build_with(files, previous.as_ref(), kind, extract, built_at_ms, control);
+    if output.cancelled {
+        return ShardResult { shard_bytes: 0, cold_rebuild: false, cancelled: true, error: None };
+    }
     let len = u64::try_from(output.shard_bytes.len()).unwrap_or(u64::MAX);
-    atomic::write(shard_path, &output.shard_bytes).map_err(|error| error.to_string())?;
-    Ok((len, was_corrupt))
+    match atomic::write(shard_path, &output.shard_bytes) {
+        Ok(()) => ShardResult { shard_bytes: len, cold_rebuild: was_corrupt, cancelled: false, error: None },
+        Err(error) => ShardResult { shard_bytes: 0, cold_rebuild: was_corrupt, cancelled: false, error: Some(error.to_string()) },
+    }
 }
 
 fn session_summary(session: session::Session) -> meta::MetaSession {
@@ -321,5 +416,60 @@ mod tests {
                 out.push((path, bytes));
             }
         }
+    }
+
+    #[test]
+    fn assembling_a_build_from_prepare_project_and_finish_matches_rebuild() {
+        let (_claude_guard, claude_dir) = one_project_store();
+        let cache = TempDir::new().expect("a temporary directory");
+
+        let plan = prepare(&claude_dir, cache.path()).expect("a preparable cache root");
+        let projects = project::discover(&claude_dir).expect("discoverable projects");
+        let outcomes: Vec<Outcome> =
+            projects.iter().map(|project| build_project(&plan, project, &mut build::Control::inert())).collect();
+        let report = finish(&plan, projects.len(), outcomes, Duration::from_millis(0));
+
+        assert_eq!(report.projects_total, 1);
+        assert_eq!(report.projects_indexed, 1);
+        assert!(report.failures.is_empty(), "{:?}", report.failures);
+        let version_dir = cache.path().join(format!("v{}", shard::CACHE_VERSION));
+        assert!(version_dir.join("-Users-fixture-holodeck.shard").is_file());
+        assert!(version_dir.join(META_FILE_NAME).is_file());
+    }
+
+    #[test]
+    fn a_cancelled_project_build_is_dropped_from_meta_and_not_counted_as_indexed() {
+        let (_claude_guard, claude_dir) = one_project_store();
+        let cache = TempDir::new().expect("a temporary directory");
+
+        let plan = prepare(&claude_dir, cache.path()).expect("a preparable cache root");
+        let projects = project::discover(&claude_dir).expect("discoverable projects");
+        let project = projects.first().expect("one project");
+
+        let gate = crate::domain::cancel::Gate::default();
+        let token = gate.token();
+        gate.bump();
+        let mut noop = || {};
+        let mut control = build::Control::new(token, &mut noop);
+
+        let outcome = build_project(&plan, project, &mut control);
+        assert!(matches!(&outcome, Outcome::Project { cancelled: true, sessions, .. } if sessions.is_empty()));
+
+        let report = finish(&plan, projects.len(), vec![outcome], Duration::from_millis(0));
+        assert_eq!(report.projects_indexed, 0);
+        assert!(report.failures.is_empty());
+
+        let version_dir = cache.path().join(format!("v{}", shard::CACHE_VERSION));
+        let meta = meta::read(&version_dir.join(META_FILE_NAME)).expect("a readable meta.json");
+        assert!(meta.projects.is_empty(), "a cancelled build must not claim the project was indexed");
+    }
+
+    #[test]
+    fn build_history_returns_none_when_there_is_no_history_file() {
+        let (_claude_guard, claude_dir) = one_project_store();
+        let cache = TempDir::new().expect("a temporary directory");
+        let plan = prepare(&claude_dir, cache.path()).expect("a preparable cache root");
+
+        assert!(build_history(&plan, &mut build::Control::inert()).is_none());
     }
 }

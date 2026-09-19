@@ -2,6 +2,7 @@
 
 pub mod block;
 pub mod cache;
+pub mod cancel;
 pub mod command;
 pub mod diagnostics;
 pub mod latch;
