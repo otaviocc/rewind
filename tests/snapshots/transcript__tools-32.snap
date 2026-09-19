@@ -11,24 +11,33 @@ expression: "rendered(TOOLS, 32)"
 ▎ then writing the new module,
 ▎ then the spec.
 ▎
-▎ ▸ Edit  /Users/fixture/Dev… ok
+▎ ▸ Edit                      ok
+▎   └ /Users/fixture/Developer/…
 ▎
-▎ ▸ Write  /Users/fixture/De… ok
+▎ ▸ Write                     ok
+▎   └ /Users/fixture/Developer/…
 ▎
-▎ ▸ WebFetch  https://holode… ok
+▎ ▸ WebFetch                  ok
+▎   └ https://holodeck.invalid/…
 ▎
 ▎ ▸ jeffries · beam_status    ok
+▎   └ {"deck":9,"verbose":true}
 ▎
-▎ ▸ Replicator  tea, earl gr… ok
+▎ ▸ Replicator                ok
+▎   └ tea, earl grey, hot
 ▎
-▎ ▸ Read  {"file_path": … failed
+▎ ▸ Read                  failed
+▎   └ {"file_path": "/Users/fix…
 ▎
-▎ ▸ Bash  rm -rf target   denied
+▎ ▸ Bash                  denied
+▎   └ rm -rf target
 ▎
-▎ ▸ Bash  cargo tes… interrupted
+▎ ▸ Bash             interrupted
+▎   └ cargo test -- --nocapture
 ▎
 ▎ Stopping there. One call was
 ▎ still in flight when the
 ▎ session ended.
 ▎
-▎ ▸ Bash  cargo build -… pending
+▎ ▸ Bash                 pending
+▎   └ cargo build --release

@@ -9,8 +9,8 @@ muted                 fg #586e75       bg -
 label                 fg -             bg -             bold
 human_gutter          fg #268bd2       bg -             bold
 assistant_gutter      fg #d33682       bg -             dim
-tool_name             fg -             bg -             bold
-tool_summary          fg -             bg -
+tool_name             fg #268bd2       bg -             bold
+tool_summary          fg #586e75       bg -
 tool_ok               fg #586e75       bg -
 tool_error            fg #dc322f       bg -
 thinking              fg #586e75       bg -

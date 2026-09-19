@@ -184,6 +184,7 @@ pub fn default_style(element: Element, palette: &Palette) -> Style {
         | Element::BranchMarker
         | Element::CompactDivider
         | Element::ToolOk
+        | Element::ToolSummary
         | Element::ProjectMissing
         | Element::CodeBlockLang
         | Element::QuoteGutter
@@ -193,16 +194,14 @@ pub fn default_style(element: Element, palette: &Palette) -> Style {
         | Element::Html
         | Element::Hint
         | Element::ColumnTitle => style.fg(palette.muted),
-        Element::Label
-        | Element::ToolName
-        | Element::Heading
-        | Element::Strong
-        | Element::TableHeader
-        | Element::HeaderTitle
-        | Element::Subagent => style.add_modifier(Modifier::BOLD),
-        Element::HumanGutter | Element::ColumnTitleActive => style.fg(palette.accent).add_modifier(Modifier::BOLD),
+        Element::Label | Element::Heading | Element::Strong | Element::TableHeader | Element::HeaderTitle | Element::Subagent => {
+            style.add_modifier(Modifier::BOLD)
+        }
+        Element::ToolName | Element::HumanGutter | Element::ColumnTitleActive => {
+            style.fg(palette.accent).add_modifier(Modifier::BOLD)
+        }
         Element::AssistantGutter => style.fg(palette.notice).add_modifier(Modifier::DIM),
-        Element::ToolSummary | Element::DiffContext | Element::Status | Element::CodeBlock => style,
+        Element::DiffContext | Element::Status | Element::CodeBlock => style,
         Element::ToolError | Element::StatusError | Element::DiffRemoved => style.fg(palette.error),
         Element::DiffAdded | Element::SessionLive => style.fg(palette.success),
         Element::Emphasis => style.add_modifier(Modifier::ITALIC),

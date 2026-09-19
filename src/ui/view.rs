@@ -250,14 +250,14 @@ fn conversation_rows(area: Rect, buf: &mut Buffer, app: &App, focused: bool) {
     let lines = app.lines();
     let top = app.pane(Column::Conversation).top;
     let last = lines.len().min(top.saturating_add(usize::from(area.height)));
-    let cursor = app.cursor_line();
+    let cursor = app.cursor_rows();
 
     for (row_index, index) in (top..last).enumerate() {
         let Some(line) = lines.get(index) else { continue };
         let y = area.y.saturating_add(u16::try_from(row_index).unwrap_or(u16::MAX));
         let row = Rect { y, height: 1, ..area };
         painted(row, buf, line);
-        band(row, buf, app, cursor == Some(index), focused);
+        band(row, buf, app, cursor.as_ref().is_some_and(|rows| rows.contains(&index)), focused);
     }
 }
 
@@ -750,6 +750,7 @@ mod tests {
         let buffer = frame(&app, Size::new(120, 24));
         let selection = app.theme().style(Element::Selection).bg.unwrap_or_default();
         assert_eq!(buffer[(x, y)].bg, selection, "the focused conversation cursor line");
+        assert_eq!(buffer[(x, y + 1)].bg, selection, "the band covers the digest row too");
 
         app.apply(Action::Focus { forward: false });
         let buffer = frame(&app, Size::new(120, 24));

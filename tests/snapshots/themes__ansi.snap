@@ -9,8 +9,8 @@ muted                 fg darkgray      bg -
 label                 fg -             bg -             bold
 human_gutter          fg cyan          bg -             bold
 assistant_gutter      fg magenta       bg -             dim
-tool_name             fg -             bg -             bold
-tool_summary          fg -             bg -
+tool_name             fg cyan          bg -             bold
+tool_summary          fg darkgray      bg -
 tool_ok               fg darkgray      bg -
 tool_error            fg red           bg -
 thinking              fg darkgray      bg -

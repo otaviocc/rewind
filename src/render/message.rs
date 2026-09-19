@@ -1,5 +1,5 @@
 //! One conversation becomes styled lines: a role rail, one header per run of replies, prose, and
-//! one dense line per tool call.
+//! a two-row head per tool call.
 
 use std::collections::HashSet;
 
@@ -27,7 +27,7 @@ const UNIT: usize = 1024;
 
 fn tool_styles(theme: &Theme) -> tool::Styles {
     tool::Styles {
-        glyph: theme.style(Element::Body),
+        body: theme.style(Element::Body),
         name: theme.style(Element::ToolName),
         digest: theme.style(Element::ToolSummary),
         muted: theme.style(Element::Muted),
@@ -69,6 +69,7 @@ struct Group {
 pub struct Anchor {
     pub id: Box<str>,
     pub line: usize,
+    pub head: usize,
     pub agent: Option<Box<str>>,
 }
 
@@ -207,7 +208,7 @@ fn marker(conversation: &Conversation, id: NodeId, on: Option<NodeId>, groups: &
     let Some(group) = groups.last_mut() else { return };
     let showing = on.and_then(|on| alternates.iter().position(|alternate| *alternate == on)).map_or(1, |at| at.saturating_add(1));
     let text = format!("{} alternate branches here{SEPARATOR}showing {showing}{SEPARATOR}[b] to switch", alternates.len());
-    group.anchors.push(Anchor { id: Box::from(node.uuid()), line: group.lines.len(), agent: None });
+    group.anchors.push(Anchor { id: Box::from(node.uuid()), line: group.lines.len(), head: 1, agent: None });
     group.lines.push(divider::line(&text, width, theme.style(Element::BranchMarker)));
 }
 
@@ -225,11 +226,11 @@ fn flush(conversation: &Conversation, ctx: &Ctx<'_>, pending: &mut Vec<NodeId>, 
         lines.extend(injection::each(conversation, &run, width, style));
     }
     if let Some(group) = groups.last_mut() {
-        group.anchors.push(Anchor { id: key, line: group.lines.len(), agent: None });
+        group.anchors.push(Anchor { id: key, line: group.lines.len(), head: 1, agent: None });
         group.lines.extend(lines);
         return;
     }
-    let anchors = vec![Anchor { id: key, line: 0, agent: None }];
+    let anchors = vec![Anchor { id: key, line: 0, head: 1, agent: None }];
     let spans = vec![Span { node: first, line: 0 }];
     groups.push(Group { rail: Rail::Seam, model: None, lines, anchors, spans });
 }
@@ -275,8 +276,9 @@ fn unreached(ctx: &Ctx<'_>, width: usize, reached: &HashSet<Box<str>>) -> Option
     let mut lines = tool::unreached_header(&agents, width, &styles);
     let mut anchors = Vec::new();
     for agent in agents {
-        anchors.push(Anchor { id: agent.id.clone(), line: lines.len(), agent: Some(agent.id.clone()) });
-        lines.push(tool::unreached_line(agent, width, &styles));
+        let rows = tool::unreached_line(agent, width, &styles);
+        anchors.push(Anchor { id: agent.id.clone(), line: lines.len(), head: rows.len(), agent: Some(agent.id.clone()) });
+        lines.extend(rows);
     }
     Some(Group { rail: Rail::Assistant, model: None, lines, anchors, spans: Vec::new() })
 }
@@ -345,8 +347,9 @@ fn blocks(
                     .filter(|agent| agent.enterable())
                     .map(|agent| agent.id.clone())
                     .or_else(|| conversation.inline_agent(id).map(|_| Box::from(id.as_str())));
-                anchors.push(Anchor { id: Box::from(id.as_str()), line: lines.len(), agent });
-                lines.extend(tool::call(conversation, ctx, id, name, input, &styles));
+                let call = tool::call(conversation, ctx, id, name, input, &styles);
+                anchors.push(Anchor { id: Box::from(id.as_str()), line: lines.len(), head: call.head, agent });
+                lines.extend(call.lines);
             }
             Block::Image { source } => lines.push(one(&image_summary(source), ctx.theme.style(Element::Muted), ctx.width)),
             Block::ToolResult { .. } | Block::Other { .. } => {}
@@ -712,12 +715,14 @@ mod tests {
     }
 
     #[test]
-    fn a_tool_call_is_one_line_of_its_name_its_digest_and_its_outcome() {
+    fn a_tool_call_is_its_name_on_one_row_and_its_digest_dimmed_on_the_next() {
         let block = r#"[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls -la"}}]"#;
         let result = r#"{"type":"user","uuid":"u2","parentUuid":"a1","sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:03Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"total 0","is_error":false}]},"toolUseResult":{"stdout":"total 0\n","interrupted":false}}"#;
         let lines = rendered(&[HUMAN, &assistant("a1", "u1", block), result]);
-        let call = lines.iter().find(|line| line.contains("▸ Bash")).expect("a tool call line");
-        assert_eq!(call, "▎ ▸ Bash  ls -la                                          ok");
+        let at = lines.iter().position(|line| line.contains("▸ Bash")).expect("a tool call line");
+        let name = lines.get(at).expect("a name row");
+        assert!(name.starts_with("▎ ▸ Bash") && name.ends_with("ok"), "{name:?}");
+        assert_eq!(lines.get(at.saturating_add(1)).map(String::as_str), Some("▎   └ ls -la"));
     }
 
     #[test]

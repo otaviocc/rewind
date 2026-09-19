@@ -1,5 +1,5 @@
-//! A tool call as one dense line: a glyph, the tool's name, a digest of what it was asked to do,
-//! and how it went.
+//! A tool call as a two-row head: a name line with a glyph and the outcome, and a dimmed digest
+//! of what it was asked to do indented beneath it.
 
 use std::collections::HashSet;
 use std::hash::BuildHasher;
@@ -17,7 +17,6 @@ use crate::render::{Ctx, Overflow};
 const COLLAPSED: &str = "▸ ";
 const EXPANDED: &str = "▾ ";
 const SEPARATOR: &str = " · ";
-const HEAD_GAP: &str = "  ";
 const TAIL_GAP: usize = 1;
 const LEAST_DIGEST: usize = 8;
 const ENTER: &str = "⏎";
@@ -29,9 +28,10 @@ const GUTTER_BLANK: &str = "  ┃";
 const FOLD: usize = 20;
 const KEY_COLUMN: usize = 14;
 const DIFF_TOOLS: [&str; 2] = ["Edit", "Write"];
+const DIGEST_INDENT: &str = "  └ ";
 
 pub struct Styles {
-    pub glyph: Style,
+    pub body: Style,
     pub name: Style,
     pub digest: Style,
     pub muted: Style,
@@ -52,14 +52,12 @@ pub fn spawned<'a>(conversation: &Conversation, ctx: &'a Ctx<'_>, id: &str, name
     ctx.agents.spawned_by(id, agent_id)
 }
 
-pub fn call(
-    conversation: &Conversation,
-    ctx: &Ctx<'_>,
-    id: &str,
-    name: &str,
-    input: &Value,
-    styles: &Styles,
-) -> Vec<RenderedLine> {
+pub struct Call {
+    pub lines: Vec<RenderedLine>,
+    pub head: usize,
+}
+
+pub fn call(conversation: &Conversation, ctx: &Ctx<'_>, id: &str, name: &str, input: &Value, styles: &Styles) -> Call {
     let outcome = conversation.result_of(id).and_then(|node| Outcome::of(node, id));
     let detail = outcome.and_then(|outcome| outcome.detail);
     let status = tool::status(outcome.as_ref());
@@ -75,11 +73,12 @@ pub fn call(
     let glyph = if expanded { EXPANDED } else { COLLAPSED };
     let inline = AGENT_TOOLS.contains(&name) && conversation.inline_agent(id).is_some();
     let mark = (agent.is_some_and(Agent::enterable) || inline).then_some(ENTER);
-    let mut lines = vec![line(glyph, name, &digest, mark, status, ctx.width, styles)];
+    let mut lines = head(glyph, name, &digest, mark, status, ctx.width, styles);
+    let head = lines.len();
     if expanded {
         lines.extend(body(ctx, id, name, input, outcome.as_ref(), styles));
     }
-    lines
+    Call { lines, head }
 }
 
 pub fn unreached<'a, S: BuildHasher>(ctx: &'a Ctx<'_>, reached: &HashSet<Box<str>, S>) -> Vec<&'a Agent> {
@@ -96,10 +95,10 @@ pub fn unreached_header(agents: &[&Agent], width: usize, styles: &Styles) -> Vec
     ]
 }
 
-pub fn unreached_line(agent: &Agent, width: usize, styles: &Styles) -> RenderedLine {
+pub fn unreached_line(agent: &Agent, width: usize, styles: &Styles) -> Vec<RenderedLine> {
     let kind = Some(&*agent.kind).filter(|kind| *kind != agent.label());
     let digest = joined(kind, agent.description.as_deref());
-    line(COLLAPSED, agent.label(), &digest, Some(ENTER), Status::Ok, width, styles)
+    head(COLLAPSED, agent.label(), &digest, Some(ENTER), Status::Ok, width, styles)
 }
 
 fn body(ctx: &Ctx<'_>, id: &str, name: &str, input: &Value, outcome: Option<&Outcome<'_>>, styles: &Styles) -> Vec<RenderedLine> {
@@ -149,7 +148,7 @@ fn field(key: &str, value: &Value, width: usize, styles: &Styles) -> RenderedLin
     let pad = column.saturating_sub(key.width()).saturating_add(1);
     line.push(StyledSpan::new(format!("{key}{}", " ".repeat(pad)), styles.muted));
     let room = width.saturating_sub(column).saturating_sub(1);
-    line.push(StyledSpan::new(truncate(&flattened(value), room), styles.digest));
+    line.push(StyledSpan::new(truncate(&flattened(value), room), styles.body));
     line
 }
 
@@ -174,7 +173,7 @@ fn output(
     if let Some(found) = outcome.detail.and_then(tool::overflow) {
         match ctx.outputs.get(id) {
             Some(Overflow::Lines(lines)) => {
-                return folded(lines.iter().map(|text| cut(text, width, styles.digest)).collect(), width, styles);
+                return folded(lines.iter().map(|text| cut(text, width, styles.body)).collect(), width, styles);
             }
             Some(Overflow::Pending) | None => {
                 return vec![cut(&format!("reading {} …", found.name), width, styles.muted)];
@@ -184,7 +183,7 @@ fn output(
     }
     let body = outcome.body();
     let body = tool::without_preamble(&body);
-    let style = if outcome.status().is_error() { styles.error } else { styles.digest };
+    let style = if outcome.status().is_error() { styles.error } else { styles.body };
     folded(normalise(body).lines().map(|text| cut(text, width, style)).collect(), width, styles)
 }
 
@@ -229,15 +228,23 @@ fn joined(primary: Option<&str>, secondary: Option<&str>) -> String {
     }
 }
 
-fn line(
+fn head(
     glyph: &str,
     name: &str,
-    detail: &str,
+    digest: &str,
     mark: Option<&str>,
     status: Status,
     width: usize,
     styles: &Styles,
-) -> RenderedLine {
+) -> Vec<RenderedLine> {
+    let mut lines = vec![name_line(glyph, name, mark, status, width, styles)];
+    if let Some(row) = digest_row(digest, width, styles) {
+        lines.push(row);
+    }
+    lines
+}
+
+fn name_line(glyph: &str, name: &str, mark: Option<&str>, status: Status, width: usize, styles: &Styles) -> RenderedLine {
     let mut line = RenderedLine::blank();
     let heading = heading(name);
     let head_width = glyph.width().saturating_add(heading.width());
@@ -249,31 +256,34 @@ fn line(
         line.push(StyledSpan::new(truncate(&format!("{glyph}{heading}"), width), styles.name));
         return line;
     }
-    line.push(StyledSpan::new(glyph, styles.glyph));
+    line.push(StyledSpan::new(glyph, styles.body));
     line.push(StyledSpan::new(heading, styles.name));
 
     let affordable = head_width.saturating_add(TAIL_GAP).saturating_add(outcome_width) <= width;
     let mark = mark.filter(|_| affordable);
     let outcome_width = if affordable { outcome_width } else { outcome.width() };
 
-    let spent = head_width.saturating_add(HEAD_GAP.width()).saturating_add(outcome_width).saturating_add(TAIL_GAP);
-    let room = width.saturating_sub(spent);
-    let detail = if room >= LEAST_DIGEST { truncate(detail, room) } else { String::new() };
-
-    let mut tail = head_width;
-    if !detail.is_empty() {
-        line.push(StyledSpan::new(HEAD_GAP, styles.digest));
-        line.push(StyledSpan::new(detail.clone(), styles.digest));
-        tail = tail.saturating_add(HEAD_GAP.width()).saturating_add(detail.width());
-    }
-
-    let pad = width.saturating_sub(tail).saturating_sub(outcome_width).max(TAIL_GAP);
+    let pad = width.saturating_sub(head_width).saturating_sub(outcome_width).max(TAIL_GAP);
     line.push(StyledSpan::new(" ".repeat(pad), styles.muted));
     if let Some(mark) = mark {
         line.push(StyledSpan::new(format!("{mark}{MARK_GAP}"), styles.enter));
     }
     line.push(StyledSpan::new(outcome, if status.is_error() { styles.error } else { styles.ok }));
     line
+}
+
+fn digest_row(digest: &str, width: usize, styles: &Styles) -> Option<RenderedLine> {
+    if digest.is_empty() {
+        return None;
+    }
+    let room = width.saturating_sub(DIGEST_INDENT.width());
+    if room < LEAST_DIGEST {
+        return None;
+    }
+    let mut line = RenderedLine::blank();
+    line.push(StyledSpan::new(DIGEST_INDENT, styles.muted));
+    line.push(StyledSpan::new(truncate(digest, room), styles.digest));
+    Some(line)
 }
 
 fn heading(name: &str) -> String {
@@ -300,7 +310,7 @@ mod tests {
 
     fn styles() -> Styles {
         Styles {
-            glyph: Style::new(),
+            body: Style::new(),
             name: Style::new().add_modifier(Modifier::BOLD),
             digest: Style::new(),
             muted: Style::new().fg(Color::DarkGray),
@@ -313,43 +323,56 @@ mod tests {
         }
     }
 
-    fn rendered(name: &str, detail: &str, status: Status, width: usize) -> String {
-        line(COLLAPSED, name, detail, None, status, width, &styles()).text()
+    fn rendered(name: &str, detail: &str, status: Status, width: usize) -> Vec<String> {
+        head(COLLAPSED, name, detail, None, status, width, &styles()).iter().map(RenderedLine::text).collect()
     }
 
     #[test]
-    fn a_collapsed_call_is_its_name_its_digest_and_a_right_aligned_outcome() {
-        let text = rendered("Bash", "wc -l src/engine/grid.rs", Status::Ok, 60);
-        assert_eq!(text, "▸ Bash  wc -l src/engine/grid.rs                          ok");
-        assert_eq!(text.width(), 60, "the outcome ends on the last column");
+    fn a_collapsed_call_is_its_name_on_one_row_and_its_digest_dimmed_on_the_next() {
+        let rows = rendered("Bash", "wc -l src/engine/grid.rs", Status::Ok, 60);
+        assert!(rows[0].starts_with("▸ Bash") && rows[0].ends_with("ok"), "{:?}", rows[0]);
+        assert_eq!(rows[0].width(), 60, "the outcome ends on the last column");
+        assert_eq!(rows.get(1).map(String::as_str), Some("  └ wc -l src/engine/grid.rs"));
+    }
+
+    #[test]
+    fn a_call_with_no_digest_stays_one_row() {
+        assert_eq!(rendered("Bash", "", Status::Ok, 60).len(), 1);
     }
 
     #[test]
     fn an_mcp_name_reads_as_a_server_and_a_tool() {
-        assert!(rendered("mcp__jeffries__beam_status", "", Status::Denied, 60).starts_with("▸ jeffries · beam_status"));
+        assert!(rendered("mcp__jeffries__beam_status", "", Status::Denied, 60)[0].starts_with("▸ jeffries · beam_status"));
     }
 
     #[test]
-    fn the_outcome_survives_a_column_too_narrow_for_the_digest() {
-        let text = rendered("Bash", "cargo build --release", Status::Failed, 16);
-        assert_eq!(text, "▸ Bash    failed", "the digest goes before the outcome does");
-        assert_eq!(text.width(), 16);
+    fn the_name_row_never_carries_the_digest() {
+        let rows = rendered("Bash", "cargo build --release", Status::Failed, 16);
+        assert_eq!(rows[0], "▸ Bash    failed");
+        assert_eq!(rows[0].width(), 16);
+    }
+
+    #[test]
+    fn the_digest_row_drops_out_when_the_column_is_too_narrow_for_it() {
+        let rows = rendered("Bash", "cargo build --release", Status::Ok, 10);
+        assert_eq!(rows.len(), 1, "narrower than DIGEST_INDENT plus LEAST_DIGEST leaves no room for a second row");
     }
 
     #[test]
     fn a_column_too_narrow_for_even_the_outcome_keeps_the_name() {
-        let text = rendered("mcp__jeffries__beam_status", "", Status::Ok, 12);
-        assert_eq!(text, "▸ jeffries …", "the name is what is left");
-        assert!(text.width() <= 12);
+        let rows = rendered("mcp__jeffries__beam_status", "", Status::Ok, 12);
+        assert_eq!(rows[0], "▸ jeffries …", "the name is what is left");
+        assert!(rows[0].width() <= 12);
     }
 
     #[test]
-    fn no_collapsed_line_ends_in_whitespace_at_any_width() {
+    fn no_head_row_ends_in_whitespace_at_any_width() {
         for width in 1..=120_usize {
             for status in [Status::Ok, Status::Failed, Status::Denied, Status::Interrupted, Status::Pending] {
-                let text = rendered("mcp__jeffries__beam_status", "cargo build -v 2>&1", status, width);
-                assert_eq!(text.trim_end(), text, "width {width} left trailing whitespace: {text:?}");
-                assert!(text.width() <= width, "width {width} overflowed to {}", text.width());
+                for text in rendered("mcp__jeffries__beam_status", "cargo build -v 2>&1", status, width) {
+                    assert_eq!(text.trim_end(), text, "width {width} left trailing whitespace: {text:?}");
+                    assert!(text.width() <= width, "width {width} overflowed to {}", text.width());
+                }
             }
         }
     }
@@ -391,7 +414,7 @@ mod tests {
     #[test]
     fn only_the_three_error_outcomes_are_painted_in_the_error_style() {
         let error = |status| {
-            line(COLLAPSED, "Bash", "x", None, status, 40, &styles())
+            name_line(COLLAPSED, "Bash", None, status, 40, &styles())
                 .spans
                 .last()
                 .map(|span| span.style)

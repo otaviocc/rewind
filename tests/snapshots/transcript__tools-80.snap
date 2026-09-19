@@ -8,22 +8,31 @@ expression: "rendered(TOOLS, 80)"
 ▎ claude · opus-5
 ▎ Editing the coil table first, then writing the new module, then the spec.
 ▎
-▎ ▸ Edit  /Users/fixture/Developer/holodeck/src/engine/deflector.rs · 1 hunk  ok
+▎ ▸ Edit                                                                      ok
+▎   └ /Users/fixture/Developer/holodeck/src/engine/deflector.rs · 1 hunk
 ▎
-▎ ▸ Write  /Users/fixture/Developer/holodeck/src/engine/coil.rs · 2 hunks     ok
+▎ ▸ Write                                                                     ok
+▎   └ /Users/fixture/Developer/holodeck/src/engine/coil.rs · 2 hunks
 ▎
-▎ ▸ WebFetch  https://holodeck.invalid/specs/deflector.html                   ok
+▎ ▸ WebFetch                                                                  ok
+▎   └ https://holodeck.invalid/specs/deflector.html
 ▎
-▎ ▸ jeffries · beam_status  {"deck":9,"verbose":true}                         ok
+▎ ▸ jeffries · beam_status                                                    ok
+▎   └ {"deck":9,"verbose":true}
 ▎
-▎ ▸ Replicator  tea, earl grey, hot                                           ok
+▎ ▸ Replicator                                                                ok
+▎   └ tea, earl grey, hot
 ▎
-▎ ▸ Read  {"file_path": "/Users/fixture/Developer/holodeck/src/engine/co  failed
+▎ ▸ Read                                                                  failed
+▎   └ {"file_path": "/Users/fixture/Developer/holodeck/src/engine/co
 ▎
-▎ ▸ Bash  rm -rf target                                                   denied
+▎ ▸ Bash                                                                  denied
+▎   └ rm -rf target
 ▎
-▎ ▸ Bash  cargo test -- --nocapture                                  interrupted
+▎ ▸ Bash                                                             interrupted
+▎   └ cargo test -- --nocapture
 ▎
 ▎ Stopping there. One call was still in flight when the session ended.
 ▎
-▎ ▸ Bash  cargo build --release                                          pending
+▎ ▸ Bash                                                                 pending
+▎   └ cargo build --release

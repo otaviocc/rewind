@@ -11,7 +11,8 @@ expression: "expanded(TOOLS, 32)"
 ▎ then writing the new module,
 ▎ then the spec.
 ▎
-▎ ▾ Edit  /Users/fixture/Dev… ok
+▎ ▾ Edit                      ok
+▎   └ /Users/fixture/Developer/…
 ▎   ┃ file_path      /Users/fix…
 ▎   ┃ new_string     const COIL…
 ▎   ┃ old_string     const COIL…
@@ -25,7 +26,8 @@ expression: "expanded(TOOLS, 32)"
 ▎   ┃
 ▎   ┃  pub struct Deflector {
 ▎
-▎ ▾ Write  /Users/fixture/De… ok
+▎ ▾ Write                     ok
+▎   └ /Users/fixture/Developer/…
 ▎   ┃ content        //! One de…
 ▎   ┃ file_path      /Users/fix…
 ▎   ┃
@@ -37,36 +39,42 @@ expression: "expanded(TOOLS, 32)"
 ▎   ┃ +    pub gain: f32,
 ▎   ┃ +}
 ▎
-▎ ▾ WebFetch  https://holode… ok
+▎ ▾ WebFetch                  ok
+▎   └ https://holodeck.invalid/…
 ▎   ┃ prompt         What is th…
 ▎   ┃ url            https://ho…
 ▎   ┃
 ▎   ┃ The spec puts the maximum…
 ▎
 ▎ ▾ jeffries · beam_status    ok
+▎   └ {"deck":9,"verbose":true}
 ▎   ┃ deck           9
 ▎   ┃ verbose        true
 ▎   ┃
 ▎   ┃ Deck 9 emitter array nomi…
 ▎
-▎ ▾ Replicator  tea, earl gr… ok
+▎ ▾ Replicator                ok
+▎   └ tea, earl grey, hot
 ▎   ┃ pattern        tea, earl …
 ▎   ┃ quantity       1
 ▎   ┃
 ▎   ┃ Replicated 1 item.
 ▎
-▎ ▾ Read  {"file_path": … failed
+▎ ▾ Read                  failed
+▎   └ {"file_path": "/Users/fix…
 ▎   ┃ __unparsedToo… {"file_pat…
 ▎   ┃
 ▎   ┃ <tool_use_error>InputVali…
 ▎
-▎ ▾ Bash  rm -rf target   denied
+▎ ▾ Bash                  denied
+▎   └ rm -rf target
 ▎   ┃ command        rm -rf tar…
 ▎   ┃ description    Clear the …
 ▎   ┃
 ▎   ┃ The user doesn't want to …
 ▎
-▎ ▾ Bash  cargo tes… interrupted
+▎ ▾ Bash             interrupted
+▎   └ cargo test -- --nocapture
 ▎   ┃ command        cargo test…
 ▎   ┃ description    Run the de…
 ▎   ┃
@@ -76,6 +84,7 @@ expression: "expanded(TOOLS, 32)"
 ▎ still in flight when the
 ▎ session ended.
 ▎
-▎ ▾ Bash  cargo build -… pending
+▎ ▾ Bash                 pending
+▎   └ cargo build --release
 ▎   ┃ command        cargo buil…
 ▎   ┃ description    Release bu…

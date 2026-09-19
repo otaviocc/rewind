@@ -302,6 +302,12 @@ impl App {
         self.anchors().get(cursor).map(|anchor| anchor.line)
     }
 
+    pub fn cursor_rows(&self) -> Option<std::ops::Range<usize>> {
+        let cursor = self.call_cursor?;
+        let anchor = self.anchors().get(cursor)?;
+        Some(anchor.line..anchor.line.saturating_add(anchor.head.max(1)))
+    }
+
     fn anchored(&self) -> Anchored {
         let Loadable::Ready(rendered) = &self.conversation else { return Anchored::default() };
         let cursor = self.call_cursor.and_then(|cursor| self.anchors().get(cursor)).map(|anchor| anchor.id.clone());
@@ -626,9 +632,11 @@ impl App {
     }
 
     fn reveal_call_cursor(&mut self) {
-        let Some(line) = self.cursor_line() else { return };
+        let Some(rows) = self.cursor_rows() else { return };
         let height = columns::conversation_height(self.area);
-        self.conversation_pane.top = listing::revealed(self.conversation_pane.top, line, height);
+        let last = rows.end.saturating_sub(1);
+        self.conversation_pane.top = listing::revealed(self.conversation_pane.top, last, height);
+        self.conversation_pane.top = listing::revealed(self.conversation_pane.top, rows.start, height);
     }
 
     fn toggle_call(&mut self) {
@@ -897,7 +905,13 @@ impl App {
 
     fn click_conversation(&mut self, row: u16) {
         let line = self.conversation_pane.top.saturating_add(usize::from(row));
-        let Some(cursor) = self.anchors().iter().position(|anchor| anchor.line == line) else { return };
+        let Some(cursor) = self
+            .anchors()
+            .iter()
+            .position(|anchor| (anchor.line..anchor.line.saturating_add(anchor.head.max(1))).contains(&line))
+        else {
+            return;
+        };
         self.call_cursor = Some(cursor);
         self.descend();
     }
@@ -1415,7 +1429,9 @@ mod tests {
         app.apply(Action::NextCall { forward: true });
         let line = app.cursor_line().expect("a cursor line");
         let text = app.lines().get(line).map(RenderedLine::text).unwrap_or_default();
-        assert!(text.contains("▸ Bash  step 0"), "{text:?}");
+        assert!(text.contains("▸ Bash"), "{text:?}");
+        let digest = app.lines().get(line.saturating_add(1)).map(RenderedLine::text).unwrap_or_default();
+        assert!(digest.contains("step 0"), "{digest:?}");
     }
 
     #[test]

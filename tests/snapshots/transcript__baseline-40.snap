@@ -10,19 +10,25 @@ expression: "rendered(BASELINE, 40)"
 ▎ The grid scanner walks one cell row at
 ▎ a time into a reused buffer.
 ▎
-▎ ▸ Bash  wc -l src/engine/grid.rs    ok
+▎ ▸ Bash                              ok
+▎   └ wc -l src/engine/grid.rs
 ▎
-▎ ▸ Agent  Explore · Trace the g… ⏎   ok
+▎ ▸ Agent                         ⏎   ok
+▎   └ Explore · Trace the grid scanner
 ▎
-▎ ▸ Bash  cargo build -v 2>&1         ok
+▎ ▸ Bash                              ok
+▎   └ cargo build -v 2>&1
 ▎
-▎ ▸ Read  /Users/fixture/Developer/h… ok
+▎ ▸ Read                              ok
+▎   └ /Users/fixture/Developer/holodeck…
 ▎
 ▎ Two hundred and twelve lines, and no
 ▎ serde_json anywhere in it.
 ▎
-▎ ▸ Agent  code-review · Review … ⏎   ok
+▎ ▸ Agent                         ⏎   ok
+▎   └ code-review · Review the grid sca…
 
 ▎ ──────────────────────────────────────
 ▎ 1 forked skill ran with no spawning c…
-▎ ▸ code-review  Review the grid… ⏎   ok
+▎ ▸ code-review                   ⏎   ok
+▎   └ Review the grid scanner

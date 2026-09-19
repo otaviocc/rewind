@@ -180,7 +180,7 @@ fn every_tool_call_renders_its_name_its_digest_and_its_outcome() {
 }
 
 #[test]
-fn a_tool_call_stays_one_line_however_narrow_the_column() {
+fn a_tool_calls_head_stays_two_rows_at_most_however_narrow_the_column() {
     insta::assert_snapshot!("tools-32", rendered(TOOLS, 32));
 }
 
@@ -307,8 +307,9 @@ fn every_expanded_call_is_anchored_to_the_line_its_header_is_on() {
 #[test]
 fn the_legacy_tool_names_are_digested_the_same_way_their_successors_are() {
     let text = rendered(LEGACY, 80);
-    for expected in ["▸ Task  Audit the old shapes", "▸ Glob  **/*.jsonl", "▸ TodoWrite  1 of 1 done"] {
-        assert!(text.contains(expected), "{expected:?} missing from:\n{text}");
+    for (name, digest) in [("▸ Task", "Audit the old shapes"), ("▸ Glob", "**/*.jsonl"), ("▸ TodoWrite", "1 of 1 done")] {
+        assert!(text.contains(name), "{name:?} missing from:\n{text}");
+        assert!(text.contains(digest), "{digest:?} missing from:\n{text}");
     }
 }
 
