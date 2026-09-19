@@ -6,3 +6,4 @@ pub mod cursor;
 pub mod fnv;
 pub mod meta;
 pub mod shard;
+pub mod store;
