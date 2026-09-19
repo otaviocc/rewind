@@ -28,6 +28,10 @@ fn main() -> Result<()> {
 
     let claude = paths::claude_dir(cli.claude_dir)?;
 
+    if cli.rebuild_cache {
+        return rebuild_cache(&claude, cli.no_cache);
+    }
+
     if std::io::stdout().is_terminal() {
         let options = ui::Options {
             claude_dir: claude,
@@ -48,6 +52,30 @@ fn main() -> Result<()> {
     let width = projects.iter().map(|project| project.path.display().to_string().chars().count()).max().unwrap_or(0);
     for project in &projects {
         println!("{}", line(project, width));
+    }
+
+    Ok(())
+}
+
+fn rebuild_cache(claude: &std::path::Path, no_cache: bool) -> Result<()> {
+    if no_cache {
+        println!("rewind: cache disabled (--no-cache); nothing to rebuild");
+        return Ok(());
+    }
+    let Some(cache_root) = paths::cache_dir() else {
+        anyhow::bail!("cannot find a cache directory; set XDG_CACHE_HOME or HOME");
+    };
+    let report = rewind::domain::cache::store::rebuild(claude, &cache_root);
+
+    println!(
+        "rewind: cache rebuilt — {}/{} projects indexed, {} bytes, {:.2}s",
+        report.projects_indexed,
+        report.projects_total,
+        report.shard_bytes,
+        report.wall.as_secs_f64()
+    );
+    for (name, message) in &report.failures {
+        eprintln!("rewind: {name}: {message}");
     }
 
     Ok(())
