@@ -26,6 +26,7 @@ const WIDE: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const IMAGES: &str = "33333333-3333-4333-8333-333333333333";
 const MARKDOWN: &str = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const TOOLS: &str = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+const COMMANDS: &str = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
 const COMPACTED: &str = "22222222-2222-4222-8222-222222222222";
 const SEVERED: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const FORKED: &str = "33333333-3333-4333-8333-333333333333";
@@ -94,12 +95,22 @@ fn ids(conversation: &rewind::domain::thread::Conversation) -> Vec<(Box<str>, Op
     let mut found = Vec::new();
     for &node in conversation.thread() {
         let Some(node) = conversation.node(node) else { continue };
-        let rewind::domain::thread::NodeKind::Assistant(turn) = &node.kind else { continue };
-        for block in &turn.content {
-            let rewind::domain::block::Block::ToolUse { id, .. } = block else { continue };
-            let detail =
-                conversation.result_of(id).and_then(|node| Outcome::of(node, id)).and_then(|outcome| outcome.detail).cloned();
-            found.push((Box::from(id.as_str()), detail));
+        match &node.kind {
+            rewind::domain::thread::NodeKind::Assistant(turn) => {
+                for block in &turn.content {
+                    let rewind::domain::block::Block::ToolUse { id, .. } = block else { continue };
+                    let detail = conversation
+                        .result_of(id)
+                        .and_then(|node| Outcome::of(node, id))
+                        .and_then(|outcome| outcome.detail)
+                        .cloned();
+                    found.push((Box::from(id.as_str()), detail));
+                }
+            }
+            rewind::domain::thread::NodeKind::User(record) if record.command().is_some() => {
+                found.push((Box::from(node.uuid()), None));
+            }
+            _ => {}
         }
     }
     found
@@ -182,6 +193,43 @@ fn every_tool_call_renders_its_name_its_digest_and_its_outcome() {
 #[test]
 fn a_tool_calls_head_stays_two_rows_at_most_however_narrow_the_column() {
     insta::assert_snapshot!("tools-32", rendered(TOOLS, 32));
+}
+
+#[test]
+fn a_local_slash_command_and_its_output_render_as_a_compact_block() {
+    insta::assert_snapshot!("commands-80", rendered(COMMANDS, 80));
+}
+
+#[test]
+fn a_local_slash_commands_block_stays_readable_at_a_narrow_column() {
+    insta::assert_snapshot!("commands-32", rendered(COMMANDS, 32));
+}
+
+#[test]
+fn expanding_a_local_slash_commands_output_reveals_it_folded() {
+    insta::assert_snapshot!("commands-expanded-80", expanded(COMMANDS, 80));
+}
+
+#[test]
+fn a_local_slash_command_carries_no_you_header_and_no_raw_tag_markup() {
+    let text = rendered(COMMANDS, 80);
+    assert!(!text.contains('<'), "the tag markup leaked into the transcript:\n{text}");
+    assert!(text.contains("▸ /theme"), "{text}");
+    assert!(text.contains("└ Using custom theme"), "{text}");
+    assert!(text.contains("▸ /holodeck:diagnostics"), "{text}");
+    assert!(text.contains("check every emitter on deck 9"), "{text}");
+}
+
+#[test]
+fn two_consecutive_local_commands_get_exactly_one_blank_line_between_them() {
+    let text = rendered(COMMANDS, 80);
+    let lines: Vec<&str> = text.lines().collect();
+    let first = lines.iter().position(|line| line.contains("/theme")).expect("the first command");
+    let second = lines.iter().position(|line| line.contains("/holodeck:diagnostics")).expect("the second command");
+    let between = &lines[first.saturating_add(1)..second];
+    let is_rail_blank = |line: &str| line.trim_end() == "▎";
+    assert_eq!(between.iter().filter(|line| is_rail_blank(line)).count(), 1, "{between:?}");
+    assert!(between.iter().all(|line| line.contains("Using custom theme") || is_rail_blank(line)), "{between:?}");
 }
 
 #[test]

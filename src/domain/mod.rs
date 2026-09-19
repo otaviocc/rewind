@@ -1,6 +1,7 @@
 //! The domain layer: reading the on-disk JSONL, and knowing nothing about drawing.
 
 pub mod block;
+pub mod command;
 pub mod diagnostics;
 pub mod latch;
 pub mod lines;

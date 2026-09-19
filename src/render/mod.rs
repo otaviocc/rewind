@@ -1,6 +1,7 @@
 //! Pure rendering: a `Conversation` becomes styled lines. No I/O, no terminal.
 
 pub mod code;
+pub mod command;
 pub mod divider;
 pub mod injection;
 pub mod line;

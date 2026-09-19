@@ -1,16 +1,17 @@
-//! One conversation becomes styled lines: a role rail, one header per run of replies, prose, and
-//! a two-row head per tool call.
+//! One conversation becomes styled lines: a role rail, one header per run of replies, prose, a
+//! two-row head per tool call, and the same shape for a local slash command and its result.
 
 use std::collections::HashSet;
 
 use ratatui::style::Style;
 
 use crate::domain::block::{Block, Content, ImageSource};
+use crate::domain::command::Command as SlashCommand;
 use crate::domain::record::CompactMetadata;
 use crate::domain::thread::{Conversation, Node, NodeId, NodeKind};
 use crate::render::line::{RenderedLine, StyledSpan, truncate};
 use crate::render::prose;
-use crate::render::{Ctx, divider, injection, tool};
+use crate::render::{Ctx, command, divider, injection, tool};
 use crate::theme::{Element, Theme};
 use unicode_width::UnicodeWidthStr;
 
@@ -40,17 +41,28 @@ fn tool_styles(theme: &Theme) -> tool::Styles {
     }
 }
 
+fn command_styles(theme: &Theme) -> tool::RowStyles {
+    tool::RowStyles {
+        body: theme.style(Element::Body),
+        name: theme.style(Element::ToolName),
+        digest: theme.style(Element::ToolSummary),
+        muted: theme.style(Element::Muted),
+        enter: theme.style(Element::Muted),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Rail {
     Human,
     Assistant,
     Seam,
+    Command,
 }
 
 impl Rail {
     const fn element(self) -> Element {
         match self {
-            Self::Human => Element::HumanGutter,
+            Self::Human | Self::Command => Element::HumanGutter,
             Self::Assistant => Element::AssistantGutter,
             Self::Seam => Element::CompactDivider,
         }
@@ -128,6 +140,9 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
         let Some(node) = conversation.node(id) else { continue };
         let seam = seam(node, sidechain, inner, ctx.theme);
         match &node.kind {
+            NodeKind::User(record) if let Some(command) = record.command() => {
+                push_command(id, node.uuid(), command, seam, ctx, &mut groups);
+            }
             NodeKind::User(record) if record.is_human_turn() && !record.is_compact_summary => {
                 let mut lines = Vec::from_iter(seam);
                 lines.push(header(human, None, inner, ctx.theme));
@@ -197,6 +212,39 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
     }
 
     flatten(groups, ctx.theme)
+}
+
+fn push_command(
+    id: NodeId,
+    uuid: &str,
+    command: SlashCommand<'_>,
+    seam: Option<RenderedLine>,
+    ctx: &Ctx<'_>,
+    groups: &mut Vec<Group>,
+) {
+    let styles = command_styles(ctx.theme);
+    let (call, gap) = match command {
+        SlashCommand::Invocation { name, args } => (self::command::invocation(uuid, name, args, ctx, &styles), true),
+        SlashCommand::Output(text) => (self::command::output(uuid, text, ctx, &styles), false),
+    };
+    let merge = seam.is_none() && matches!(groups.last(), Some(group) if group.rail == Rail::Command);
+    if merge {
+        let Some(group) = groups.last_mut() else { return };
+        if gap {
+            group.lines.push(RenderedLine::blank());
+        }
+        let at = group.lines.len();
+        group.anchors.push(Anchor { id: Box::from(uuid), line: at, head: call.head, agent: None });
+        group.lines.extend(call.lines);
+        group.spans.push(Span { node: id, line: at });
+        return;
+    }
+    let mut lines = Vec::from_iter(seam);
+    let at = lines.len();
+    let anchors = vec![Anchor { id: Box::from(uuid), line: at, head: call.head, agent: None }];
+    lines.extend(call.lines);
+    let spans = vec![Span { node: id, line: 0 }];
+    groups.push(Group { rail: Rail::Command, model: None, lines, anchors, spans });
 }
 
 fn marker(conversation: &Conversation, id: NodeId, on: Option<NodeId>, groups: &mut [Group], width: usize, theme: &Theme) {

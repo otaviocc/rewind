@@ -14,8 +14,8 @@ use crate::domain::tool::{self, Hunk, Label, Outcome, Status};
 use crate::render::line::{RenderedLine, StyledSpan, normalise, truncate};
 use crate::render::{Ctx, Overflow};
 
-const COLLAPSED: &str = "▸ ";
-const EXPANDED: &str = "▾ ";
+pub(super) const COLLAPSED: &str = "▸ ";
+pub(super) const EXPANDED: &str = "▾ ";
 const SEPARATOR: &str = " · ";
 const TAIL_GAP: usize = 1;
 const LEAST_DIGEST: usize = 8;
@@ -23,9 +23,9 @@ const ENTER: &str = "⏎";
 const RULE: &str = "─";
 const MARK_GAP: &str = "   ";
 const AGENT_TOOLS: [&str; 2] = ["Agent", "Task"];
-const GUTTER: &str = "  ┃ ";
-const GUTTER_BLANK: &str = "  ┃";
-const FOLD: usize = 20;
+pub(super) const GUTTER: &str = "  ┃ ";
+pub(super) const GUTTER_BLANK: &str = "  ┃";
+pub(super) const FOLD: usize = 20;
 const KEY_COLUMN: usize = 14;
 const DIFF_TOOLS: [&str; 2] = ["Edit", "Write"];
 const DIGEST_INDENT: &str = "  └ ";
@@ -41,6 +41,20 @@ pub struct Styles {
     pub context: Style,
     pub enter: Style,
     pub ok: Style,
+}
+
+pub(super) struct RowStyles {
+    pub body: Style,
+    pub name: Style,
+    pub digest: Style,
+    pub muted: Style,
+    pub enter: Style,
+}
+
+impl Styles {
+    pub(super) const fn rows(&self) -> RowStyles {
+        RowStyles { body: self.body, name: self.name, digest: self.digest, muted: self.muted, enter: self.enter }
+    }
 }
 
 pub fn spawned<'a>(conversation: &Conversation, ctx: &'a Ctx<'_>, id: &str, name: &str) -> Option<&'a Agent> {
@@ -73,7 +87,8 @@ pub fn call(conversation: &Conversation, ctx: &Ctx<'_>, id: &str, name: &str, in
     let glyph = if expanded { EXPANDED } else { COLLAPSED };
     let inline = AGENT_TOOLS.contains(&name) && conversation.inline_agent(id).is_some();
     let mark = (agent.is_some_and(Agent::enterable) || inline).then_some(ENTER);
-    let mut lines = head(glyph, name, &digest, mark, status, ctx.width, styles);
+    let outcome_mark = Some((label_of(status), if status.is_error() { styles.error } else { styles.ok }));
+    let mut lines = head(glyph, name, &digest, mark, outcome_mark, ctx.width, &styles.rows());
     let head = lines.len();
     if expanded {
         lines.extend(body(ctx, id, name, input, outcome.as_ref(), styles));
@@ -98,7 +113,8 @@ pub fn unreached_header(agents: &[&Agent], width: usize, styles: &Styles) -> Vec
 pub fn unreached_line(agent: &Agent, width: usize, styles: &Styles) -> Vec<RenderedLine> {
     let kind = Some(&*agent.kind).filter(|kind| *kind != agent.label());
     let digest = joined(kind, agent.description.as_deref());
-    head(COLLAPSED, agent.label(), &digest, Some(ENTER), Status::Ok, width, styles)
+    let outcome = Some((label_of(Status::Ok), styles.ok));
+    head(COLLAPSED, agent.label(), &digest, Some(ENTER), outcome, width, &styles.rows())
 }
 
 fn body(ctx: &Ctx<'_>, id: &str, name: &str, input: &Value, outcome: Option<&Outcome<'_>>, styles: &Styles) -> Vec<RenderedLine> {
@@ -117,7 +133,7 @@ fn body(ctx: &Ctx<'_>, id: &str, name: &str, input: &Value, outcome: Option<&Out
     lines
 }
 
-fn detrail(line: &mut RenderedLine) {
+pub(super) fn detrail(line: &mut RenderedLine) {
     while let Some(last) = line.spans.last_mut() {
         let trimmed = last.text.trim_end();
         if trimmed.len() == last.text.len() {
@@ -168,12 +184,12 @@ fn output(
     if DIFF_TOOLS.contains(&name)
         && let Some(hunks) = outcome.detail.and_then(tool::patch)
     {
-        return folded(diff(&hunks, width, styles), width, styles);
+        return folded(diff(&hunks, width, styles), width, styles.muted);
     }
     if let Some(found) = outcome.detail.and_then(tool::overflow) {
         match ctx.outputs.get(id) {
             Some(Overflow::Lines(lines)) => {
-                return folded(lines.iter().map(|text| cut(text, width, styles.body)).collect(), width, styles);
+                return folded(lines.iter().map(|text| cut(text, width, styles.body)).collect(), width, styles.muted);
             }
             Some(Overflow::Pending) | None => {
                 return vec![cut(&format!("reading {} …", found.name), width, styles.muted)];
@@ -184,7 +200,7 @@ fn output(
     let body = outcome.body();
     let body = tool::without_preamble(&body);
     let style = if outcome.status().is_error() { styles.error } else { styles.body };
-    folded(normalise(body).lines().map(|text| cut(text, width, style)).collect(), width, styles)
+    folded(normalise(body).lines().map(|text| cut(text, width, style)).collect(), width, styles.muted)
 }
 
 fn diff(hunks: &[Hunk], width: usize, styles: &Styles) -> Vec<RenderedLine> {
@@ -204,15 +220,15 @@ fn diff(hunks: &[Hunk], width: usize, styles: &Styles) -> Vec<RenderedLine> {
     lines
 }
 
-fn folded(mut lines: Vec<RenderedLine>, width: usize, styles: &Styles) -> Vec<RenderedLine> {
+pub(super) fn folded(mut lines: Vec<RenderedLine>, width: usize, muted: Style) -> Vec<RenderedLine> {
     let Some(hidden) = lines.len().checked_sub(FOLD).filter(|hidden| *hidden > 0) else { return lines };
     lines.truncate(FOLD);
     let plural = if hidden == 1 { "line" } else { "lines" };
-    lines.push(cut(&format!("… {hidden} more {plural}"), width, styles.muted));
+    lines.push(cut(&format!("… {hidden} more {plural}"), width, muted));
     lines
 }
 
-fn cut(text: &str, width: usize, style: Style) -> RenderedLine {
+pub(super) fn cut(text: &str, width: usize, style: Style) -> RenderedLine {
     let mut line = RenderedLine::blank();
     line.push(StyledSpan::new(truncate(&normalise(text).replace('\n', " "), width), style));
     line
@@ -228,51 +244,64 @@ fn joined(primary: Option<&str>, secondary: Option<&str>) -> String {
     }
 }
 
-fn head(
+pub(super) fn head(
     glyph: &str,
     name: &str,
     digest: &str,
     mark: Option<&str>,
-    status: Status,
+    outcome: Option<(&str, Style)>,
     width: usize,
-    styles: &Styles,
+    styles: &RowStyles,
 ) -> Vec<RenderedLine> {
-    let mut lines = vec![name_line(glyph, name, mark, status, width, styles)];
+    let mut lines = vec![name_line(glyph, name, mark, outcome, width, styles)];
     if let Some(row) = digest_row(digest, width, styles) {
         lines.push(row);
     }
     lines
 }
 
-fn name_line(glyph: &str, name: &str, mark: Option<&str>, status: Status, width: usize, styles: &Styles) -> RenderedLine {
+fn name_line(
+    glyph: &str,
+    name: &str,
+    mark: Option<&str>,
+    outcome: Option<(&str, Style)>,
+    width: usize,
+    styles: &RowStyles,
+) -> RenderedLine {
     let mut line = RenderedLine::blank();
     let heading = heading(name);
     let head_width = glyph.width().saturating_add(heading.width());
-    let outcome = label_of(status);
-    let mark_width = mark.map_or(0, |mark| mark.width().saturating_add(MARK_GAP.width()));
-    let outcome_width = outcome.width().saturating_add(mark_width);
+    let (outcome_text, outcome_style) = outcome.unwrap_or_else(|| ("", Style::default()));
 
-    if head_width.saturating_add(TAIL_GAP).saturating_add(outcome.width()) > width {
+    if head_width.saturating_add(TAIL_GAP).saturating_add(outcome_text.width()) > width {
         line.push(StyledSpan::new(truncate(&format!("{glyph}{heading}"), width), styles.name));
         return line;
     }
     line.push(StyledSpan::new(glyph, styles.body));
     line.push(StyledSpan::new(heading, styles.name));
 
+    if outcome_text.is_empty() && mark.is_none() {
+        return line;
+    }
+
+    let mark_width = mark.map_or(0, |mark| mark.width().saturating_add(MARK_GAP.width()));
+    let outcome_width = outcome_text.width().saturating_add(mark_width);
     let affordable = head_width.saturating_add(TAIL_GAP).saturating_add(outcome_width) <= width;
     let mark = mark.filter(|_| affordable);
-    let outcome_width = if affordable { outcome_width } else { outcome.width() };
+    let outcome_width = if affordable { outcome_width } else { outcome_text.width() };
 
     let pad = width.saturating_sub(head_width).saturating_sub(outcome_width).max(TAIL_GAP);
     line.push(StyledSpan::new(" ".repeat(pad), styles.muted));
     if let Some(mark) = mark {
         line.push(StyledSpan::new(format!("{mark}{MARK_GAP}"), styles.enter));
     }
-    line.push(StyledSpan::new(outcome, if status.is_error() { styles.error } else { styles.ok }));
+    if !outcome_text.is_empty() {
+        line.push(StyledSpan::new(outcome_text, outcome_style));
+    }
     line
 }
 
-fn digest_row(digest: &str, width: usize, styles: &Styles) -> Option<RenderedLine> {
+pub(super) fn digest_row(digest: &str, width: usize, styles: &RowStyles) -> Option<RenderedLine> {
     if digest.is_empty() {
         return None;
     }
@@ -324,7 +353,9 @@ mod tests {
     }
 
     fn rendered(name: &str, detail: &str, status: Status, width: usize) -> Vec<String> {
-        head(COLLAPSED, name, detail, None, status, width, &styles()).iter().map(RenderedLine::text).collect()
+        let styles = styles();
+        let outcome = Some((label_of(status), if status.is_error() { styles.error } else { styles.ok }));
+        head(COLLAPSED, name, detail, None, outcome, width, &styles.rows()).iter().map(RenderedLine::text).collect()
     }
 
     #[test]
@@ -413,12 +444,14 @@ mod tests {
 
     #[test]
     fn only_the_three_error_outcomes_are_painted_in_the_error_style() {
-        let error = |status| {
-            name_line(COLLAPSED, "Bash", None, status, 40, &styles())
+        let error = |status: Status| {
+            let styles = styles();
+            let outcome = Some((label_of(status), if status.is_error() { styles.error } else { styles.ok }));
+            name_line(COLLAPSED, "Bash", None, outcome, 40, &styles.rows())
                 .spans
                 .last()
                 .map(|span| span.style)
-                .is_some_and(|style| style == styles().error)
+                .is_some_and(|style| style == styles.error)
         };
         assert!(error(Status::Failed) && error(Status::Denied) && error(Status::Interrupted));
         assert!(!error(Status::Ok), "a call that worked is not an error");

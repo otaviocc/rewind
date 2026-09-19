@@ -210,6 +210,11 @@ impl UserRecord {
         }
         self.origin.as_ref().is_none_or(|origin| origin.kind == "human")
     }
+
+    pub fn command(&self) -> Option<crate::domain::command::Command<'_>> {
+        let Content::Text(text) = &self.message.content else { return None };
+        crate::domain::command::parse(text)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

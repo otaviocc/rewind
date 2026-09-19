@@ -1,0 +1,19 @@
+---
+source: tests/transcript.rs
+expression: "rendered(COMMANDS, 32)"
+---
+▎ you
+▎ scan the deflector array
+
+▎ claude · opus-5
+▎ Scanning now.
+
+▎ ▸ /theme
+▎   └ Using custom theme "Holod…
+▎
+▎ ▸ /holodeck:diagnostics
+▎   └ check every emitter on de…
+▎ ▸ Diagnostic report
+
+▎ claude · opus-5
+▎ Deck 9 reads clean.

@@ -99,7 +99,7 @@ fn a_nested_type_inside_message_is_never_mistaken_for_the_record_type() {
 fn a_root_reads_as_a_null_parent_and_a_child_does_not() {
     let lines = every_line();
     let roots = lines.iter().filter(|line| top_level_is_null(line, "parentUuid")).count();
-    assert_eq!(roots, 18);
+    assert_eq!(roots, 19);
     assert!(lines.iter().any(|line| top_level_str(line, "parentUuid").is_some()));
 }
 

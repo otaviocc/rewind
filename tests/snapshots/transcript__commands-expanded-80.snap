@@ -1,0 +1,40 @@
+---
+source: tests/transcript.rs
+expression: "expanded(COMMANDS, 80)"
+---
+▎ you
+▎ scan the deflector array
+
+▎ claude · opus-5
+▎ Scanning now.
+
+▎ ▾ /theme
+▎   └ Using custom theme "Holodeck"
+▎
+▎ ▾ /holodeck:diagnostics
+▎   └ check every emitter on deck 9
+▎ ▾ Diagnostic report
+▎   ┃ Diagnostic report
+▎   ┃ emitter 01 ... nominal
+▎   ┃ emitter 02 ... nominal
+▎   ┃ emitter 03 ... nominal
+▎   ┃ emitter 04 ... nominal
+▎   ┃ emitter 05 ... nominal
+▎   ┃ emitter 06 ... nominal
+▎   ┃ emitter 07 ... nominal
+▎   ┃ emitter 08 ... nominal
+▎   ┃ emitter 09 ... nominal
+▎   ┃ emitter 10 ... nominal
+▎   ┃ emitter 11 ... nominal
+▎   ┃ emitter 12 ... nominal
+▎   ┃ emitter 13 ... nominal
+▎   ┃ emitter 14 ... nominal
+▎   ┃ emitter 15 ... nominal
+▎   ┃ emitter 16 ... nominal
+▎   ┃ emitter 17 ... nominal
+▎   ┃ emitter 18 ... nominal
+▎   ┃ emitter 19 ... nominal
+▎   ┃ … 6 more lines
+
+▎ claude · opus-5
+▎ Deck 9 reads clean.

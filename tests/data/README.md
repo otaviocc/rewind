@@ -49,7 +49,7 @@ mirroring the ratio in a real map.
 
 | Directory | Real path | What it is for |
 | --- | --- | --- |
-| `-Users-fixture-Developer-holodeck` | `/Users/fixture/Developer/holodeck` | the eight interesting sessions |
+| `-Users-fixture-Developer-holodeck` | `/Users/fixture/Developer/holodeck` | the nine interesting sessions |
 | `-Users-fixture-Developer-warp-core` | three colliding keys | **ambiguity.** `warp-core`, `warp.core` and `warp core` all encode to this one name. Only the `cwd` on a transcript record says which owns it |
 | `-Users-fixture--tricorder` | `/Users/fixture/.tricorder` | a leading dot in the path |
 | `-Users-fixture-Music-Red-Alert---Live-(2019)` | `/Users/fixture/Music/Red Alert - Live (2019)` | ` - ` collapsing to `---`, and parentheses surviving verbatim |
@@ -277,6 +277,25 @@ object only sometimes.
 The timestamps are `2026-01-03`, deliberately older than every other session in `holodeck`,
 so adding this file could not move the project's mtime and with it the ordering
 `the_list_is_ordered_by_last_activity_and_is_stable_across_builds` pins.
+
+### `eeeeeeee-….jsonl` — local slash commands
+
+The two extra `user` records Claude Code CLI writes around a local slash command:
+`<command-name>…</command-name>` (plus an optional `<command-message>` and `<command-args>`)
+for the invocation, and `<local-command-stdout>…</...>` for its result. Neither carries
+`toolUseResult`, `isMeta` or an `origin` that would exclude it from an ordinary human turn, so
+before the renderer special-cased them they showed up as two raw, tag-soup "you" turns.
+
+Two commands back to back, to prove consecutive ones separate with one blank line rather than
+merging into one block or piling up blank lines between them:
+
+- A **built-in** command (`/theme`), tag order `command-name` first, no args — the common case
+  observed against a real store.
+- A **custom** command (`/holodeck:diagnostics`), tag order `command-message` first, and
+  `<command-args>` carrying real prompt text rather than being empty — also observed, and the
+  reason args are never discarded even though most commands leave them blank.
+- Its result is 26 lines, so it exercises the same fold-at-20 the tool surface's overflowed
+  output does.
 
 ### `aaaaaaaa-….jsonl` — a severed cycle
 
