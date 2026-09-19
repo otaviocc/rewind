@@ -86,7 +86,7 @@ fn key_action(key: KeyEvent) -> Option<Action> {
         KeyCode::Esc => Some(Action::Ascend),
         KeyCode::Char('f') => Some(Action::ToggleFocusMode),
         KeyCode::Char('n') => Some(Action::NextCall { forward: true }),
-        KeyCode::Char('N') => Some(Action::NextCall { forward: false }),
+        KeyCode::Char('p') => Some(Action::NextCall { forward: false }),
         KeyCode::Char(' ') => Some(Action::ToggleCall),
         KeyCode::Char('t') => Some(Action::ToggleAllCalls),
         KeyCode::Char('b') => Some(Action::CycleBranch),
@@ -140,7 +140,7 @@ mod tests {
             (press(KeyCode::Esc), Action::Ascend),
             (press(KeyCode::Char('f')), Action::ToggleFocusMode),
             (press(KeyCode::Char('n')), Action::NextCall { forward: true }),
-            (press(KeyCode::Char('N')), Action::NextCall { forward: false }),
+            (press(KeyCode::Char('p')), Action::NextCall { forward: false }),
             (press(KeyCode::Char(' ')), Action::ToggleCall),
             (press(KeyCode::Char('t')), Action::ToggleAllCalls),
             (press(KeyCode::Char('b')), Action::CycleBranch),
@@ -193,6 +193,7 @@ mod tests {
     fn an_unbound_key_is_ignored_rather_than_guessed_at() {
         assert_eq!(action(&press(KeyCode::Char('z')), viewport()), None);
         assert_eq!(action(&press(KeyCode::Insert), viewport()), None);
+        assert_eq!(action(&press(KeyCode::Char('N')), viewport()), None, "N is freed, not aliased to p");
     }
 
     #[test]
