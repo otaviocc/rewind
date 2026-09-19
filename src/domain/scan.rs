@@ -44,11 +44,18 @@ pub(crate) fn as_object<'a>(value: &Raw<'a>) -> Option<&'a [u8]> {
     }
 }
 
+pub(crate) fn as_array<'a>(value: &Raw<'a>) -> Option<&'a [u8]> {
+    match value {
+        Raw::Other(span) if span.first() == Some(&b'[') => Some(span),
+        _ => None,
+    }
+}
+
 pub(crate) fn is_true(value: &Raw<'_>) -> bool {
     matches!(value, Raw::Other(bytes) if *bytes == b"true")
 }
 
-fn top_level_raw<'a>(line: &'a [u8], key: &str) -> Option<Raw<'a>> {
+pub(crate) fn top_level_raw<'a>(line: &'a [u8], key: &str) -> Option<Raw<'a>> {
     entries(line).find_map(|(name, value)| (name == key.as_bytes()).then_some(value))
 }
 
@@ -110,6 +117,51 @@ impl<'a> Entries<'a> {
 
         let value = read_value(&mut self.rest)?;
         Some((name, value))
+    }
+}
+
+pub(crate) fn array_values(line: &[u8]) -> ArrayValues<'_> {
+    let mut rest = line;
+    skip_whitespace(&mut rest);
+    let opened = matches!(rest.first(), Some(b'['));
+    if opened {
+        rest = rest.split_first().map_or(rest, |(_, tail)| tail);
+    }
+    ArrayValues { rest, done: !opened }
+}
+
+pub(crate) struct ArrayValues<'a> {
+    rest: &'a [u8],
+    done: bool,
+}
+
+impl<'a> Iterator for ArrayValues<'a> {
+    type Item = Raw<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        let Some(value) = self.step() else {
+            self.done = true;
+            return None;
+        };
+        Some(value)
+    }
+}
+
+impl<'a> ArrayValues<'a> {
+    fn step(&mut self) -> Option<Raw<'a>> {
+        loop {
+            skip_whitespace(&mut self.rest);
+            let (&byte, after) = self.rest.split_first()?;
+            match byte {
+                b',' => self.rest = after,
+                b']' => return None,
+                _ => break,
+            }
+        }
+        read_value(&mut self.rest)
     }
 }
 
@@ -369,5 +421,38 @@ mod tests {
     fn a_nested_array_is_not_returned_as_an_object() {
         let line = br#"{"content":[{"type":"text"}],"type":"user"}"#;
         assert_eq!(top_level_object(line, "content"), None);
+    }
+
+    #[test]
+    fn an_array_of_objects_is_walked_one_element_at_a_time() {
+        let array = br#"[{"type":"text"},{"type":"thinking"}]"#;
+        let kinds: Vec<&str> = array_values(array)
+            .filter_map(|value| as_object(&value))
+            .filter_map(|object| top_level_str(object, "type"))
+            .collect();
+        assert_eq!(kinds, ["text", "thinking"]);
+    }
+
+    #[test]
+    fn an_empty_array_yields_nothing() {
+        assert_eq!(array_values(b"[]").count(), 0);
+    }
+
+    #[test]
+    fn array_values_can_be_scalars_or_strings_too() {
+        let values: Vec<&str> = array_values(br#"["a","b"]"#).filter_map(|value| as_str(&value)).collect();
+        assert_eq!(values, ["a", "b"]);
+    }
+
+    #[test]
+    fn a_value_that_is_not_an_array_yields_nothing() {
+        assert_eq!(array_values(br#"{"a":1}"#).count(), 0);
+        assert_eq!(array_values(b"not json").count(), 0);
+    }
+
+    #[test]
+    fn a_nested_object_is_not_returned_as_an_array() {
+        let line = br#"{"message":{"role":"user"},"type":"user"}"#;
+        assert_eq!(as_array(&top_level_raw(line, "message").expect("a message value")), None);
     }
 }

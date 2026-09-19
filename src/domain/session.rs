@@ -67,7 +67,7 @@ pub fn discover(project_dir: &Path) -> Vec<Session> {
 }
 
 #[derive(Debug, Default)]
-struct Fields<'a> {
+pub(crate) struct Fields<'a> {
     record_type: Option<&'a str>,
     timestamp: Option<&'a str>,
     git_branch: Option<&'a str>,
@@ -85,7 +85,7 @@ struct Fields<'a> {
     continued_in: Option<&'a str>,
 }
 
-fn scan_line(line: &[u8]) -> Fields<'_> {
+pub(crate) fn scan_line(line: &[u8]) -> Fields<'_> {
     let mut fields = Fields::default();
     for (name, value) in scan::entries(line) {
         match name {
@@ -213,7 +213,7 @@ fn load_session(path: &Path, id: &str, project_dir: &Path) -> Result<Session, Se
     })
 }
 
-fn is_human_turn(fields: &Fields<'_>) -> bool {
+pub(crate) fn is_human_turn(fields: &Fields<'_>) -> bool {
     if fields.has_tool_use_result || fields.is_meta {
         return false;
     }
