@@ -9,9 +9,9 @@ expression: "rendered(TOOLS, 80)"
 ▎ Editing the coil table first, then writing the new module, then the spec.
 ▎
 ▎ ▸ Edit                                                                      ok
-▎   └ /Users/fixture/Developer/holodeck/src/engine/deflector.rs · 1 hunk
+▎   └ src/engine/deflector.rs · 1 hunk
 ▎ ▸ Write                                                                     ok
-▎   └ /Users/fixture/Developer/holodeck/src/engine/coil.rs · 2 hunks
+▎   └ src/engine/coil.rs · 2 hunks
 ▎ ▸ WebFetch                                                                  ok
 ▎   └ https://holodeck.invalid/specs/deflector.html
 ▎ ▸ jeffries · beam_status                                                    ok

@@ -146,6 +146,10 @@ fn primary_key(name: &str) -> &'static str {
     }
 }
 
+pub fn primary_is_path(name: &str) -> bool {
+    matches!(name, "Read" | "Edit" | "Write" | "NotebookEdit")
+}
+
 fn secondary_key(name: &str) -> &'static str {
     match name {
         "Agent" | "Task" => "description",
@@ -432,6 +436,15 @@ mod tests {
             "keys are visited in order and quantity is not a string"
         );
         assert_eq!(digested.secondary, None);
+    }
+
+    #[test]
+    fn only_the_tools_whose_primary_key_is_a_file_path_say_so() {
+        let named = ["Bash", "Read", "Edit", "Write", "NotebookEdit", "Agent", "Skill", "WebFetch", "Grep", "Glob", "Monitor"];
+        for name in named {
+            assert_eq!(primary_is_path(name), primary_key(name) == "file_path", "{name} disagrees with its primary key");
+        }
+        assert!(!primary_is_path("Bash"), "a command is not a path, however it begins");
     }
 
     #[test]

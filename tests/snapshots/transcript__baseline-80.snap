@@ -16,7 +16,7 @@ expression: "rendered(BASELINE, 80)"
 ▎ ▸ Bash                                                                      ok
 ▎   └ cargo build -v 2>&1
 ▎ ▸ Read                                                                      ok
-▎   └ /Users/fixture/Developer/holodeck/src/engine/grid.rs · 212 lines
+▎   └ src/engine/grid.rs · 212 lines
 ▎
 ▎ Two hundred and twelve lines, and no serde_json anywhere in it.
 ▎

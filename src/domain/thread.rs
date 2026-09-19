@@ -84,6 +84,16 @@ impl Node {
             NodeKind::Attachment(record) => &record.envelope.uuid,
         }
     }
+
+    pub fn cwd(&self) -> Option<&str> {
+        let cwd = match &self.kind {
+            NodeKind::User(record) => &record.envelope.cwd,
+            NodeKind::Assistant(turn) => &turn.envelope.cwd,
+            NodeKind::System(record) => &record.envelope.cwd,
+            NodeKind::Attachment(record) => &record.envelope.cwd,
+        };
+        cwd.as_deref().filter(|cwd| !cwd.is_empty())
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -102,6 +112,7 @@ pub struct SessionState {
 #[derive(Debug, Clone)]
 pub struct Conversation {
     nodes: Vec<Node>,
+    cwd: Option<PathBuf>,
     ids: HashMap<Box<str>, NodeId>,
     results: HashMap<Box<str>, NodeId>,
     inline: HashMap<Box<str>, NodeId>,
@@ -128,6 +139,10 @@ impl Conversation {
 
     pub fn chosen(&self, parent: NodeId) -> Option<NodeId> {
         self.chosen.get(&parent).copied()
+    }
+
+    pub fn cwd(&self) -> Option<&Path> {
+        self.cwd.as_deref()
     }
 
     pub const fn state(&self) -> &SessionState {
@@ -296,8 +311,9 @@ pub fn build(path: &Path) -> Result<Conversation, ThreadError> {
     let (thread, chosen) = choose_threads(&nodes, &roots, state.leaf_uuid.as_deref(), &ids);
 
     let results = index_results(&nodes);
+    let cwd = nodes.iter().find_map(Node::cwd).map(PathBuf::from);
 
-    Ok(Conversation { nodes, ids, results, inline, roots, thread, chosen, restitched, state, diagnostics })
+    Ok(Conversation { nodes, cwd, ids, results, inline, roots, thread, chosen, restitched, state, diagnostics })
 }
 
 fn lift_inline_sidechains(nodes: &mut [Node]) -> (HashMap<Box<str>, NodeId>, HashSet<NodeId>) {
@@ -813,6 +829,33 @@ mod tests {
         let conversation = build(&path).expect("a conversation");
         let root = conversation.roots().first().copied().expect("a root");
         assert_eq!(conversation.node(root).map(|node| node.children.len()), Some(2), "the retry is a sibling, not a merge");
+    }
+
+    #[test]
+    fn a_conversation_names_the_working_directory_its_records_were_written_in() {
+        let (_dir, path) = write(&[
+            r#"{"parentUuid":null,"isSidechain":false,"cwd":"/Users/fixture/Developer/holodeck","message":{"role":"user","content":"hi"},"type":"user","origin":{"kind":"human"},"uuid":"u1","timestamp":"2026-01-01T00:00:00Z","sessionId":"s1"}"#,
+        ]);
+        let conversation = build(&path).expect("a conversation");
+        assert_eq!(conversation.cwd(), Some(Path::new("/Users/fixture/Developer/holodeck")));
+    }
+
+    #[test]
+    fn a_session_whose_records_carry_no_cwd_names_no_working_directory() {
+        let (_dir, path) = write(&[
+            r#"{"parentUuid":null,"isSidechain":false,"message":{"role":"user","content":"hi"},"type":"user","origin":{"kind":"human"},"uuid":"u1","timestamp":"2026-01-01T00:00:00Z","sessionId":"s1"}"#,
+        ]);
+        assert_eq!(build(&path).expect("a conversation").cwd(), None);
+    }
+
+    #[test]
+    fn a_latch_record_carries_no_cwd_so_the_first_transcript_record_names_the_directory() {
+        let (_dir, path) = write(&[
+            r#"{"type":"ai-title","sessionId":"s1","title":"the deflector array"}"#,
+            r#"{"parentUuid":null,"isSidechain":false,"cwd":"/Users/fixture/Developer/holodeck","message":{"role":"user","content":"hi"},"type":"user","origin":{"kind":"human"},"uuid":"u1","timestamp":"2026-01-01T00:00:00Z","sessionId":"s1"}"#,
+        ]);
+        let conversation = build(&path).expect("a conversation");
+        assert_eq!(conversation.cwd(), Some(Path::new("/Users/fixture/Developer/holodeck")));
     }
 
     #[test]

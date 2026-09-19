@@ -3,6 +3,7 @@
 
 use std::collections::HashSet;
 use std::hash::BuildHasher;
+use std::path::Path;
 
 use ratatui::style::Style;
 use serde_json::Value;
@@ -79,7 +80,12 @@ pub fn call(conversation: &Conversation, ctx: &Ctx<'_>, id: &str, name: &str, in
     let digest = agent.map_or_else(
         || {
             let digest = tool::digest(name, input, detail);
-            joined(digest.primary.as_deref(), digest.secondary.as_deref())
+            let primary = if tool::primary_is_path(name) {
+                shortened(digest.primary.as_deref(), conversation.cwd())
+            } else {
+                digest.primary.as_deref()
+            };
+            joined(primary, digest.secondary.as_deref())
         },
         |agent| joined(Some(agent.label()), agent.description.as_deref()),
     );
@@ -232,6 +238,13 @@ pub(super) fn cut(text: &str, width: usize, style: Style) -> RenderedLine {
     let mut line = RenderedLine::blank();
     line.push(StyledSpan::new(truncate(&normalise(text).replace('\n', " "), width), style));
     line
+}
+
+fn shortened<'a>(primary: Option<&'a str>, cwd: Option<&Path>) -> Option<&'a str> {
+    let text = primary?;
+    let Some(cwd) = cwd else { return Some(text) };
+    let relative = Path::new(text).strip_prefix(cwd).ok().and_then(Path::to_str).filter(|rest| !rest.is_empty());
+    Some(relative.unwrap_or(text))
 }
 
 fn joined(primary: Option<&str>, secondary: Option<&str>) -> String {
@@ -433,6 +446,44 @@ mod tests {
     fn an_ansi_escape_in_a_digest_is_stripped_before_it_is_measured() {
         let detail = joined(Some("\u{1b}[31mred\u{1b}[0m"), None);
         assert_eq!(detail, "red");
+    }
+
+    #[test]
+    fn a_path_under_the_working_directory_is_shown_relative_to_it() {
+        let cwd = Path::new("/Users/fixture/Developer/holodeck");
+        assert_eq!(
+            shortened(Some("/Users/fixture/Developer/holodeck/src/engine/grid.rs"), Some(cwd)),
+            Some("src/engine/grid.rs")
+        );
+    }
+
+    #[test]
+    fn a_path_outside_the_working_directory_is_left_alone() {
+        let cwd = Path::new("/Users/fixture/Developer/holodeck");
+        let elsewhere = "/etc/hosts";
+        assert_eq!(shortened(Some(elsewhere), Some(cwd)), Some(elsewhere));
+    }
+
+    #[test]
+    fn a_sibling_sharing_the_first_letters_is_not_mistaken_for_the_working_directory() {
+        let cwd = Path::new("/Users/fixture/Developer/holodeck");
+        let sibling = "/Users/fixture/Developer/holodeck-2/src/engine/grid.rs";
+        assert_eq!(shortened(Some(sibling), Some(cwd)), Some(sibling), "a prefix must end on a component");
+    }
+
+    #[test]
+    fn the_working_directory_itself_stays_absolute_rather_than_shortening_to_nothing() {
+        let cwd = Path::new("/Users/fixture/Developer/holodeck");
+        assert_eq!(shortened(Some("/Users/fixture/Developer/holodeck"), Some(cwd)), Some("/Users/fixture/Developer/holodeck"));
+    }
+
+    #[test]
+    fn a_session_with_no_working_directory_shortens_nothing() {
+        assert_eq!(
+            shortened(Some("/Users/fixture/Developer/holodeck/src/main.rs"), None),
+            Some("/Users/fixture/Developer/holodeck/src/main.rs")
+        );
+        assert_eq!(shortened(None, Some(Path::new("/Users/fixture"))), None);
     }
 
     #[test]

@@ -191,6 +191,26 @@ fn every_tool_call_renders_its_name_its_digest_and_its_outcome() {
 }
 
 #[test]
+fn a_file_path_digest_is_shown_relative_to_the_session_working_directory() {
+    let text = rendered(TOOLS, 80);
+    assert!(text.contains("\u{2514} src/engine/deflector.rs \u{b7} 1 hunk"), "{text}");
+    assert!(!text.contains("\u{2514} /Users/fixture"), "no digest still carries the working directory: {text}");
+}
+
+#[test]
+fn a_bash_command_is_never_rewritten_against_the_working_directory() {
+    let text = rendered(BASELINE, 80);
+    assert!(text.contains("wc -l src/engine/grid.rs"), "{text}");
+    assert!(text.contains("cargo build -v 2>&1"), "{text}");
+}
+
+#[test]
+fn the_expanded_body_keeps_the_path_the_record_actually_holds() {
+    let text = expanded(TOOLS, 80);
+    assert!(text.contains("file_path      /Users/fixture/Developer/holodeck"), "the raw input stays verbatim: {text}");
+}
+
+#[test]
 fn a_tool_calls_head_stays_two_rows_at_most_however_narrow_the_column() {
     insta::assert_snapshot!("tools-32", rendered(TOOLS, 32));
 }
