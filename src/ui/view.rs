@@ -13,9 +13,10 @@ use crate::ui::age;
 use crate::ui::app::{App, Column, Loadable};
 use crate::ui::columns;
 use crate::ui::diagnostics;
+use crate::ui::search;
 
 const TITLE_PREFIX: &str = "rewind";
-const HINTS: &str = "? help";
+const HINTS: &str = "? search";
 const SEPARATOR: &str = " · ";
 const ELIDED: &str = "…";
 const HINT_GAP: usize = 2;
@@ -157,6 +158,10 @@ fn content(area: Rect, buf: &mut Buffer, app: &App) {
 }
 
 fn overlay(area: Rect, buf: &mut Buffer, app: &App) {
+    if app.search_open() {
+        search_overlay(area, buf, app);
+        return;
+    }
     if !app.diagnostics_open() {
         return;
     }
@@ -185,6 +190,56 @@ fn overlay(area: Rect, buf: &mut Buffer, app: &App) {
         let Some(line) = lines.get(index) else { continue };
         let y = inner.y.saturating_add(u16::try_from(row_index).unwrap_or(u16::MAX));
         painted(Rect { y, height: 1, ..inner }, buf, line);
+    }
+}
+
+fn search_overlay(area: Rect, buf: &mut Buffer, app: &App) {
+    let outer = search::outer(Size::new(area.width, area.height));
+    if outer.width <= 2 || outer.height <= search::HEADER_ROWS {
+        return;
+    }
+    let box_area = Rect {
+        x: area.x.saturating_add(area.width.saturating_sub(outer.width).saturating_div(2)),
+        y: area.y.saturating_add(area.height.saturating_sub(outer.height).saturating_div(2)),
+        width: outer.width,
+        height: outer.height,
+    };
+    Clear.render(box_area, buf);
+    let frame = Block::bordered()
+        .title(search::TITLE)
+        .border_style(app.theme().style(Element::Hint))
+        .title_style(app.theme().style(Element::HeaderTitle));
+    let inner = frame.inner(box_area);
+    frame.render(box_area, buf);
+
+    let width = usize::from(inner.width);
+    let prompt = search::prompt_line(app.search_query(), width, app.theme());
+    painted(Rect { height: 1, ..inner }, buf, &prompt);
+
+    let status_row = Rect { y: inner.y.saturating_add(1), height: 1, ..inner };
+    let status = search::status_line(app.search_query(), app.corpus_loading(), app.search_results().len(), width, app.theme());
+    painted(status_row, buf, &status);
+
+    let list_area = Rect {
+        y: inner.y.saturating_add(search::HEADER_ROWS),
+        height: inner.height.saturating_sub(search::HEADER_ROWS),
+        ..inner
+    };
+    let rows = search::rows(app.search_results(), width, app.theme());
+    let pane = app.search_pane();
+    let last = rows.len().min(pane.top.saturating_add(usize::from(list_area.height)));
+    for (row_index, index) in (pane.top..last).enumerate() {
+        let Some(line) = rows.get(index) else { continue };
+        let y = list_area.y.saturating_add(u16::try_from(row_index).unwrap_or(u16::MAX));
+        let row_rect = Rect { y, height: 1, ..list_area };
+        if index == pane.selected {
+            for x in row_rect.x..row_rect.right() {
+                if let Some(cell) = buf.cell_mut((x, y)) {
+                    cell.set_style(app.theme().style(Element::Selection));
+                }
+            }
+        }
+        painted(row_rect, buf, line);
     }
 }
 
@@ -316,6 +371,10 @@ fn timestamp_of(at: std::time::SystemTime) -> jiff::Timestamp {
 
 fn statusbar(area: Rect, buf: &mut Buffer, app: &App) {
     let area = padded(area);
+    if let Some(status) = app.filter_status() {
+        row(area, buf, area.x, &status, app.theme().style(Element::Status));
+        return;
+    }
     if let Some(status) = app.subagent_status() {
         row(area, buf, area.x, &status, app.theme().style(Element::Status));
         let used = status.width().saturating_add(unreadable(area, buf, app, status.width()));

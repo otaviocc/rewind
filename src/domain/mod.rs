@@ -10,6 +10,7 @@ pub mod lines;
 pub mod project;
 pub mod record;
 pub mod scan;
+pub mod search;
 pub mod session;
 pub mod subagent;
 pub mod text;

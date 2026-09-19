@@ -26,6 +26,13 @@ pub fn top_level_present(line: &[u8], key: &str) -> bool {
     top_level_raw(line, key).is_some()
 }
 
+pub fn top_level_i64(line: &[u8], key: &str) -> Option<i64> {
+    match top_level_raw(line, key)? {
+        Raw::Other(bytes) => core::str::from_utf8(bytes).ok()?.parse().ok(),
+        Raw::Str(_) => None,
+    }
+}
+
 pub fn top_level_object<'a>(line: &'a [u8], key: &str) -> Option<&'a [u8]> {
     as_object(&top_level_raw(line, key)?)
 }
@@ -290,6 +297,24 @@ mod tests {
     fn a_nested_brace_inside_a_string_does_not_unbalance_the_walk() {
         let line = br#"{"message":{"text":"a } and a ] and a \" quote"},"type":"assistant"}"#;
         assert_eq!(top_level_str(line, "type"), Some("assistant"));
+    }
+
+    #[test]
+    fn a_top_level_integer_parses_as_i64() {
+        let line = br#"{"display":"hi","timestamp":1767610800000,"sessionId":"s1"}"#;
+        assert_eq!(top_level_i64(line, "timestamp"), Some(1_767_610_800_000));
+    }
+
+    #[test]
+    fn a_string_valued_key_is_not_an_integer() {
+        let line = br#"{"timestamp":"2026-01-05T09:00:00Z"}"#;
+        assert_eq!(top_level_i64(line, "timestamp"), None);
+    }
+
+    #[test]
+    fn a_missing_key_has_no_integer() {
+        let line = br#"{"a":1}"#;
+        assert_eq!(top_level_i64(line, "timestamp"), None);
     }
 
     #[test]

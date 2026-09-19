@@ -31,6 +31,10 @@ pub enum Action {
     CycleBranch,
     ToggleInjections,
     ToggleDiagnostics,
+    ToggleSearch,
+    ToggleFilter,
+    Type(char),
+    Untype,
     Resize(Size),
     Scroll { column: Column, delta: isize },
     Click { column: Column, row: u16 },
@@ -40,11 +44,12 @@ pub enum Action {
 pub struct Viewport {
     pub area: Size,
     pub mode: Mode,
+    pub text_entry: bool,
 }
 
 pub fn action(event: &Event, viewport: Viewport) -> Option<Action> {
     match event {
-        Event::Key(key) if key.kind == KeyEventKind::Press => key_action(*key),
+        Event::Key(key) if key.kind == KeyEventKind::Press => key_action(*key, viewport.text_entry),
         Event::Resize(columns, rows) => Some(Action::Resize(Size::new(*columns, *rows))),
         Event::Mouse(mouse) => mouse_action(*mouse, viewport),
         _ => None,
@@ -63,7 +68,7 @@ fn mouse_action(mouse: MouseEvent, viewport: Viewport) -> Option<Action> {
     }
 }
 
-fn key_action(key: KeyEvent) -> Option<Action> {
+fn key_action(key: KeyEvent, text_entry: bool) -> Option<Action> {
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         return match key.code {
             KeyCode::Char('d') => Some(Action::Move(Motion::HalfPage(1))),
@@ -74,6 +79,10 @@ fn key_action(key: KeyEvent) -> Option<Action> {
     }
     if key.modifiers.intersects(KeyModifiers::ALT | KeyModifiers::SUPER) {
         return None;
+    }
+
+    if text_entry {
+        return text_entry_action(key);
     }
 
     match key.code {
@@ -97,7 +106,21 @@ fn key_action(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('b') => Some(Action::CycleBranch),
         KeyCode::Char('i') => Some(Action::ToggleInjections),
         KeyCode::Char('D') => Some(Action::ToggleDiagnostics),
+        KeyCode::Char('?') => Some(Action::ToggleSearch),
+        KeyCode::Char('/') => Some(Action::ToggleFilter),
         KeyCode::Char('q') => Some(Action::Quit),
+        _ => None,
+    }
+}
+
+const fn text_entry_action(key: KeyEvent) -> Option<Action> {
+    match key.code {
+        KeyCode::Char(character) => Some(Action::Type(character)),
+        KeyCode::Backspace => Some(Action::Untype),
+        KeyCode::Down => Some(Action::Move(Motion::Line(1))),
+        KeyCode::Up => Some(Action::Move(Motion::Line(-1))),
+        KeyCode::Enter => Some(Action::Descend),
+        KeyCode::Esc => Some(Action::Ascend),
         _ => None,
     }
 }
@@ -115,7 +138,7 @@ mod tests {
     }
 
     fn viewport() -> Viewport {
-        Viewport { area: Size::new(120, 24), mode: Mode::Browse }
+        Viewport { area: Size::new(120, 24), mode: Mode::Browse, text_entry: false }
     }
 
     fn mouse(kind: MouseEventKind, column: u16, row: u16) -> Event {
@@ -155,12 +178,43 @@ mod tests {
             (press(KeyCode::Char('b')), Action::CycleBranch),
             (press(KeyCode::Char('i')), Action::ToggleInjections),
             (press(KeyCode::Char('D')), Action::ToggleDiagnostics),
+            (press(KeyCode::Char('?')), Action::ToggleSearch),
+            (press(KeyCode::Char('/')), Action::ToggleFilter),
             (press(KeyCode::Char('q')), Action::Quit),
             (control('c'), Action::Quit),
         ];
         for (event, expected) in table {
             assert_eq!(action(&event, viewport()), Some(expected), "{event:?}");
         }
+    }
+
+    fn text_viewport() -> Viewport {
+        Viewport { area: Size::new(120, 24), mode: Mode::Browse, text_entry: true }
+    }
+
+    #[test]
+    fn in_text_entry_mode_a_letter_that_is_normally_bound_types_instead() {
+        assert_eq!(action(&press(KeyCode::Char('n')), text_viewport()), Some(Action::Type('n')));
+        assert_eq!(action(&press(KeyCode::Char('j')), text_viewport()), Some(Action::Type('j')));
+        assert_eq!(action(&press(KeyCode::Char('?')), text_viewport()), Some(Action::Type('?')));
+    }
+
+    #[test]
+    fn in_text_entry_mode_backspace_untypes_and_arrows_still_move() {
+        assert_eq!(action(&press(KeyCode::Backspace), text_viewport()), Some(Action::Untype));
+        assert_eq!(action(&press(KeyCode::Down), text_viewport()), Some(Action::Move(Motion::Line(1))));
+        assert_eq!(action(&press(KeyCode::Up), text_viewport()), Some(Action::Move(Motion::Line(-1))));
+    }
+
+    #[test]
+    fn in_text_entry_mode_enter_and_escape_keep_their_meaning() {
+        assert_eq!(action(&press(KeyCode::Enter), text_viewport()), Some(Action::Descend));
+        assert_eq!(action(&press(KeyCode::Esc), text_viewport()), Some(Action::Ascend));
+    }
+
+    #[test]
+    fn in_text_entry_mode_a_control_binding_still_reaches_the_shell() {
+        assert_eq!(action(&control('c'), text_viewport()), Some(Action::Quit));
     }
 
     #[test]
@@ -249,7 +303,7 @@ mod tests {
 
     #[test]
     fn a_click_in_focus_mode_always_hits_the_conversation() {
-        let focused = Viewport { area: Size::new(120, 24), mode: Mode::Focus };
+        let focused = Viewport { area: Size::new(120, 24), mode: Mode::Focus, text_entry: false };
         assert_eq!(
             action(&mouse(MouseEventKind::Down(MouseButton::Left), 5, 5), focused),
             Some(Action::Click { column: Column::Conversation, row: 2 })

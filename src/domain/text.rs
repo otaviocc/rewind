@@ -18,6 +18,7 @@ pub struct Extracted {
     pub field: Field,
     pub flags: u8,
     pub text: String,
+    pub ts_ms: i64,
 }
 
 pub fn extract(line: &[u8]) -> Vec<Extracted> {
@@ -27,6 +28,7 @@ pub fn extract(line: &[u8]) -> Vec<Extracted> {
         Some("assistant") => extract_assistant(line, &mut out),
         _ => {}
     }
+    stamp(&mut out, transcript_ts_ms(line));
     out
 }
 
@@ -35,7 +37,20 @@ pub fn extract_history(line: &[u8]) -> Vec<Extracted> {
     if let Some(display) = scan::top_level_str(line, "display") {
         push_raw(&mut out, Field::UserPrompt, display, None);
     }
+    stamp(&mut out, scan::top_level_i64(line, "timestamp").unwrap_or(0));
     out
+}
+
+fn stamp(extracted: &mut [Extracted], ts_ms: i64) {
+    for item in extracted {
+        item.ts_ms = ts_ms;
+    }
+}
+
+fn transcript_ts_ms(line: &[u8]) -> i64 {
+    scan::top_level_str(line, "timestamp")
+        .and_then(|text| text.parse::<jiff::Timestamp>().ok())
+        .map_or(0, jiff::Timestamp::as_millisecond)
 }
 
 fn extract_user(line: &[u8], out: &mut Vec<Extracted>) {
@@ -164,7 +179,7 @@ fn push_owned(out: &mut Vec<Extracted>, field: Field, text: String, cap_limit: O
         None => (text, false),
     };
     let flags = if truncated { TRUNCATED } else { 0 };
-    out.push(Extracted { field, flags, text });
+    out.push(Extracted { field, flags, text, ts_ms: 0 });
 }
 
 fn cap(text: String, limit: usize) -> (String, bool) {
@@ -346,6 +361,28 @@ mod tests {
         let line = br#"{"display":"read the grid scanner back to me","sessionId":"s1"}"#;
         let extracted = extract_history(line);
         assert_eq!(field_texts(&extracted, Field::UserPrompt), ["read the grid scanner back to me"]);
+    }
+
+    #[test]
+    fn a_transcript_record_carries_its_iso8601_timestamp_as_milliseconds() {
+        let line = br#"{"type":"user","message":{"role":"user","content":"hi"},"origin":{"kind":"human"},"timestamp":"2026-01-05T09:00:00Z"}"#;
+        let extracted = extract(line);
+        let expected = "2026-01-05T09:00:00Z".parse::<jiff::Timestamp>().expect("a valid timestamp").as_millisecond();
+        assert_eq!(extracted.first().map(|item| item.ts_ms), Some(expected));
+    }
+
+    #[test]
+    fn a_history_line_carries_its_raw_millisecond_timestamp() {
+        let line = br#"{"display":"hi","timestamp":1767610800000,"sessionId":"s1"}"#;
+        let extracted = extract_history(line);
+        assert_eq!(extracted.first().map(|item| item.ts_ms), Some(1_767_610_800_000));
+    }
+
+    #[test]
+    fn a_record_with_no_timestamp_stamps_zero() {
+        let line = br#"{"type":"user","message":{"role":"user","content":"hi"},"origin":{"kind":"human"}}"#;
+        let extracted = extract(line);
+        assert_eq!(extracted.first().map(|item| item.ts_ms), Some(0));
     }
 
     #[test]

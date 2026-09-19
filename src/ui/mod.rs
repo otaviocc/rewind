@@ -7,6 +7,7 @@ pub mod diagnostics;
 pub mod input;
 pub mod listing;
 mod lru;
+pub mod search;
 pub mod view;
 mod worker;
 
@@ -118,6 +119,12 @@ fn event_loop(
         if let Some((claude_dir, cache_root, selected, cancel)) = app.take_scan() {
             worker::spawn_scan(tx, claude_dir, cache_root, selected, cancel);
         }
+        if let Some(cache_root) = app.take_corpus_load() {
+            worker::spawn_corpus_load(tx, cache_root);
+        }
+        if let Some((hit, generation)) = app.take_hit_resolve() {
+            worker::spawn_resolve_hit(tx, app.claude_dir().to_path_buf(), hit, generation);
+        }
     }
 }
 
@@ -131,7 +138,7 @@ fn next(app: &App, rx: &Receiver<Wake>) -> Result<Wake, RecvTimeoutError> {
 fn handle(app: &mut App, wake: Wake) -> Result<()> {
     match wake {
         Wake::Input(event) => {
-            let viewport = input::Viewport { area: app.area(), mode: app.mode() };
+            let viewport = input::Viewport { area: app.area(), mode: app.mode(), text_entry: app.text_entry() };
             if let Some(action) = input::action(&event, viewport) {
                 app.apply(action);
             }
@@ -143,6 +150,8 @@ fn handle(app: &mut App, wake: Wake) -> Result<()> {
         Wake::SubagentLoaded { generation, path, result } => app.set_subagent(generation, result, path),
         Wake::ScanProgress { done, total } => app.set_scan_progress(done, total),
         Wake::ScanFinished => app.scan_finished(),
+        Wake::CorpusLoaded(corpus) => app.set_corpus(corpus),
+        Wake::HitResolved { generation, target } => app.set_hit_resolved(generation, target),
         Wake::InputLost(error) => bail!("cannot read keyboard input: {error}"),
     }
     Ok(())

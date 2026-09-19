@@ -199,7 +199,17 @@ fn read_tail(path: &Path, from: u64, old_line_count: u32, extract: fn(&[u8]) -> 
 fn push_pending(builder: &mut Builder, file_idx: u32, kind: Kind, pending: Vec<(u32, u64, Extracted)>, first_seq: u32) {
     let mut seq = first_seq;
     for (line_no, byte_off, extracted) in pending {
-        builder.push_record(file_idx, line_no, byte_off, 0, kind, extracted.field, extracted.flags, seq, &extracted.text);
+        builder.push_record(
+            file_idx,
+            line_no,
+            byte_off,
+            extracted.ts_ms,
+            kind,
+            extracted.field,
+            extracted.flags,
+            seq,
+            &extracted.text,
+        );
         seq = seq.saturating_add(1);
     }
 }

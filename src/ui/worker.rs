@@ -12,9 +12,13 @@ use std::time::{Duration, Instant};
 use ratatui::crossterm::event;
 
 use crate::domain::cache::build::{self, Control};
+use crate::domain::cache::shard::Kind;
 use crate::domain::cache::store::{self, Outcome, Plan};
 use crate::domain::cancel::Cancel;
 use crate::domain::project::{self, Project, ProjectError};
+use crate::domain::search::corpus::Corpus;
+use crate::domain::search::engine::Hit;
+use crate::domain::search::resolve::{self, Opened};
 use crate::domain::session::{self, Session};
 use crate::domain::subagent::{self, Agents};
 use crate::domain::thread::{self, Conversation, ThreadError};
@@ -32,6 +36,8 @@ pub enum Wake {
     SubagentLoaded { generation: u64, path: PathBuf, result: Result<Arc<Conversation>, ThreadError> },
     ScanProgress { done: usize, total: usize },
     ScanFinished,
+    CorpusLoaded(Arc<Corpus>),
+    HitResolved { generation: u64, target: Option<Opened> },
     InputLost(String),
 }
 
@@ -228,6 +234,32 @@ fn order_projects(projects: &mut [Project], selected: Option<&str>) {
     let Some(selected) = selected else { return };
     let Some(index) = projects.iter().position(|project| project.directory == selected) else { return };
     projects.swap(0, index);
+}
+
+pub fn spawn_corpus_load(tx: &Sender<Wake>, cache_root: PathBuf) {
+    let tx = tx.clone();
+    std::thread::spawn(move || {
+        let corpus = crate::domain::search::corpus::load(&cache_root);
+        let _ = tx.send(Wake::CorpusLoaded(Arc::new(corpus)));
+    });
+}
+
+pub fn spawn_resolve_hit(tx: &Sender<Wake>, claude_dir: PathBuf, hit: Hit, generation: u64) {
+    let tx = tx.clone();
+    std::thread::spawn(move || {
+        let target = resolve_hit(&claude_dir, &hit);
+        let _ = tx.send(Wake::HitResolved { generation, target });
+    });
+}
+
+fn resolve_hit(claude_dir: &Path, hit: &Hit) -> Option<Opened> {
+    match hit.kind {
+        Kind::History => {
+            let (session_id, cwd) = resolve::resolve_history(claude_dir, hit)?;
+            Some(Opened { project_directory: project::encode(&cwd), session_id, uuid: None })
+        }
+        Kind::Transcript | Kind::Subagent => resolve::resolve_transcript(claude_dir, hit),
+    }
 }
 
 #[cfg(test)]

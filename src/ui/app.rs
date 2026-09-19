@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ratatui::layout::Size;
 
@@ -11,6 +11,7 @@ use crate::ctx::Ctx;
 use crate::domain::cancel::{Cancel, Gate};
 use crate::domain::diagnostics::Diagnostics;
 use crate::domain::project::{Project, ProjectError};
+use crate::domain::search::{self, corpus::Corpus, engine::Hit, resolve::Opened};
 use crate::domain::session::Session;
 use crate::domain::subagent::{Agent, Agents};
 use crate::domain::thread::{Conversation, NodeId, NodeKind, ThreadError};
@@ -211,6 +212,23 @@ pub struct App {
     scan_requested: bool,
     scan_gate: Gate,
     scan_progress: Option<(usize, usize)>,
+    search_open: bool,
+    search_query: String,
+    search_results: Vec<Hit>,
+    search_pane: Pane,
+    corpus: Option<Arc<Corpus>>,
+    corpus_requested: bool,
+    search_hit_generation: Gate,
+    pending_hit_resolve: Option<(Hit, u64)>,
+    pending_scroll_uuid: Option<String>,
+    filter: Option<Filter>,
+}
+
+#[derive(Debug, Clone)]
+struct Filter {
+    column: Column,
+    query: String,
+    editing: bool,
 }
 
 impl App {
@@ -252,6 +270,16 @@ impl App {
             scan_requested: false,
             scan_gate: Gate::default(),
             scan_progress: None,
+            search_open: false,
+            search_query: String::new(),
+            search_results: Vec::new(),
+            search_pane: Pane::default(),
+            corpus: None,
+            corpus_requested: false,
+            search_hit_generation: Gate::default(),
+            pending_hit_resolve: None,
+            pending_scroll_uuid: None,
+            filter: None,
         }
     }
 
@@ -485,6 +513,9 @@ impl App {
             }
             Err(error) => Loadable::Failed(error.to_string()),
         };
+        if let Some(uuid) = self.pending_scroll_uuid.take() {
+            self.scroll_to_uuid(&uuid);
+        }
     }
 
     pub fn reflow(&mut self) {
@@ -594,6 +625,10 @@ impl App {
     }
 
     pub fn apply(&mut self, action: Action) {
+        if self.search_open {
+            self.apply_search(action);
+            return;
+        }
         if self.diagnostics_open {
             match action {
                 Action::Quit => self.quit(),
@@ -609,10 +644,33 @@ impl App {
                 | Action::ToggleAllCalls
                 | Action::CycleBranch
                 | Action::ToggleInjections
+                | Action::ToggleSearch
+                | Action::ToggleFilter
+                | Action::Type(_)
+                | Action::Untype
                 | Action::Scroll { .. }
                 | Action::Click { .. } => {}
             }
             return;
+        }
+        if let Some(filter) = &self.filter {
+            if filter.editing {
+                self.apply_filter_editing(action);
+                return;
+            }
+            if filter.column == self.focused {
+                match action {
+                    Action::NextCall { forward } => {
+                        self.jump_filter(forward);
+                        return;
+                    }
+                    Action::Ascend => {
+                        self.filter = None;
+                        return;
+                    }
+                    _ => {}
+                }
+            }
         }
         match action {
             Action::Quit => self.quit(),
@@ -629,8 +687,86 @@ impl App {
             Action::CycleBranch => self.cycle_branch(),
             Action::ToggleInjections => self.toggle_injections(),
             Action::ToggleDiagnostics => self.toggle_diagnostics(),
+            Action::ToggleSearch => self.toggle_search(),
+            Action::ToggleFilter => self.toggle_filter(),
+            Action::Type(_) | Action::Untype => {}
             Action::Scroll { column, delta } => self.scroll_column(column, delta),
             Action::Click { column, row } => self.click(column, row),
+        }
+    }
+
+    fn apply_search(&mut self, action: Action) {
+        match action {
+            Action::Type(character) => {
+                self.search_query.push(character);
+                self.run_search();
+            }
+            Action::Untype => {
+                self.search_query.pop();
+                self.run_search();
+            }
+            Action::Move(motion) => {
+                let last = self.search_results.len().saturating_sub(1);
+                let height = self.pane_height();
+                self.search_pane.selected = listing::target(motion, self.search_pane.selected, last, height);
+                self.search_pane.top = listing::revealed(self.search_pane.top, self.search_pane.selected, height);
+            }
+            Action::Descend => self.open_selected_hit(),
+            Action::Ascend => self.toggle_search(),
+            Action::Resize(size) => self.area = size,
+            Action::Quit => self.quit(),
+            Action::Focus { .. }
+            | Action::ToggleFocusMode
+            | Action::NextCall { .. }
+            | Action::NextTurn { .. }
+            | Action::ToggleCall
+            | Action::ToggleAllCalls
+            | Action::CycleBranch
+            | Action::ToggleInjections
+            | Action::ToggleDiagnostics
+            | Action::ToggleSearch
+            | Action::ToggleFilter
+            | Action::Scroll { .. }
+            | Action::Click { .. } => {}
+        }
+    }
+
+    fn apply_filter_editing(&mut self, action: Action) {
+        match action {
+            Action::Type(character) => {
+                if let Some(filter) = &mut self.filter {
+                    filter.query.push(character);
+                }
+                self.jump_to_first_filter_match();
+            }
+            Action::Untype => {
+                if let Some(filter) = &mut self.filter {
+                    filter.query.pop();
+                }
+                self.jump_to_first_filter_match();
+            }
+            Action::Descend => {
+                if let Some(filter) = &mut self.filter {
+                    filter.editing = false;
+                }
+            }
+            Action::Ascend => self.filter = None,
+            Action::Move(motion) => self.move_selection(motion),
+            Action::Resize(size) => self.area = size,
+            Action::Quit => self.quit(),
+            Action::Focus { .. }
+            | Action::ToggleFocusMode
+            | Action::NextCall { .. }
+            | Action::NextTurn { .. }
+            | Action::ToggleCall
+            | Action::ToggleAllCalls
+            | Action::CycleBranch
+            | Action::ToggleInjections
+            | Action::ToggleDiagnostics
+            | Action::ToggleSearch
+            | Action::ToggleFilter
+            | Action::Scroll { .. }
+            | Action::Click { .. } => {}
         }
     }
 
@@ -1036,6 +1172,197 @@ impl App {
     fn pane_height(&self) -> usize {
         usize::from(self.area.height.saturating_sub(CHROME_ROWS)).max(1)
     }
+
+    pub const fn search_open(&self) -> bool {
+        self.search_open
+    }
+
+    pub fn search_query(&self) -> &str {
+        &self.search_query
+    }
+
+    pub fn search_results(&self) -> &[Hit] {
+        &self.search_results
+    }
+
+    pub const fn search_pane(&self) -> Pane {
+        self.search_pane
+    }
+
+    pub const fn corpus_loading(&self) -> bool {
+        self.corpus.is_none()
+    }
+
+    pub fn text_entry(&self) -> bool {
+        self.search_open || self.filter.as_ref().is_some_and(|filter| filter.editing)
+    }
+
+    pub fn filter_status(&self) -> Option<String> {
+        let filter = self.filter.as_ref()?;
+        if filter.column != self.focused {
+            return None;
+        }
+        let hint = if filter.editing { "type to filter, Enter to lock" } else { "n/N to step, Esc to clear" };
+        Some(format!("/{} · {hint}", filter.query))
+    }
+
+    fn toggle_search(&mut self) {
+        self.search_open = !self.search_open;
+        self.search_pane = Pane::default();
+        if !self.search_open {
+            self.search_query.clear();
+            self.search_results.clear();
+            return;
+        }
+        if self.corpus.is_none() && !self.corpus_requested && !self.no_cache && self.cache_root.is_some() {
+            self.corpus_requested = true;
+        }
+    }
+
+    fn toggle_filter(&mut self) {
+        if let Some(filter) = &mut self.filter {
+            filter.editing = true;
+            return;
+        }
+        if matches!(self.focused, Column::Projects | Column::Sessions) {
+            self.filter = Some(Filter { column: self.focused, query: String::new(), editing: true });
+        }
+    }
+
+    fn run_search(&mut self) {
+        self.search_pane = Pane::default();
+        let Some(corpus) = &self.corpus else {
+            self.search_results = Vec::new();
+            return;
+        };
+        let query = search::query::parse(&self.search_query);
+        self.search_results = search::engine::search(corpus, &query, now_ms());
+    }
+
+    fn open_selected_hit(&mut self) {
+        let Some(hit) = self.search_results.get(self.search_pane.selected).cloned() else { return };
+        self.search_hit_generation.bump();
+        self.pending_hit_resolve = Some((hit, self.search_hit_generation.current()));
+    }
+
+    pub const fn take_hit_resolve(&mut self) -> Option<(Hit, u64)> {
+        self.pending_hit_resolve.take()
+    }
+
+    pub fn set_corpus(&mut self, corpus: Arc<Corpus>) {
+        self.corpus = Some(corpus);
+        if self.search_open {
+            self.run_search();
+        }
+    }
+
+    pub fn take_corpus_load(&mut self) -> Option<PathBuf> {
+        if !self.corpus_requested {
+            return None;
+        }
+        self.corpus_requested = false;
+        self.cache_root.clone()
+    }
+
+    pub fn set_hit_resolved(&mut self, generation: u64, target: Option<Opened>) {
+        if generation != self.search_hit_generation.current() {
+            return;
+        }
+        let Some(target) = target else { return };
+        self.open_search_hit(target);
+    }
+
+    fn open_search_hit(&mut self, target: Opened) {
+        self.search_open = false;
+        let Loadable::Ready(projects) = &self.projects else { return };
+        let Some(index) = projects.iter().position(|project| project.directory == target.project_directory) else { return };
+        self.projects_pane.selected = index;
+        self.pending_session = Some(target.session_id);
+        self.pending_scroll_uuid = target.uuid;
+        self.focused = Column::Conversation;
+        self.request_sessions_for_selection();
+    }
+
+    fn scroll_to_uuid(&mut self, uuid: &str) {
+        let Loadable::Ready(rendered) = &self.conversation else { return };
+        let Some(node) = rendered.conversation().id_of(uuid) else { return };
+        let Some(line) = rendered.transcript().line_of(Position { node, offset: 0 }) else { return };
+        self.conversation_pane.top = line.min(self.last(Column::Conversation));
+    }
+
+    fn jump_to_first_filter_match(&mut self) {
+        let Some(filter) = &self.filter else { return };
+        let column = filter.column;
+        if filter.query.is_empty() {
+            return;
+        }
+        let matches = self.filter_matches(column, &filter.query.clone());
+        let Some(&index) = matches.first() else { return };
+        self.select_in_column(column, index);
+    }
+
+    fn jump_filter(&mut self, forward: bool) {
+        let Some(filter) = &self.filter else { return };
+        let column = filter.column;
+        let matches = self.filter_matches(column, &filter.query.clone());
+        if matches.is_empty() {
+            return;
+        }
+        let current = self.pane(column).selected;
+        let position = matches.iter().position(|&index| index == current);
+        let next = match (position, forward) {
+            (Some(position), true) => position.saturating_add(1).checked_rem(matches.len()).unwrap_or(0),
+            (Some(position), false) => position.checked_sub(1).unwrap_or_else(|| matches.len().saturating_sub(1)),
+            (None, true) => 0,
+            (None, false) => matches.len().saturating_sub(1),
+        };
+        let Some(&target) = matches.get(next) else { return };
+        self.select_in_column(column, target);
+    }
+
+    fn select_in_column(&mut self, column: Column, index: usize) {
+        self.pane_mut(column).selected = index;
+        let height = self.pane_height();
+        let pane = self.pane_mut(column);
+        pane.top = listing::revealed(pane.top, pane.selected, height);
+        match column {
+            Column::Projects => self.request_sessions_for_selection(),
+            Column::Sessions => self.request_conversation_for_selection(),
+            Column::Conversation => {}
+        }
+    }
+
+    fn filter_matches(&self, column: Column, query: &str) -> Vec<usize> {
+        let labels = self.filter_labels(column);
+        let mut scored: Vec<(i32, usize)> = labels
+            .iter()
+            .enumerate()
+            .filter_map(|(index, label)| search::fuzzy::score(query, label).map(|score| (score, index)))
+            .collect();
+        scored.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(&right.1)));
+        scored.into_iter().map(|(_, index)| index).collect()
+    }
+
+    fn filter_labels(&self, column: Column) -> Vec<String> {
+        match column {
+            Column::Projects => match &self.projects {
+                Loadable::Ready(projects) => projects.iter().map(|project| project.path.display().to_string()).collect(),
+                _ => Vec::new(),
+            },
+            Column::Sessions => match &self.sessions {
+                Loadable::Ready(sessions) => sessions.iter().map(|session| session.title.clone()).collect(),
+                _ => Vec::new(),
+            },
+            Column::Conversation => Vec::new(),
+        }
+    }
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map_or(0, |duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
 }
 
 fn matches_project(project: &Project, wanted: &str) -> bool {
@@ -2218,5 +2545,113 @@ mod tests {
         assert_eq!(app.scan_status(), Some((3, 10)));
         app.scan_finished();
         assert!(app.scan_status().is_none());
+    }
+
+    #[test]
+    fn no_cache_never_requests_the_search_corpus_either() {
+        let mut app = App::new(
+            ctx(),
+            &Options {
+                claude_dir: PathBuf::from("/tmp"),
+                cache_root: Some(PathBuf::from("/tmp/cache")),
+                no_cache: true,
+                ..Options::default()
+            },
+            Size::new(120, 30),
+        );
+        app.apply(Action::ToggleSearch);
+        assert!(app.search_open());
+        assert!(app.take_corpus_load().is_none(), "--no-cache must never load a possibly-stale corpus off disk");
+    }
+
+    #[test]
+    fn toggling_search_opens_the_overlay_and_requests_the_corpus_once() {
+        let mut app = App::new(
+            ctx(),
+            &Options { claude_dir: PathBuf::from("/tmp"), cache_root: Some(PathBuf::from("/tmp/cache")), ..Options::default() },
+            Size::new(120, 30),
+        );
+        assert!(!app.search_open());
+        assert!(!app.text_entry());
+
+        app.apply(Action::ToggleSearch);
+        assert!(app.search_open());
+        assert!(app.text_entry());
+        assert_eq!(app.take_corpus_load(), Some(PathBuf::from("/tmp/cache")));
+        assert!(app.take_corpus_load().is_none(), "the corpus load is requested once, not on every poll");
+    }
+
+    #[test]
+    fn typing_while_search_is_open_builds_the_query_instead_of_moving_selection() {
+        let mut app = app(Size::new(120, 30));
+        app.apply(Action::ToggleSearch);
+        app.apply(Action::Type('g'));
+        app.apply(Action::Type('r'));
+        app.apply(Action::Type('i'));
+        app.apply(Action::Type('d'));
+        assert_eq!(app.search_query(), "grid");
+        app.apply(Action::Untype);
+        assert_eq!(app.search_query(), "gri");
+    }
+
+    #[test]
+    fn escape_closes_the_search_overlay_and_clears_the_query() {
+        let mut app = app(Size::new(120, 30));
+        app.apply(Action::ToggleSearch);
+        app.apply(Action::Type('x'));
+        app.apply(Action::Ascend);
+        assert!(!app.search_open());
+        assert_eq!(app.search_query(), "");
+    }
+
+    #[test]
+    fn a_bound_letter_like_d_types_into_the_query_rather_than_opening_diagnostics() {
+        let mut app = app(Size::new(120, 30));
+        app.apply(Action::ToggleSearch);
+        app.apply(Action::Type('D'));
+        assert_eq!(app.search_query(), "D");
+        assert!(!app.diagnostics_open());
+    }
+
+    #[test]
+    fn the_filter_only_opens_on_a_list_column() {
+        let mut projects_focused = app(Size::new(120, 30));
+        projects_focused.apply(Action::ToggleFilter);
+        assert!(projects_focused.text_entry(), "Projects is focused by default, so / opens the filter");
+
+        let mut on_conversation = app(Size::new(120, 30));
+        on_conversation.apply(Action::Focus { forward: true });
+        on_conversation.apply(Action::Focus { forward: true });
+        on_conversation.apply(Action::ToggleFilter);
+        assert!(!on_conversation.text_entry(), "the conversation column has no filterable list");
+    }
+
+    #[test]
+    fn typing_a_filter_selects_the_first_fuzzy_match_and_enter_locks_it_in() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("aaa"), project("bbb"), project("grid-scanner")]));
+        app.apply(Action::ToggleFilter);
+        for character in "grd".chars() {
+            app.apply(Action::Type(character));
+        }
+        assert_eq!(app.selected_project().map(|project| project.directory.as_str()), Some("grid-scanner"));
+        assert!(app.text_entry());
+
+        app.apply(Action::Descend);
+        assert!(!app.text_entry(), "Enter locks the filter and leaves text entry");
+        assert!(app.filter_status().is_some_and(|status| status.starts_with("/grd")));
+    }
+
+    #[test]
+    fn escape_on_a_locked_filter_clears_it() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("aaa"), project("grid-scanner")]));
+        app.apply(Action::ToggleFilter);
+        app.apply(Action::Type('g'));
+        app.apply(Action::Descend);
+        assert!(app.filter_status().is_some());
+
+        app.apply(Action::Ascend);
+        assert!(app.filter_status().is_none());
     }
 }
