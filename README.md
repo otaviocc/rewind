@@ -1,3 +1,5 @@
+![license](https://img.shields.io/badge/license-MIT-blue)
+
 # rewind
 
 A terminal browser for your Claude Code conversation history.
@@ -52,13 +54,37 @@ percentage through its rows (nothing worth reading if it only has one), then `fo
 cargo install --locked --path .
 ```
 
+or from source:
+
+```
+git clone https://github.com/otaviocc/rewind
+cd rewind
+cargo build --release
+./target/release/rewind
+```
+
+Homebrew and prebuilt binaries for Linux, macOS and Windows arrive with the first tagged
+release.
+
+## Quick start
+
+```
+rewind                    open on every project Claude Code has seen
+rewind vademecum           open one project directly
+rewind --session <id>      open one conversation directly
+```
+
+`Tab` walks Projects → Sessions → Conversation, `Enter` descends into the selected row, and
+`q` leaves. A project whose working copy is gone still reads — it shows as `⊘` in the
+Projects column, because the transcript survives even when the directory does not.
+
 ## Keys
 
 | Key | |
 | --- | --- |
-| `h` `l` `Tab` | move between columns |
-| `j` `k` | move within a column |
-| `g` `G` | top · bottom of the column |
+| `h` `l` `Tab` `Shift-Tab` `←` `→` | move between columns |
+| `j` `k` `↓` `↑` | move within a column |
+| `g` `G` `Home` `End` | top · bottom of the column |
 | `d` `u` `Ctrl-d` `Ctrl-u` | half page down · up |
 | `Enter` | descend · expand the selected tool call · enter a subagent |
 | `Esc` | leave a subagent · back out |
@@ -76,12 +102,38 @@ cargo install --locked --path .
 | `D` | what could not be read · `Esc` closes it |
 | `?` `F1` | every key and what it does · `Esc` closes it |
 | `r` | rescan `~/.claude` for new and changed projects |
-| `q` | quit |
+| `q` `Ctrl-C` | quit |
+
+The `/` filter and the `e` export prompt take typing: letters type instead of acting,
+`Backspace` deletes, `↑`/`↓` still move, `Enter` accepts, and `Esc` cancels. In the export
+prompt, `Tab` cycles the format between Markdown and JSONL.
 
 Mouse wheel scrolls whichever column is under the pointer, not whichever has focus. Clicking
 a row selects it, clicking a collapsed tool call expands it, and clicking a subagent call
 enters it. Dragging in the conversation selects its lines and copies them to the clipboard
 on release. `--no-mouse` turns capture off.
+
+## Searching
+
+`s` opens a search over every project, ranking hits as you type; `Enter` opens the
+selected one.
+
+| | |
+| --- | --- |
+| `bare terms` | AND together |
+| `"a phrase"` | matched whole |
+| `-term` | excludes it |
+| `is:user` `is:assistant` `is:tool` `is:thinking` | restrict to one kind of text |
+| `project:name` | restrict to one project |
+
+Anything else is a literal term.
+
+Search is backed by a corpus rewind keeps under `$XDG_CACHE_HOME/rewind`, or
+`~/.cache/rewind` if that variable is unset. It builds in the background and is searchable
+while it is still filling — the overlay shows `indexing…`, then marks results `(partial)`
+until the corpus is complete. The project and session lists never wait on it.
+`--no-cache` ignores the cache and does not write it; `--rebuild-cache` discards it and
+rebuilds from scratch, then exits.
 
 ## Themes
 
@@ -102,7 +154,8 @@ tokyo-night-day   vesper
 
 To change anything, `rewind` reads one file. On every platform, including macOS, it lives at
 `$XDG_CONFIG_HOME/rewind/theme.toml`, or `~/.config/rewind/theme.toml` if that variable is
-unset. Named themes go beside it in `themes/<name>.toml` and are selected with `--theme`.
+unset — on Windows, `%APPDATA%\rewind\theme.toml` if neither is set. Named themes go beside
+it in `themes/<name>.toml` and are selected with `--theme`.
 
 Everything is optional. A theme states what it wants moved and inherits the rest, so this is
 a complete and valid file:
@@ -127,10 +180,27 @@ notice     = 208         # a 256-color index
 background = "reset"     # the terminal's own
 ```
 
-The fifteen slots are `background`, `foreground`, `muted`, `muted_text`, `subtle`, `cursor`,
-`selection_background`, `selection_foreground`, `error`, `success`, `warning`, `accent`,
-`chrome`, `highlight` and `notice`. A slot left unsaid keeps its default, and `cursor`
-follows `subtle` unless you say otherwise.
+The fifteen slots, and what each drives when nothing more specific overrides it:
+
+| Slot | Drives |
+| --- | --- |
+| `background` | the help window's ground |
+| `foreground` | body text |
+| `muted` | thinking blocks, context injections, the branch marker, the compact-boundary divider, tool summaries and their ok mark, a missing project, a code fence's language tag, quote gutters, list bullets, table borders, rules, raw HTML, hints, an unfocused column's title |
+| `muted_text` | block quotes and the status line |
+| `subtle` | nothing on its own — `cursor` falls back to it when a theme sets neither |
+| `cursor` | the cursor-line band |
+| `selection_background` `selection_foreground` | a dragged mouse selection |
+| `error` | tool errors, removed diff lines, status errors |
+| `success` | added diff lines, the live-session badge |
+| `warning` | status notices, the highlighted search match |
+| `accent` | tool names, the human gutter, a focused column's title, the header title, inline code, the scroll percentage |
+| `chrome` | nothing by default — free for a theme to point an element at |
+| `highlight` | links |
+| `notice` | the assistant gutter, the current search match |
+
+A slot left unsaid keeps its default, and `cursor` follows `subtle` unless you say
+otherwise.
 
 ### Elements
 
@@ -175,23 +245,58 @@ A theme may also name the syntax highlighting its code blocks use, with
 `base16-mocha.dark`, `base16-ocean.light`, `InspiredGitHub`, `Solarized (dark)` and
 `Solarized (light)`.
 
-A key you misspell is reported on stderr and otherwise ignored, so one typo does not cost you
-the rest of the file. A color or modifier that is not one fails the run and names the key
-that carried it.
+### A whole theme
+
+Everything above, together — `base`, a palette, and a few elements:
+
+```toml
+base          = "nord"
+syntax_theme  = "base16-mocha.dark"
+
+[palette]
+accent = "#89b4fa"
+notice = "#d9a05b"
+
+[elements.heading]
+fg        = "accent"
+modifiers = ["bold", "underline"]
+
+[elements.tool_error]
+fg        = "error"
+modifiers = ["bold"]
+
+[elements.cursor_line]
+bg = "none"
+```
+
+### When you get it wrong
+
+A key you misspell — a palette slot, an element name, or a top-level field like `base` — is
+reported on stderr and otherwise ignored, so one typo costs you that one line and nothing
+else. A color or modifier that is not one fails the run outright, naming the key that
+carried it. A `base` chain that loops on itself is also an error.
 
 ## Flags
 
 | Flag | |
 | --- | --- |
+| `[PROJECT]` | open this project first |
 | `--session <ID>` | open a session directly |
 | `--theme <NAME>` | theme by name |
 | `--config <FILE>` | explicit theme file |
-| `--list-themes` | list themes and exit |
+| `--list-themes` | list built-in and user themes, then exit |
 | `--claude-dir <DIR>` | override `~/.claude` |
 | `--no-mouse` | disable mouse capture |
 | `--no-cache` | ignore and do not write the cache |
 | `--rebuild-cache` | discard the cache and rebuild, then exit |
 | `--color <WHEN>` | `auto`, `always` or `never` |
+| `--help` `--version` | usage and version, then exit |
+
+## Privacy
+
+`rewind` makes no network requests, ever, and never writes to `~/.claude`, ever. The only
+things it writes anywhere are its own search cache under `~/.cache/rewind` and whatever `e`
+exports to the file you name.
 
 ## License
 
