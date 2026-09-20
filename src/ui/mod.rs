@@ -6,6 +6,7 @@ pub mod clipboard;
 pub mod columns;
 pub mod diagnostics;
 pub mod export_prompt;
+pub mod help;
 pub mod input;
 pub mod listing;
 mod lru;

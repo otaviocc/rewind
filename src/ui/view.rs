@@ -14,10 +14,11 @@ use crate::ui::app::{App, Column, Loadable};
 use crate::ui::columns;
 use crate::ui::diagnostics;
 use crate::ui::export_prompt;
+use crate::ui::help;
 use crate::ui::search;
 
 const TITLE_PREFIX: &str = "rewind";
-const HINTS: &str = "? search";
+const HINTS: &str = "? keys";
 const SEPARATOR: &str = " · ";
 const ELIDED: &str = "…";
 const HINT_GAP: usize = 2;
@@ -158,6 +159,15 @@ fn content(area: Rect, buf: &mut Buffer, app: &App) {
     }
 }
 
+const fn centred(area: Rect, outer: Size) -> Rect {
+    Rect {
+        x: area.x.saturating_add(area.width.saturating_sub(outer.width).saturating_div(2)),
+        y: area.y.saturating_add(area.height.saturating_sub(outer.height).saturating_div(2)),
+        width: outer.width,
+        height: outer.height,
+    }
+}
+
 fn overlay(area: Rect, buf: &mut Buffer, app: &App) {
     if app.export_prompt_open() {
         export_overlay(area, buf, app);
@@ -167,6 +177,10 @@ fn overlay(area: Rect, buf: &mut Buffer, app: &App) {
         search_overlay(area, buf, app);
         return;
     }
+    if app.help_open() {
+        help_overlay(area, buf, app);
+        return;
+    }
     if !app.diagnostics_open() {
         return;
     }
@@ -174,12 +188,7 @@ fn overlay(area: Rect, buf: &mut Buffer, app: &App) {
     if outer.width <= 2 || outer.height <= 2 {
         return;
     }
-    let box_area = Rect {
-        x: area.x.saturating_add(area.width.saturating_sub(outer.width).saturating_div(2)),
-        y: area.y.saturating_add(area.height.saturating_sub(outer.height).saturating_div(2)),
-        width: outer.width,
-        height: outer.height,
-    };
+    let box_area = centred(area, outer);
     Clear.render(box_area, buf);
     let frame = Block::bordered()
         .title(diagnostics::TITLE)
@@ -198,17 +207,37 @@ fn overlay(area: Rect, buf: &mut Buffer, app: &App) {
     }
 }
 
+fn help_overlay(area: Rect, buf: &mut Buffer, app: &App) {
+    let outer = help::outer(Size::new(area.width, area.height));
+    if outer.width <= 2 || outer.height <= 2 {
+        return;
+    }
+    let box_area = centred(area, outer);
+    Clear.render(box_area, buf);
+    buf.set_style(box_area, app.theme().style(Element::HelpWindow));
+    let frame = Block::bordered()
+        .title(help::TITLE)
+        .border_style(app.theme().style(Element::Hint))
+        .title_style(app.theme().style(Element::HeaderTitle));
+    let inner = frame.inner(box_area);
+    frame.render(box_area, buf);
+
+    let lines = app.help_lines();
+    let top = app.help_top();
+    let last = lines.len().min(top.saturating_add(usize::from(inner.height)));
+    for (row_index, index) in (top..last).enumerate() {
+        let Some(line) = lines.get(index) else { continue };
+        let y = inner.y.saturating_add(u16::try_from(row_index).unwrap_or(u16::MAX));
+        painted(Rect { y, height: 1, ..inner }, buf, line);
+    }
+}
+
 fn search_overlay(area: Rect, buf: &mut Buffer, app: &App) {
     let outer = search::outer(Size::new(area.width, area.height));
     if outer.width <= 2 || outer.height <= search::HEADER_ROWS {
         return;
     }
-    let box_area = Rect {
-        x: area.x.saturating_add(area.width.saturating_sub(outer.width).saturating_div(2)),
-        y: area.y.saturating_add(area.height.saturating_sub(outer.height).saturating_div(2)),
-        width: outer.width,
-        height: outer.height,
-    };
+    let box_area = centred(area, outer);
     Clear.render(box_area, buf);
     let frame = Block::bordered()
         .title(search::TITLE)
@@ -253,12 +282,7 @@ fn export_overlay(area: Rect, buf: &mut Buffer, app: &App) {
     if outer.width <= 2 || outer.height <= 2 {
         return;
     }
-    let box_area = Rect {
-        x: area.x.saturating_add(area.width.saturating_sub(outer.width).saturating_div(2)),
-        y: area.y.saturating_add(area.height.saturating_sub(outer.height).saturating_div(2)),
-        width: outer.width,
-        height: outer.height,
-    };
+    let box_area = centred(area, outer);
     Clear.render(box_area, buf);
     let frame = Block::bordered()
         .title(export_prompt::TITLE)
@@ -781,6 +805,27 @@ mod tests {
     fn a_key_the_diagnostics_do_not_use_does_not_reach_the_view_underneath() {
         let mut app = app(Size::new(120, 24));
         app.apply(Action::ToggleDiagnostics);
+        app.apply(Action::ToggleFocusMode);
+        assert_eq!(app.mode(), Mode::Browse, "focus mode must not toggle behind the overlay");
+    }
+
+    #[test]
+    fn question_mark_opens_the_help_overlay_and_escape_closes_it() {
+        let mut app = app(Size::new(120, 24));
+        app.apply(Action::ToggleHelp);
+        let opened = screen(&frame(&app, Size::new(120, 24)));
+        assert!(opened.contains("Keys"), "{opened}");
+        assert!(opened.contains("move between columns"), "{opened}");
+
+        app.apply(Action::Ascend);
+        let closed = screen(&frame(&app, Size::new(120, 24)));
+        assert!(!closed.contains("move between columns"), "{closed}");
+    }
+
+    #[test]
+    fn a_key_the_help_overlay_does_not_use_does_not_reach_the_view_underneath() {
+        let mut app = app(Size::new(120, 24));
+        app.apply(Action::ToggleHelp);
         app.apply(Action::ToggleFocusMode);
         assert_eq!(app.mode(), Mode::Browse, "focus mode must not toggle behind the overlay");
     }

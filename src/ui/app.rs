@@ -23,7 +23,7 @@ use crate::render::message::{self, Anchor, Position, Transcript};
 use crate::render::{Branches, Ctx as RenderCtx, Expanded, Outputs, Overflow};
 use crate::theme::Theme;
 use crate::ui::input::{Action, CopyTarget, Motion};
-use crate::ui::{Options, columns, diagnostics, listing, search as ui_search};
+use crate::ui::{Options, columns, diagnostics, help, listing, search as ui_search};
 
 pub const CHROME_ROWS: u16 = 5;
 pub const DEBOUNCE: Duration = Duration::from_millis(80);
@@ -212,6 +212,8 @@ pub struct App {
     drift: BTreeMap<PathBuf, Diagnostics>,
     diagnostics_open: bool,
     diagnostics_pane: Pane,
+    help_open: bool,
+    help_pane: Pane,
     theme: Theme,
     cache_root: Option<PathBuf>,
     no_cache: bool,
@@ -327,6 +329,8 @@ impl App {
             drift: BTreeMap::new(),
             diagnostics_open: false,
             diagnostics_pane: Pane::default(),
+            help_open: false,
+            help_pane: Pane::default(),
             cache_root: options.cache_root.clone(),
             no_cache: options.no_cache,
             scan_requested: false,
@@ -727,6 +731,29 @@ impl App {
         Size::new(self.area.width, self.area.height.saturating_sub(CHROME_ROWS))
     }
 
+    pub const fn help_open(&self) -> bool {
+        self.help_open
+    }
+
+    pub const fn help_top(&self) -> usize {
+        self.help_pane.top
+    }
+
+    pub fn help_lines(&self) -> Vec<RenderedLine> {
+        help::lines(usize::from(help::inner(self.diagnostics_area()).width), &self.theme)
+    }
+
+    fn toggle_help(&mut self) {
+        self.help_open = !self.help_open;
+        self.help_pane = Pane::default();
+    }
+
+    fn scroll_help(&mut self, motion: Motion) {
+        let last = self.help_lines().len().saturating_sub(1);
+        let height = usize::from(help::inner(self.diagnostics_area()).height);
+        self.help_pane.top = listing::scroll_target(motion, self.help_pane.top, last, height);
+    }
+
     fn quit(&mut self) {
         self.quit = true;
         self.scan_gate.bump();
@@ -753,33 +780,12 @@ impl App {
             self.apply_search(action);
             return;
         }
+        if self.help_open {
+            self.apply_help(action);
+            return;
+        }
         if self.diagnostics_open {
-            match action {
-                Action::Quit => self.quit(),
-                Action::Resize(size) => self.area = size,
-                Action::ToggleDiagnostics | Action::Ascend => self.toggle_diagnostics(),
-                Action::Move(motion) => self.scroll_diagnostics(motion),
-                Action::Focus { .. }
-                | Action::Descend
-                | Action::ToggleFocusMode
-                | Action::NextCall { .. }
-                | Action::NextTurn { .. }
-                | Action::ToggleCall
-                | Action::ToggleAllCalls
-                | Action::CycleBranch
-                | Action::ToggleInjections
-                | Action::ToggleSearch
-                | Action::ToggleFilter
-                | Action::Copy(_)
-                | Action::ToggleExport
-                | Action::CycleExportFormat
-                | Action::Type(_)
-                | Action::Untype
-                | Action::Scroll { .. }
-                | Action::Click { .. }
-                | Action::Drag { .. }
-                | Action::Release => {}
-            }
+            self.apply_diagnostics(action);
             return;
         }
         if let Some(filter) = &self.filter {
@@ -817,6 +823,7 @@ impl App {
             Action::ToggleInjections => self.toggle_injections(),
             Action::ToggleDiagnostics => self.toggle_diagnostics(),
             Action::ToggleSearch => self.toggle_search(),
+            Action::ToggleHelp => self.toggle_help(),
             Action::ToggleFilter => self.toggle_filter(),
             Action::Copy(target) => self.copy(target),
             Action::ToggleExport => self.toggle_export(),
@@ -858,10 +865,71 @@ impl App {
             | Action::ToggleInjections
             | Action::ToggleDiagnostics
             | Action::ToggleSearch
+            | Action::ToggleHelp
             | Action::ToggleFilter
             | Action::Copy(_)
             | Action::ToggleExport
             | Action::CycleExportFormat
+            | Action::Scroll { .. }
+            | Action::Click { .. }
+            | Action::Drag { .. }
+            | Action::Release => {}
+        }
+    }
+
+    fn apply_help(&mut self, action: Action) {
+        match action {
+            Action::Quit => self.quit(),
+            Action::Resize(size) => self.area = size,
+            Action::ToggleHelp | Action::Ascend => self.toggle_help(),
+            Action::Move(motion) => self.scroll_help(motion),
+            Action::Focus { .. }
+            | Action::Descend
+            | Action::ToggleFocusMode
+            | Action::NextCall { .. }
+            | Action::NextTurn { .. }
+            | Action::ToggleCall
+            | Action::ToggleAllCalls
+            | Action::CycleBranch
+            | Action::ToggleInjections
+            | Action::ToggleDiagnostics
+            | Action::ToggleSearch
+            | Action::ToggleFilter
+            | Action::Copy(_)
+            | Action::ToggleExport
+            | Action::CycleExportFormat
+            | Action::Type(_)
+            | Action::Untype
+            | Action::Scroll { .. }
+            | Action::Click { .. }
+            | Action::Drag { .. }
+            | Action::Release => {}
+        }
+    }
+
+    fn apply_diagnostics(&mut self, action: Action) {
+        match action {
+            Action::Quit => self.quit(),
+            Action::Resize(size) => self.area = size,
+            Action::ToggleDiagnostics | Action::Ascend => self.toggle_diagnostics(),
+            Action::Move(motion) => self.scroll_diagnostics(motion),
+            Action::Focus { .. }
+            | Action::Descend
+            | Action::ToggleFocusMode
+            | Action::NextCall { .. }
+            | Action::NextTurn { .. }
+            | Action::ToggleCall
+            | Action::ToggleAllCalls
+            | Action::CycleBranch
+            | Action::ToggleInjections
+            | Action::ToggleHelp
+            | Action::ToggleSearch
+            | Action::ToggleFilter
+            | Action::Copy(_)
+            | Action::ToggleExport
+            | Action::CycleExportFormat
+            | Action::Type(_)
+            | Action::Untype
             | Action::Scroll { .. }
             | Action::Click { .. }
             | Action::Drag { .. }
@@ -894,6 +962,7 @@ impl App {
             | Action::ToggleInjections
             | Action::ToggleDiagnostics
             | Action::ToggleSearch
+            | Action::ToggleHelp
             | Action::ToggleFilter
             | Action::Copy(_)
             | Action::ToggleExport
@@ -982,6 +1051,7 @@ impl App {
             | Action::ToggleInjections
             | Action::ToggleDiagnostics
             | Action::ToggleSearch
+            | Action::ToggleHelp
             | Action::ToggleFilter
             | Action::ToggleExport
             | Action::Copy(_)
@@ -2684,6 +2754,39 @@ mod tests {
 
         app.apply(Action::Scroll { column: Column::Projects, delta: 1 });
         assert_eq!(app.pane(Column::Projects).top, 0, "the wheel did not reach the list underneath");
+    }
+
+    #[test]
+    fn the_mouse_does_nothing_while_the_help_overlay_is_open() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("a"), project("b")]));
+        app.apply(Action::ToggleHelp);
+        assert!(app.help_open());
+
+        app.apply(Action::Click { column: Column::Projects, row: 1 });
+        assert_eq!(app.pane(Column::Projects).selected, 0, "the click did not reach the list underneath");
+
+        app.apply(Action::Scroll { column: Column::Projects, delta: 1 });
+        assert_eq!(app.pane(Column::Projects).top, 0, "the wheel did not reach the list underneath");
+    }
+
+    #[test]
+    fn question_mark_and_f1_both_open_help_and_escape_closes_it() {
+        let mut app = app(Size::new(120, 30));
+        app.apply(Action::ToggleHelp);
+        assert!(app.help_open());
+        app.apply(Action::Ascend);
+        assert!(!app.help_open());
+    }
+
+    #[test]
+    fn s_opens_search_now_that_question_mark_opens_help() {
+        let mut app = app(Size::new(120, 30));
+        app.apply(Action::ToggleSearch);
+        assert!(app.search_open());
+        app.apply(Action::Ascend);
+        assert!(!app.search_open());
+        assert!(!app.help_open());
     }
 
     #[test]
