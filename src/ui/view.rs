@@ -28,6 +28,7 @@ const ELIDED: &str = "…";
 const HINT_GAP: usize = 2;
 const EDGE_PAD: u16 = 1;
 const CHEVRON: &str = "›";
+const BACK_CUE: &str = "‹";
 const GONE: &str = "⊘";
 const DOT: &str = "●";
 const INFO_WIDTH: u16 = 7;
@@ -156,11 +157,13 @@ fn progress(area: Rect, buf: &mut Buffer, app: &App) {
 }
 
 fn content(area: Rect, buf: &mut Buffer, app: &App) {
-    for (index, (which, x, width)) in columns::placement(area.width, app.mode()).into_iter().enumerate() {
+    let stacked = matches!(columns::layout(area.width), columns::Columns::Single { .. }) && app.mode() != Mode::Focus;
+    for (index, (which, x, width)) in columns::placement(area.width, app.mode(), app.focused()).into_iter().enumerate() {
         if index > 0 {
             divider(area.x.saturating_add(x).saturating_sub(1), area, buf, app.theme().style(Element::Hint));
         }
-        column(Rect { x: area.x.saturating_add(x), width, ..area }, buf, app, which, app.focused() == which);
+        let back = stacked && which != Column::Projects;
+        column(Rect { x: area.x.saturating_add(x), width, ..area }, buf, app, which, app.focused() == which, back);
     }
 }
 
@@ -319,12 +322,13 @@ fn divider(x: u16, area: Rect, buf: &mut Buffer, style: Style) {
     }
 }
 
-fn column(area: Rect, buf: &mut Buffer, app: &App, which: Column, focused: bool) {
+fn column(area: Rect, buf: &mut Buffer, app: &App, which: Column, focused: bool, back: bool) {
     if area.width == 0 || area.height == 0 {
         return;
     }
     let title = if focused { Element::ColumnTitleActive } else { Element::ColumnTitle };
-    row(area, buf, area.x, label(which), app.theme().style(title));
+    let heading = if back { format!("{BACK_CUE} {}", label(which)) } else { label(which).to_owned() };
+    row(area, buf, area.x, &heading, app.theme().style(title));
     let inner = Rect { y: area.y.saturating_add(1), height: area.height.saturating_sub(1), ..area };
     match which {
         Column::Projects => projects_rows(inner, buf, app, focused),
@@ -646,12 +650,54 @@ mod tests {
     }
 
     #[test]
-    fn a_narrow_terminal_drops_the_projects_column() {
+    fn a_narrow_terminal_shows_one_pane_at_a_time() {
         let app = app(Size::new(40, 24));
         let buffer = frame(&app, Size::new(40, 24));
         let header = text_row(&buffer, 2);
-        assert!(!header.contains("Projects"), "{header}");
+        assert!(header.contains("Projects"), "{header}");
+        assert!(!header.contains("Sessions"), "{header}");
+        assert!(!header.contains("Conversation"), "{header}");
+        let active = app.theme().style(Element::ColumnTitleActive).fg.unwrap_or_default();
+        assert_eq!(buffer[(0, 2)].fg, active, "the sole visible pane should read as focused");
+    }
+
+    #[test]
+    fn a_narrow_terminal_shows_a_back_cue_once_a_pane_is_not_the_first() {
+        let mut app = app(Size::new(40, 24));
+        app.apply(Action::Descend);
+        let buffer = frame(&app, Size::new(40, 24));
+        let header = text_row(&buffer, 2);
+        assert!(header.trim_start().starts_with(BACK_CUE), "{header}");
         assert!(header.contains("Sessions"), "{header}");
+
+        app.apply(Action::Ascend);
+        let buffer = frame(&app, Size::new(40, 24));
+        let header = text_row(&buffer, 2);
+        assert!(!header.contains(BACK_CUE), "{header}");
+        assert!(header.contains("Projects"), "{header}");
+    }
+
+    #[test]
+    fn resizing_from_wide_to_narrow_keeps_the_focused_column_visible_and_focused() {
+        let mut app = app(Size::new(120, 24));
+        let buffer = frame(&app, Size::new(120, 24));
+        let header = text_row(&buffer, 2);
+        assert!(header.contains("Projects"), "{header}");
+
+        app.apply(Action::Resize(Size::new(40, 24)));
+        let buffer = frame(&app, Size::new(40, 24));
+        let header = text_row(&buffer, 2);
+        assert!(header.contains("Projects"), "{header}");
+        assert!(!header.contains("Sessions"), "{header}");
+        let active = app.theme().style(Element::ColumnTitleActive).fg.unwrap_or_default();
+        assert_eq!(buffer[(0, 2)].fg, active, "focus should still read as visible after the resize");
+
+        app.apply(Action::Resize(Size::new(120, 24)));
+        let buffer = frame(&app, Size::new(120, 24));
+        let header = text_row(&buffer, 2);
+        assert!(header.contains("Projects"), "{header}");
+        assert!(header.contains("Sessions"), "{header}");
+        assert!(header.contains("Conversation"), "{header}");
     }
 
     #[test]
@@ -815,7 +861,7 @@ mod tests {
         app.set_live(vec![live("s1", Status::Busy, None)]);
 
         let buffer = frame(&app, Size::new(120, 24));
-        let sessions_x = columns::placement(120, Mode::Browse)
+        let sessions_x = columns::placement(120, Mode::Browse, Column::Projects)
             .into_iter()
             .find_map(|(column, x, _)| (column == Column::Sessions).then_some(x))
             .expect("a sessions column");
@@ -1276,7 +1322,7 @@ mod tests {
         let resting = app.theme().style(Element::ColumnTitle).fg.unwrap_or_default();
         assert_ne!(active, resting, "the two title colours must differ or the cue says nothing");
 
-        for (column, x, _) in columns::placement(120, Mode::Browse) {
+        for (column, x, _) in columns::placement(120, Mode::Browse, Column::Projects) {
             let want = if column == Column::Projects { active } else { resting };
             assert_eq!(buffer[(x, 2)].fg, want, "the {column:?} header at {x}");
         }
@@ -1290,7 +1336,7 @@ mod tests {
         let active = app.theme().style(Element::ColumnTitleActive).fg.unwrap_or_default();
         let resting = app.theme().style(Element::ColumnTitle).fg.unwrap_or_default();
 
-        for (column, x, _) in columns::placement(120, Mode::Browse) {
+        for (column, x, _) in columns::placement(120, Mode::Browse, Column::Projects) {
             let want = if column == Column::Sessions { active } else { resting };
             assert_eq!(buffer[(x, 2)].fg, want, "the {column:?} header at {x}");
         }
@@ -1306,7 +1352,7 @@ mod tests {
         let cursor = app.theme().style(Element::CursorLine).bg.unwrap_or_default();
         assert_ne!(selection, cursor, "the two bands must differ or the cue says nothing");
 
-        let sessions_x = columns::placement(120, Mode::Browse)
+        let sessions_x = columns::placement(120, Mode::Browse, Column::Projects)
             .into_iter()
             .find_map(|(column, x, _)| (column == Column::Sessions).then_some(x))
             .expect("a sessions column");
@@ -1328,7 +1374,7 @@ mod tests {
         let buffer = frame(&app, Size::new(120, 24));
         let selection = app.theme().style(Element::Selection);
 
-        let width = columns::placement(120, Mode::Browse)
+        let width = columns::placement(120, Mode::Browse, Column::Projects)
             .into_iter()
             .find_map(|(column, _, width)| (column == Column::Projects).then_some(width))
             .expect("a projects column");
@@ -1349,7 +1395,7 @@ mod tests {
         app.apply(Action::NextCall { forward: true });
         assert!(app.cursor_line().is_some(), "the call cursor never landed on a tool call");
 
-        let x = columns::placement(120, Mode::Browse)
+        let x = columns::placement(120, Mode::Browse, Column::Projects)
             .into_iter()
             .find_map(|(column, x, _)| (column == Column::Conversation).then_some(x))
             .expect("a conversation column");
@@ -1373,7 +1419,7 @@ mod tests {
         app.set_sessions(app.generation(), vec![session("s1", "a session")]);
         with_conversation(&mut app, "read the grid scanner back to me");
 
-        let x = columns::placement(120, Mode::Browse)
+        let x = columns::placement(120, Mode::Browse, Column::Projects)
             .into_iter()
             .find_map(|(column, x, _)| (column == Column::Conversation).then_some(x))
             .expect("a conversation column");

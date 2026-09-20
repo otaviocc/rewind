@@ -93,7 +93,7 @@ fn key_line(keys: &str, meaning: &str, width: usize, theme: &Theme) -> RenderedL
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::app::Mode;
+    use crate::ui::app::{Column, Mode};
     use crate::ui::input::{self, Viewport};
     use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn every_key_it_advertises_is_actually_bound() {
-        let viewport = Viewport { area: Size::new(120, 24), mode: Mode::Browse, text_entry: false };
+        let viewport = Viewport { area: Size::new(120, 24), mode: Mode::Browse, focused: Column::Projects, text_entry: false };
         for (_, keys) in SECTIONS {
             for (keys, _) in *keys {
                 for token in keys.split(' ') {

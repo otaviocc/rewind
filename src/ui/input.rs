@@ -58,6 +58,7 @@ pub enum Action {
 pub struct Viewport {
     pub area: Size,
     pub mode: Mode,
+    pub focused: Column,
     pub text_entry: bool,
 }
 
@@ -71,7 +72,7 @@ pub fn action(event: &Event, viewport: Viewport) -> Option<Action> {
 }
 
 fn mouse_action(mouse: MouseEvent, viewport: Viewport) -> Option<Action> {
-    let hit = columns::hit(viewport.area, viewport.mode, mouse.column, mouse.row);
+    let hit = columns::hit(viewport.area, viewport.mode, viewport.focused, mouse.column, mouse.row);
     match mouse.kind {
         MouseEventKind::ScrollDown => hit.map(|hit| Action::Scroll { column: hit.column, delta: WHEEL_LINES }),
         MouseEventKind::ScrollUp => hit.map(|hit| Action::Scroll { column: hit.column, delta: -WHEEL_LINES }),
@@ -163,7 +164,7 @@ mod tests {
     }
 
     fn viewport() -> Viewport {
-        Viewport { area: Size::new(120, 24), mode: Mode::Browse, text_entry: false }
+        Viewport { area: Size::new(120, 24), mode: Mode::Browse, focused: Column::Projects, text_entry: false }
     }
 
     fn mouse(kind: MouseEventKind, column: u16, row: u16) -> Event {
@@ -222,7 +223,7 @@ mod tests {
     }
 
     fn text_viewport() -> Viewport {
-        Viewport { area: Size::new(120, 24), mode: Mode::Browse, text_entry: true }
+        Viewport { area: Size::new(120, 24), mode: Mode::Browse, focused: Column::Projects, text_entry: true }
     }
 
     #[test]
@@ -372,10 +373,19 @@ mod tests {
 
     #[test]
     fn a_click_in_focus_mode_always_hits_the_conversation() {
-        let focused = Viewport { area: Size::new(120, 24), mode: Mode::Focus, text_entry: false };
+        let focused = Viewport { area: Size::new(120, 24), mode: Mode::Focus, focused: Column::Projects, text_entry: false };
         assert_eq!(
             action(&mouse(MouseEventKind::Down(MouseButton::Left), 5, 5), focused),
             Some(Action::Click { column: Column::Conversation, row: 2 })
+        );
+    }
+
+    #[test]
+    fn a_click_on_a_narrow_terminal_always_hits_the_focused_column() {
+        let narrow = Viewport { area: Size::new(40, 24), mode: Mode::Browse, focused: Column::Sessions, text_entry: false };
+        assert_eq!(
+            action(&mouse(MouseEventKind::Down(MouseButton::Left), 39, 5), narrow),
+            Some(Action::Click { column: Column::Sessions, row: 2 })
         );
     }
 }

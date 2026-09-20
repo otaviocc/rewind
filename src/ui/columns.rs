@@ -17,16 +17,12 @@ pub fn narrow() -> u16 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Columns {
     Three { projects: u16, sessions: u16, conversation: u16 },
-    Two { sessions: u16, conversation: u16 },
+    Single { width: u16 },
 }
 
 pub fn layout(width: u16) -> Columns {
     if width < narrow() {
-        let (_, narrow_shares) = SHARES.split_at_checked(1).unwrap_or((&SHARES, &[]));
-        let widths = split(width, narrow_shares);
-        let sessions = widths.first().copied().unwrap_or(0);
-        let conversation = widths.get(1).copied().unwrap_or(0);
-        return Columns::Two { sessions, conversation };
+        return Columns::Single { width };
     }
     let widths = split(width, &SHARES);
     let projects = widths.first().copied().unwrap_or(0);
@@ -40,7 +36,8 @@ pub fn conversation_width(area: Size, mode: Mode) -> u16 {
         return area.width;
     }
     match layout(area.width) {
-        Columns::Three { conversation, .. } | Columns::Two { conversation, .. } => conversation,
+        Columns::Three { conversation, .. } => conversation,
+        Columns::Single { width } => width,
     }
 }
 
@@ -48,7 +45,7 @@ pub fn conversation_height(area: Size) -> usize {
     usize::from(area.height.saturating_sub(CHROME_ROWS)).max(1)
 }
 
-pub fn placement(width: u16, mode: Mode) -> Vec<(Column, u16, u16)> {
+pub fn placement(width: u16, mode: Mode, focused: Column) -> Vec<(Column, u16, u16)> {
     if mode == Mode::Focus {
         return vec![(Column::Conversation, 0, width)];
     }
@@ -62,10 +59,7 @@ pub fn placement(width: u16, mode: Mode) -> Vec<(Column, u16, u16)> {
                 (Column::Conversation, x2.saturating_add(1), conversation),
             ]
         }
-        Columns::Two { sessions, conversation } => {
-            let x1 = sessions;
-            vec![(Column::Sessions, 0, sessions), (Column::Conversation, x1.saturating_add(1), conversation)]
-        }
+        Columns::Single { width } => vec![(focused, 0, width)],
     }
 }
 
@@ -75,7 +69,7 @@ pub struct Hit {
     pub row: usize,
 }
 
-pub fn hit(area: Size, mode: Mode, x: u16, y: u16) -> Option<Hit> {
+pub fn hit(area: Size, mode: Mode, focused: Column, x: u16, y: u16) -> Option<Hit> {
     if y < CONTENT_TOP {
         return None;
     }
@@ -84,7 +78,7 @@ pub fn hit(area: Size, mode: Mode, x: u16, y: u16) -> Option<Hit> {
     if row >= height {
         return None;
     }
-    placement(area.width, mode)
+    placement(area.width, mode, focused)
         .into_iter()
         .find(|&(_, start, width)| x >= start && x < start.saturating_add(width))
         .map(|(column, _, _)| Hit { column, row })
@@ -132,9 +126,9 @@ mod tests {
     }
 
     #[test]
-    fn a_narrow_terminal_drops_the_projects_column() {
-        assert!(matches!(layout(narrow().saturating_sub(1)), Columns::Two { .. }));
-        assert!(matches!(layout(40), Columns::Two { .. }));
+    fn a_narrow_terminal_shows_one_pane_at_a_time() {
+        assert!(matches!(layout(narrow().saturating_sub(1)), Columns::Single { .. }));
+        assert!(matches!(layout(40), Columns::Single { .. }));
     }
 
     #[test]
@@ -150,7 +144,7 @@ mod tests {
             layout(narrow()),
             Columns::Three { projects: MIN_WIDTH, sessions: MIN_WIDTH, conversation: MIN_WIDTH.saturating_mul(2) }
         );
-        assert!(matches!(layout(narrow().saturating_sub(1)), Columns::Two { .. }));
+        assert!(matches!(layout(narrow().saturating_sub(1)), Columns::Single { .. }));
     }
 
     #[test]
@@ -170,9 +164,8 @@ mod tests {
                     let total = projects.saturating_add(sessions).saturating_add(conversation);
                     assert!(total <= width.max(3), "{width} -> overflow");
                 }
-                Columns::Two { sessions, conversation } => {
-                    let total = sessions.saturating_add(conversation);
-                    assert!(total <= width.max(2), "{width} -> overflow");
+                Columns::Single { width: pane } => {
+                    assert!(pane <= width.max(1), "{width} -> overflow");
                 }
             }
         }
@@ -184,6 +177,12 @@ mod tests {
     }
 
     #[test]
+    fn the_conversation_column_gets_the_full_width_on_a_narrow_terminal() {
+        let area = Size::new(40, 24);
+        assert_eq!(conversation_width(area, Mode::Browse), 40);
+    }
+
+    #[test]
     fn the_conversation_height_matches_the_rows_a_list_column_gets() {
         let area = Size::new(60, 24);
         assert_eq!(conversation_height(area), usize::from(area.height.saturating_sub(CHROME_ROWS)));
@@ -191,13 +190,13 @@ mod tests {
 
     #[test]
     fn placement_in_focus_mode_is_the_conversation_alone() {
-        let placed = placement(60, Mode::Focus);
+        let placed = placement(60, Mode::Focus, Column::Projects);
         assert_eq!(placed, vec![(Column::Conversation, 0, 60)]);
     }
 
     #[test]
     fn placement_lists_three_columns_left_to_right_with_a_divider_gap() {
-        let placed = placement(120, Mode::Browse);
+        let placed = placement(120, Mode::Browse, Column::Projects);
         let Columns::Three { projects, sessions, conversation } = layout(120) else {
             panic!("120 columns should keep three panes")
         };
@@ -212,50 +211,65 @@ mod tests {
     }
 
     #[test]
-    fn placement_drops_projects_on_a_narrow_terminal() {
-        let placed = placement(40, Mode::Browse);
-        assert_eq!(placed.len(), 2);
-        assert_eq!(placed.first().map(|&(column, ..)| column), Some(Column::Sessions));
+    fn placement_shows_only_the_focused_column_on_a_narrow_terminal() {
+        for column in [Column::Projects, Column::Sessions, Column::Conversation] {
+            assert_eq!(placement(40, Mode::Browse, column), vec![(column, 0, 40)]);
+        }
     }
 
     #[test]
     fn a_click_above_the_column_label_hits_nothing() {
-        assert_eq!(hit(Size::new(120, 24), Mode::Browse, 5, 0), None);
-        assert_eq!(hit(Size::new(120, 24), Mode::Browse, 5, 2), None);
+        assert_eq!(hit(Size::new(120, 24), Mode::Browse, Column::Projects, 5, 0), None);
+        assert_eq!(hit(Size::new(120, 24), Mode::Browse, Column::Projects, 5, 2), None);
     }
 
     #[test]
     fn a_click_on_a_divider_hits_nothing() {
         let Columns::Three { projects, .. } = layout(120) else { panic!("120 columns should keep three panes") };
-        assert_eq!(hit(Size::new(120, 24), Mode::Browse, projects, 3), None);
+        assert_eq!(hit(Size::new(120, 24), Mode::Browse, Column::Projects, projects, 3), None);
     }
 
     #[test]
     fn a_click_past_the_last_content_row_hits_nothing() {
-        assert_eq!(hit(Size::new(120, 24), Mode::Browse, 5, 22), None);
-        assert_eq!(hit(Size::new(120, 24), Mode::Browse, 5, 23), None);
+        assert_eq!(hit(Size::new(120, 24), Mode::Browse, Column::Projects, 5, 22), None);
+        assert_eq!(hit(Size::new(120, 24), Mode::Browse, Column::Projects, 5, 23), None);
     }
 
     #[test]
     fn a_click_resolves_to_the_column_and_row_under_the_pointer() {
         let Columns::Three { projects, sessions, .. } = layout(120) else { panic!("120 columns should keep three panes") };
-        assert_eq!(hit(Size::new(120, 24), Mode::Browse, 5, 3), Some(Hit { column: Column::Projects, row: 0 }));
+        assert_eq!(hit(Size::new(120, 24), Mode::Browse, Column::Projects, 5, 3), Some(Hit { column: Column::Projects, row: 0 }));
         assert_eq!(
-            hit(Size::new(120, 24), Mode::Browse, projects.saturating_add(2), 5),
+            hit(Size::new(120, 24), Mode::Browse, Column::Projects, projects.saturating_add(2), 5),
             Some(Hit { column: Column::Sessions, row: 2 })
         );
         let conversation_x = projects.saturating_add(1).saturating_add(sessions).saturating_add(1);
-        assert_eq!(hit(Size::new(120, 24), Mode::Browse, conversation_x, 3), Some(Hit { column: Column::Conversation, row: 0 }));
+        assert_eq!(
+            hit(Size::new(120, 24), Mode::Browse, Column::Projects, conversation_x, 3),
+            Some(Hit { column: Column::Conversation, row: 0 })
+        );
+    }
+
+    #[test]
+    fn a_click_on_a_narrow_terminal_always_hits_the_focused_column() {
+        assert_eq!(hit(Size::new(40, 24), Mode::Browse, Column::Sessions, 0, 3), Some(Hit { column: Column::Sessions, row: 0 }));
+        assert_eq!(hit(Size::new(40, 24), Mode::Browse, Column::Sessions, 39, 3), Some(Hit { column: Column::Sessions, row: 0 }));
     }
 
     #[test]
     fn a_click_in_focus_mode_always_hits_the_conversation() {
-        assert_eq!(hit(Size::new(60, 24), Mode::Focus, 0, 3), Some(Hit { column: Column::Conversation, row: 0 }));
-        assert_eq!(hit(Size::new(60, 24), Mode::Focus, 59, 3), Some(Hit { column: Column::Conversation, row: 0 }));
+        assert_eq!(
+            hit(Size::new(60, 24), Mode::Focus, Column::Projects, 0, 3),
+            Some(Hit { column: Column::Conversation, row: 0 })
+        );
+        assert_eq!(
+            hit(Size::new(60, 24), Mode::Focus, Column::Projects, 59, 3),
+            Some(Hit { column: Column::Conversation, row: 0 })
+        );
     }
 
     #[test]
     fn a_click_on_a_zero_size_terminal_does_not_panic() {
-        assert_eq!(hit(Size::new(0, 0), Mode::Browse, 0, 0), None);
+        assert_eq!(hit(Size::new(0, 0), Mode::Browse, Column::Projects, 0, 0), None);
     }
 }
