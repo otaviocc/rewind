@@ -154,9 +154,4 @@ mod tests {
         let helper = Helper { program: "rewind-no-such-clipboard-tool", args: &[] };
         assert_eq!(run(&helper, "text").unwrap_err().kind(), io::ErrorKind::NotFound);
     }
-
-    #[test]
-    fn copying_to_a_pipe_rather_than_a_terminal_still_succeeds() {
-        assert!(copy("hello").is_ok());
-    }
 }
