@@ -74,7 +74,8 @@ cargo install --locked --path .
 
 Mouse wheel scrolls whichever column is under the pointer, not whichever has focus. Clicking
 a row selects it, clicking a collapsed tool call expands it, and clicking a subagent call
-enters it. `--no-mouse` turns capture off.
+enters it. Dragging in the conversation selects its lines and copies them to the clipboard
+on release. `--no-mouse` turns capture off.
 
 ## Themes
 
