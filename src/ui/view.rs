@@ -373,6 +373,12 @@ fn timestamp_of(at: std::time::SystemTime) -> jiff::Timestamp {
 
 fn statusbar(area: Rect, buf: &mut Buffer, app: &App) {
     let area = padded(area);
+    if let Some(notice) = app.notice() {
+        let error = notice.starts_with("clipboard unavailable");
+        let element = if error { Element::StatusError } else { Element::StatusNotice };
+        row(area, buf, area.x, notice, app.theme().style(element));
+        return;
+    }
     if let Some(status) = app.filter_status() {
         row(area, buf, area.x, &status, app.theme().style(Element::Status));
         return;
@@ -428,7 +434,7 @@ mod tests {
     use crate::domain::session::{Session, TitleSource};
     use crate::ui::Options;
     use crate::ui::app::{Mode, Pane};
-    use crate::ui::input::{Action, Motion};
+    use crate::ui::input::{Action, CopyTarget, Motion};
 
     fn ctx() -> Ctx {
         Ctx { now: "2026-01-12T00:00:00Z".parse().expect("a valid instant") }
@@ -605,6 +611,24 @@ mod tests {
         assert!(status.contains("s1"), "{status}");
         assert!(status.contains("6 msgs"), "{status}");
         assert!(status.contains("main"), "{status}");
+    }
+
+    #[test]
+    fn a_copy_notice_takes_the_status_row_and_the_next_action_restores_the_session_line() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("a", true)]));
+        let generation = app.generation();
+        app.set_sessions(generation, vec![session("s1", "hello there")]);
+
+        app.apply(Action::Copy(CopyTarget::Message));
+        let buffer = frame(&app, Size::new(120, 24));
+        let status = text_row(&buffer, 23);
+        assert!(status.contains("nothing to copy"), "{status}");
+
+        app.apply(Action::ToggleInjections);
+        let buffer = frame(&app, Size::new(120, 24));
+        let status = text_row(&buffer, 23);
+        assert!(status.contains("s1"), "{status}");
     }
 
     fn drifting_session(id: &str) -> Session {

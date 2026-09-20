@@ -1,0 +1,68 @@
+---
+source: tests/export.rs
+assertion_line: 47
+expression: exported(BASELINE)
+---
+## you
+
+read the grid scanner back to me
+
+## claude · claude-opus-5
+
+> They want the scanner read back, not rewritten.
+
+The grid scanner walks one cell row at a time into a reused buffer.
+
+## claude · claude-opus-5
+
+```
+Bash {
+  "command": "wc -l src/engine/grid.rs",
+  "description": "Count the scanner lines"
+}
+```
+
+
+## claude · claude-opus-5
+
+```
+Agent {
+  "description": "Trace the grid scanner",
+  "prompt": "Find every caller of row_cells and report the hot path.",
+  "subagent_type": "Explore"
+}
+```
+
+
+## claude · claude-opus-5
+
+```
+Bash {
+  "command": "cargo build -v 2>&1",
+  "description": "Verbose build"
+}
+```
+
+
+## claude · claude-opus-5
+
+```
+Read {
+  "file_path": "/Users/fixture/Developer/holodeck/src/engine/grid.rs"
+}
+```
+
+
+## claude · claude-opus-5
+
+Two hundred and twelve lines, and no `serde_json` anywhere in it.
+
+## claude · claude-opus-5
+
+```
+Agent {
+  "description": "Review the grid scanner",
+  "prompt": "Load the code-review skill.",
+  "subagent_type": "general-purpose"
+}
+```

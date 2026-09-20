@@ -2,6 +2,7 @@
 
 pub mod age;
 pub mod app;
+pub mod clipboard;
 pub mod columns;
 pub mod diagnostics;
 pub mod input;
@@ -124,6 +125,11 @@ fn event_loop(
         }
         if let Some((hit, generation)) = app.take_hit_resolve() {
             worker::spawn_resolve_hit(tx, app.claude_dir().to_path_buf(), hit, generation);
+        }
+        if let Some(text) = app.take_copy()
+            && clipboard::copy(&text).is_err()
+        {
+            app.copy_failed();
         }
     }
 }

@@ -1,6 +1,7 @@
 //! The shell's state, and the reducer that is the only way to change it.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -16,11 +17,12 @@ use crate::domain::session::Session;
 use crate::domain::subagent::{Agent, Agents};
 use crate::domain::thread::{Conversation, NodeId, NodeKind, ThreadError};
 use crate::domain::tool;
+use crate::render::export;
 use crate::render::line::RenderedLine;
 use crate::render::message::{self, Anchor, Position, Transcript};
 use crate::render::{Branches, Ctx as RenderCtx, Expanded, Outputs, Overflow};
 use crate::theme::Theme;
-use crate::ui::input::{Action, Motion};
+use crate::ui::input::{Action, CopyTarget, Motion};
 use crate::ui::{Options, columns, diagnostics, listing, search as ui_search};
 
 pub const CHROME_ROWS: u16 = 5;
@@ -105,6 +107,10 @@ impl Rendered {
 
     pub const fn agents(&self) -> &Agents {
         &self.agents
+    }
+
+    pub const fn root(&self) -> Option<NodeId> {
+        self.root
     }
 
     fn walk(&self, branches: &Branches) -> Vec<NodeId> {
@@ -224,6 +230,8 @@ pub struct App {
     pending_scroll_uuid: Option<String>,
     pending_hit_agent: Option<String>,
     filter: Option<Filter>,
+    pending_copy: Option<String>,
+    notice: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -285,6 +293,8 @@ impl App {
             pending_scroll_uuid: None,
             pending_hit_agent: None,
             filter: None,
+            pending_copy: None,
+            notice: None,
         }
     }
 
@@ -458,6 +468,18 @@ impl App {
 
     pub const fn take_subagent_load(&mut self) -> Option<(Box<str>, PathBuf, u64)> {
         self.pending_subagent_load.take()
+    }
+
+    pub const fn take_copy(&mut self) -> Option<String> {
+        self.pending_copy.take()
+    }
+
+    pub fn notice(&self) -> Option<&str> {
+        self.notice.as_deref()
+    }
+
+    pub fn copy_failed(&mut self) {
+        self.notice = Some("clipboard unavailable".to_owned());
     }
 
     pub fn set_subagent(&mut self, generation: u64, result: Result<Arc<Conversation>, ThreadError>, path: PathBuf) {
@@ -668,6 +690,7 @@ impl App {
     }
 
     pub fn apply(&mut self, action: Action) {
+        self.notice = None;
         if self.search_open {
             self.apply_search(action);
             return;
@@ -689,6 +712,7 @@ impl App {
                 | Action::ToggleInjections
                 | Action::ToggleSearch
                 | Action::ToggleFilter
+                | Action::Copy(_)
                 | Action::Type(_)
                 | Action::Untype
                 | Action::Scroll { .. }
@@ -732,6 +756,7 @@ impl App {
             Action::ToggleDiagnostics => self.toggle_diagnostics(),
             Action::ToggleSearch => self.toggle_search(),
             Action::ToggleFilter => self.toggle_filter(),
+            Action::Copy(target) => self.copy(target),
             Action::Type(_) | Action::Untype => {}
             Action::Scroll { column, delta } => self.scroll_column(column, delta),
             Action::Click { column, row } => self.click(column, row),
@@ -769,6 +794,7 @@ impl App {
             | Action::ToggleDiagnostics
             | Action::ToggleSearch
             | Action::ToggleFilter
+            | Action::Copy(_)
             | Action::Scroll { .. }
             | Action::Click { .. } => {}
         }
@@ -800,9 +826,59 @@ impl App {
             | Action::ToggleDiagnostics
             | Action::ToggleSearch
             | Action::ToggleFilter
+            | Action::Copy(_)
             | Action::Scroll { .. }
             | Action::Click { .. } => {}
         }
+    }
+
+    fn copy(&mut self, target: CopyTarget) {
+        let text = match target {
+            CopyTarget::Message => self.copy_message(),
+            CopyTarget::Session => self.copy_session(),
+            CopyTarget::Resume => self.copy_resume(),
+        };
+        self.notice = Some(text.as_deref().map_or_else(|| "nothing to copy".to_owned(), |text| notice_for(target, text)));
+        self.pending_copy = text;
+    }
+
+    fn render_ctx<'a>(&'a self, rendered: &'a Rendered) -> RenderCtx<'a> {
+        let width = columns::conversation_width(self.area, self.mode);
+        self.view.ctx(usize::from(width), rendered.agents(), rendered.root(), &self.theme)
+    }
+
+    fn copy_message(&self) -> Option<String> {
+        let Loadable::Ready(rendered) = &self.conversation else { return None };
+        let position = rendered.transcript().position(self.conversation_pane.top)?;
+        export::message(rendered.conversation(), position.node, &self.render_ctx(rendered))
+    }
+
+    fn copy_session(&self) -> Option<String> {
+        let Loadable::Ready(rendered) = &self.conversation else { return None };
+        let text = export::session(rendered.conversation(), &self.render_ctx(rendered));
+        (!text.is_empty()).then_some(text)
+    }
+
+    fn copy_resume(&self) -> Option<String> {
+        let session = self.selected_session()?;
+        let mut command = String::new();
+        if let Some(path) = self.resume_cwd() {
+            let _ = write!(command, "cd {} && ", shell_quote(path));
+        }
+        let _ = write!(command, "claude --resume {}", session.id);
+        Some(command)
+    }
+
+    fn resume_cwd(&self) -> Option<&Path> {
+        if let Some(project) = self.selected_project()
+            && project.present
+        {
+            return Some(&project.path);
+        }
+        let Loadable::Ready(rendered) = &self.conversation else { return None };
+        let cwd = rendered.conversation().cwd()?;
+        let Loadable::Ready(projects) = &self.projects else { return None };
+        projects.iter().find(|project| project.present && project.path == cwd).map(|project| project.path.as_path())
     }
 
     fn toggle_injections(&mut self) {
@@ -1473,6 +1549,27 @@ fn matches_project(project: &Project, wanted: &str) -> bool {
     project.directory == wanted
         || project.path.display().to_string() == wanted
         || project.path.file_name().is_some_and(|name| name == wanted)
+}
+
+fn notice_for(target: CopyTarget, text: &str) -> String {
+    match target {
+        CopyTarget::Message => "copied the message".to_owned(),
+        CopyTarget::Session => {
+            let lines = text.lines().count();
+            let plural = if lines == 1 { "line" } else { "lines" };
+            format!("copied the session · {lines} {plural}")
+        }
+        CopyTarget::Resume => "copied the resume command".to_owned(),
+    }
+}
+
+fn shell_quote(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    if text.chars().all(|character| character.is_ascii_alphanumeric() || matches!(character, '/' | '-' | '_' | '.')) {
+        text.into_owned()
+    } else {
+        format!("'{}'", text.replace('\'', "'\\''"))
+    }
 }
 
 #[cfg(test)]
@@ -3034,5 +3131,65 @@ mod tests {
 
         assert_eq!(app.last(Column::Projects), 1);
         assert_eq!(app.selected_project().map(|project| project.directory.as_str()), Some("zzz"));
+    }
+
+    #[test]
+    fn copying_a_message_takes_the_one_under_the_viewport_top() {
+        let mut app = with_calls(Size::new(120, 30));
+        app.apply(Action::Copy(CopyTarget::Message));
+        let text = app.take_copy().expect("a message under the top line");
+        assert!(text.contains("do three things"), "{text}");
+    }
+
+    #[test]
+    fn copying_the_resume_command_prefixes_the_directory_only_while_it_exists() {
+        let mut present = app(Size::new(120, 30));
+        present.projects = Loadable::Ready(vec![project("present-project")]);
+        present.sessions = Loadable::Ready(vec![session("abc123")]);
+        present.apply(Action::Copy(CopyTarget::Resume));
+        let text = present.take_copy().expect("a resume command");
+        assert_eq!(text, "cd /Users/fixture/present-project && claude --resume abc123");
+
+        let mut gone_project = project("gone-project");
+        gone_project.present = false;
+        let mut gone = app(Size::new(120, 30));
+        gone.projects = Loadable::Ready(vec![gone_project]);
+        gone.sessions = Loadable::Ready(vec![session("abc123")]);
+        gone.apply(Action::Copy(CopyTarget::Resume));
+        let text = gone.take_copy().expect("a resume command with no directory");
+        assert_eq!(text, "claude --resume abc123", "a gone project is not worth a cd into nowhere");
+    }
+
+    #[test]
+    fn a_copy_is_handed_over_once_rather_than_on_every_poll() {
+        let mut app = with_calls(Size::new(120, 30));
+        app.apply(Action::Copy(CopyTarget::Message));
+        assert!(app.take_copy().is_some());
+        assert!(app.take_copy().is_none(), "one copy is handed over once");
+    }
+
+    #[test]
+    fn every_copy_leaves_a_confirmation_that_the_next_action_clears() {
+        let mut app = with_calls(Size::new(120, 30));
+        app.apply(Action::Copy(CopyTarget::Message));
+        assert!(app.notice().is_some());
+        app.apply(Action::Move(Motion::Line(1)));
+        assert!(app.notice().is_none(), "the next action clears the confirmation");
+    }
+
+    #[test]
+    fn copying_with_nothing_loaded_confirms_nothing_rather_than_panicking() {
+        let mut app = app(Size::new(120, 30));
+        app.apply(Action::Copy(CopyTarget::Message));
+        assert!(app.take_copy().is_none());
+        assert_eq!(app.notice(), Some("nothing to copy"));
+
+        app.apply(Action::Copy(CopyTarget::Session));
+        assert!(app.take_copy().is_none());
+        assert_eq!(app.notice(), Some("nothing to copy"));
+
+        app.apply(Action::Copy(CopyTarget::Resume));
+        assert!(app.take_copy().is_none());
+        assert_eq!(app.notice(), Some("nothing to copy"));
     }
 }

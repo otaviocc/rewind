@@ -1,0 +1,45 @@
+---
+source: tests/export.rs
+assertion_line: 52
+expression: exported(COMPACTED)
+---
+## you
+
+walk me through the interlock cache invalidation
+
+## claude · claude-opus-5
+
+It keys off the shard mtime and the file length.
+
+## you
+
+and when the length matches but the bytes changed?
+
+## claude · claude-opus-5
+
+Then the shard is stale and nothing notices.
+
+---
+_compacted · 948649 → 124177 tokens_
+---
+
+
+## summary
+
+This session is continued from a previous conversation that ran out of context. The work so far: the interlock cache keys off shard mtime and file length, which misses a same-length edit.
+
+## you
+
+so add a content hash
+
+## claude · claude-opus-5
+
+A hash of the first and last 4 KiB is enough.
+
+## you
+
+different subject entirely: the holodeck arch
+
+## claude · claude-opus-5
+
+The arch merge folds the base in the wrong direction.

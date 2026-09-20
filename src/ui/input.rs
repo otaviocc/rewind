@@ -17,6 +17,13 @@ pub enum Motion {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopyTarget {
+    Message,
+    Session,
+    Resume,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     Quit,
     Move(Motion),
@@ -33,6 +40,7 @@ pub enum Action {
     ToggleDiagnostics,
     ToggleSearch,
     ToggleFilter,
+    Copy(CopyTarget),
     Type(char),
     Untype,
     Resize(Size),
@@ -108,6 +116,9 @@ fn key_action(key: KeyEvent, text_entry: bool) -> Option<Action> {
         KeyCode::Char('D') => Some(Action::ToggleDiagnostics),
         KeyCode::Char('?') => Some(Action::ToggleSearch),
         KeyCode::Char('/') => Some(Action::ToggleFilter),
+        KeyCode::Char('y') => Some(Action::Copy(CopyTarget::Message)),
+        KeyCode::Char('Y') => Some(Action::Copy(CopyTarget::Session)),
+        KeyCode::Char('c') => Some(Action::Copy(CopyTarget::Resume)),
         KeyCode::Char('q') => Some(Action::Quit),
         _ => None,
     }
@@ -181,6 +192,9 @@ mod tests {
             (press(KeyCode::Char('D')), Action::ToggleDiagnostics),
             (press(KeyCode::Char('?')), Action::ToggleSearch),
             (press(KeyCode::Char('/')), Action::ToggleFilter),
+            (press(KeyCode::Char('y')), Action::Copy(CopyTarget::Message)),
+            (press(KeyCode::Char('Y')), Action::Copy(CopyTarget::Session)),
+            (press(KeyCode::Char('c')), Action::Copy(CopyTarget::Resume)),
             (press(KeyCode::Char('q')), Action::Quit),
             (control('c'), Action::Quit),
         ];
@@ -198,6 +212,14 @@ mod tests {
         assert_eq!(action(&press(KeyCode::Char('n')), text_viewport()), Some(Action::Type('n')));
         assert_eq!(action(&press(KeyCode::Char('j')), text_viewport()), Some(Action::Type('j')));
         assert_eq!(action(&press(KeyCode::Char('?')), text_viewport()), Some(Action::Type('?')));
+        assert_eq!(action(&press(KeyCode::Char('y')), text_viewport()), Some(Action::Type('y')));
+        assert_eq!(action(&press(KeyCode::Char('c')), text_viewport()), Some(Action::Type('c')));
+    }
+
+    #[test]
+    fn ctrl_c_still_quits_even_though_c_alone_now_copies() {
+        assert_eq!(action(&control('c'), viewport()), Some(Action::Quit));
+        assert_eq!(action(&press(KeyCode::Char('c')), viewport()), Some(Action::Copy(CopyTarget::Resume)));
     }
 
     #[test]
