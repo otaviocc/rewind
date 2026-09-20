@@ -1,14 +1,20 @@
 //! The query syntax: bare terms AND together, `"quoted phrases"`, `is:user|assistant|tool|
-//! thinking|any`, `project:name`, `-negation`. Anything unrecognized is a literal term.
+//! thinking|history|any`, `project:name`, `-negation`. Anything unrecognized is a literal
+//! term.
 //!
 //! A query that names no category searches `Category::Said` — what a human or the assistant
-//! wrote. `Said` is the default rather than a token, so it is not parsed and not in the help
-//! string; naming any other category is how the rest of the corpus is reached.
+//! wrote, in a transcript. `Said` is the default rather than a token, so it is not parsed and
+//! not in the help string; naming any other category is how the rest of the corpus is reached.
+//!
+//! The categories partition `(kind, field)` rather than `field` alone, because a
+//! `history.jsonl` record is a `UserPrompt` and would otherwise be admitted by both `Said`
+//! and `is:user`. History is weighted above every project shard and is largely unopenable, so
+//! it answers only to `is:history` and `is:any`.
 //!
 //! Both bare terms and phrases end up as literal byte strings to search for — a phrase is
 //! only a term that happened to contain spaces — so `Query` does not keep them apart.
 
-use crate::domain::cache::shard::Field;
+use crate::domain::cache::shard::{Field, Kind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
@@ -17,18 +23,25 @@ pub enum Category {
     Assistant,
     Tool,
     Thinking,
+    History,
     Any,
 }
 
 impl Category {
-    pub const fn matches(self, field: Field) -> bool {
+    pub const fn matches(self, kind: Kind, field: Field) -> bool {
+        if matches!(self, Self::Any) {
+            return true;
+        }
+        if matches!(kind, Kind::History) {
+            return matches!(self, Self::History);
+        }
         match self {
             Self::Said => matches!(field, Field::UserPrompt | Field::AssistantText),
             Self::User => matches!(field, Field::UserPrompt),
             Self::Assistant => matches!(field, Field::AssistantText),
             Self::Tool => matches!(field, Field::ToolInput | Field::ToolResult),
             Self::Thinking => matches!(field, Field::Thinking),
-            Self::Any => true,
+            Self::History | Self::Any => false,
         }
     }
 
@@ -38,6 +51,7 @@ impl Category {
             "assistant" => Some(Self::Assistant),
             "tool" => Some(Self::Tool),
             "thinking" => Some(Self::Thinking),
+            "history" => Some(Self::History),
             "any" => Some(Self::Any),
             _ => None,
         }
@@ -204,27 +218,56 @@ mod tests {
 
     #[test]
     fn category_matching_maps_tool_to_both_tool_fields() {
-        assert!(Category::Tool.matches(Field::ToolInput));
-        assert!(Category::Tool.matches(Field::ToolResult));
-        assert!(!Category::Tool.matches(Field::UserPrompt));
-        assert!(Category::User.matches(Field::UserPrompt));
-        assert!(!Category::User.matches(Field::AssistantText));
+        assert!(Category::Tool.matches(Kind::Transcript, Field::ToolInput));
+        assert!(Category::Tool.matches(Kind::Transcript, Field::ToolResult));
+        assert!(!Category::Tool.matches(Kind::Transcript, Field::UserPrompt));
+        assert!(Category::User.matches(Kind::Transcript, Field::UserPrompt));
+        assert!(!Category::User.matches(Kind::Transcript, Field::AssistantText));
     }
 
     #[test]
     fn the_said_category_takes_user_and_assistant_text_and_nothing_else() {
-        assert!(Category::Said.matches(Field::UserPrompt));
-        assert!(Category::Said.matches(Field::AssistantText));
-        assert!(!Category::Said.matches(Field::Thinking));
-        assert!(!Category::Said.matches(Field::ToolInput));
-        assert!(!Category::Said.matches(Field::ToolResult));
+        assert!(Category::Said.matches(Kind::Transcript, Field::UserPrompt));
+        assert!(Category::Said.matches(Kind::Transcript, Field::AssistantText));
+        assert!(!Category::Said.matches(Kind::Transcript, Field::Thinking));
+        assert!(!Category::Said.matches(Kind::Transcript, Field::ToolInput));
+        assert!(!Category::Said.matches(Kind::Transcript, Field::ToolResult));
     }
 
     #[test]
     fn the_any_category_takes_every_field() {
         for field in [Field::UserPrompt, Field::AssistantText, Field::Thinking, Field::ToolInput, Field::ToolResult] {
-            assert!(Category::Any.matches(field));
+            assert!(Category::Any.matches(Kind::Transcript, field));
         }
+    }
+
+    #[test]
+    fn a_history_record_answers_to_is_history_and_is_any_and_nothing_else() {
+        assert!(Category::History.matches(Kind::History, Field::UserPrompt));
+        assert!(Category::Any.matches(Kind::History, Field::UserPrompt));
+        assert!(!Category::Said.matches(Kind::History, Field::UserPrompt));
+        assert!(!Category::User.matches(Kind::History, Field::UserPrompt));
+    }
+
+    #[test]
+    fn is_history_takes_nothing_out_of_a_transcript() {
+        for field in [Field::UserPrompt, Field::AssistantText, Field::Thinking, Field::ToolInput, Field::ToolResult] {
+            assert!(!Category::History.matches(Kind::Transcript, field));
+            assert!(!Category::History.matches(Kind::Subagent, field));
+        }
+    }
+
+    #[test]
+    fn a_subagent_prompt_is_still_ordinary_conversation() {
+        assert!(Category::Said.matches(Kind::Subagent, Field::UserPrompt));
+        assert!(Category::User.matches(Kind::Subagent, Field::UserPrompt));
+    }
+
+    #[test]
+    fn is_history_parses_as_a_category_rather_than_a_literal_term() {
+        let query = parse("is:history grid");
+        assert_eq!(query.category, Some(Category::History));
+        assert_eq!(query.positive, ["grid"]);
     }
 
     #[test]

@@ -80,7 +80,7 @@ fn search_shard(entry: &ShardEntry, query: &Query, needles: &Needles, now_ms: i6
     let mut heap: BinaryHeap<Reverse<ScoredIndex>> = BinaryHeap::new();
 
     for (index, record) in shard.records().iter().enumerate() {
-        if !query.category.unwrap_or(Category::Said).matches(record.field) {
+        if !query.category.unwrap_or(Category::Said).matches(record.kind, record.field) {
             continue;
         }
         let Some(text) = shard.text(record) else { continue };
@@ -304,19 +304,46 @@ mod tests {
     }
 
     #[test]
-    fn the_history_shard_is_weighted_above_a_project_shard_for_an_otherwise_equal_hit() {
+    fn the_history_shard_is_weighted_above_a_project_shard_once_the_query_asks_for_both() {
         let corpus = corpus_with_history("grid scanner", "grid scanner reads back");
 
-        let hits = search(&corpus, &query::parse("grid scanner"), 1000);
+        let hits = search(&corpus, &query::parse("is:any grid scanner"), 1000);
         assert_eq!(hits.len(), 2);
         assert!(hits.first().is_some_and(|hit| hit.directory.is_none()), "the history hit should rank first");
     }
 
     #[test]
-    fn a_history_hit_repeating_a_transcript_hit_word_for_word_is_dropped() {
-        let corpus = corpus_with_history("grid scanner", "grid scanner");
+    fn a_bare_query_leaves_history_out_however_heavily_it_is_weighted() {
+        let corpus = corpus_with_history("grid scanner", "grid scanner reads back");
 
         let hits = search(&corpus, &query::parse("grid scanner"), 1000);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits.first().map(|hit| hit.kind), Some(Kind::Transcript));
+    }
+
+    #[test]
+    fn is_history_finds_the_prompt_a_bare_query_hid() {
+        let corpus = corpus_with_history("grid scanner", "grid scanner reads back");
+
+        let hits = search(&corpus, &query::parse("is:history grid scanner"), 1000);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits.first().map(|hit| hit.kind), Some(Kind::History));
+    }
+
+    #[test]
+    fn is_user_does_not_quietly_bring_history_back() {
+        let corpus = corpus_with_history("grid scanner", "grid scanner reads back");
+
+        let hits = search(&corpus, &query::parse("is:user grid scanner"), 1000);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits.first().map(|hit| hit.kind), Some(Kind::Transcript));
+    }
+
+    #[test]
+    fn a_history_hit_repeating_a_transcript_hit_word_for_word_is_dropped_under_is_any() {
+        let corpus = corpus_with_history("grid scanner", "grid scanner");
+
+        let hits = search(&corpus, &query::parse("is:any grid scanner"), 1000);
         assert_eq!(hits.len(), 1);
         assert_eq!(
             hits.first().map(|hit| hit.kind),
@@ -326,10 +353,19 @@ mod tests {
     }
 
     #[test]
+    fn is_history_still_answers_with_a_prompt_the_transcript_also_holds() {
+        let corpus = corpus_with_history("grid scanner", "grid scanner");
+
+        let hits = search(&corpus, &query::parse("is:history grid scanner"), 1000);
+        assert_eq!(hits.len(), 1, "naming history is asking for it, so there is nothing to deduplicate against");
+        assert_eq!(hits.first().map(|hit| hit.kind), Some(Kind::History));
+    }
+
+    #[test]
     fn a_history_hit_that_no_transcript_repeats_still_lists() {
         let corpus = corpus_with_history("grid scanner", "something else entirely");
 
-        let hits = search(&corpus, &query::parse("grid scanner"), 1000);
+        let hits = search(&corpus, &query::parse("is:any grid scanner"), 1000);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits.first().map(|hit| hit.kind), Some(Kind::History));
     }
@@ -338,7 +374,7 @@ mod tests {
     fn a_history_hit_is_kept_when_the_transcript_only_resembles_it() {
         let corpus = corpus_with_history("grid scanner", "grid scanner reads back");
 
-        let hits = search(&corpus, &query::parse("grid scanner"), 1000);
+        let hits = search(&corpus, &query::parse("is:any grid scanner"), 1000);
         assert!(hits.iter().any(|hit| hit.kind == Kind::History), "a near-match is a different prompt, not a duplicate");
         assert!(hits.iter().any(|hit| hit.kind == Kind::Transcript));
     }

@@ -16,7 +16,7 @@ pub const HEADER_ROWS: u16 = 2;
 const PROMPT_PREFIX: &str = "? ";
 const PLACEHOLDER: &str = "type to search…";
 const SNIPPET_GAP: &str = "  ";
-const HELP: &str = "is:user|assistant|tool|thinking|any · project:name · -term · \"phrase\"";
+const HELP: &str = "is:user|assistant|tool|thinking|history|any · project:name · -term";
 
 pub fn outer(area: Size) -> Size {
     let width = area.width.saturating_sub(MARGIN).min(MAX_WIDTH);
@@ -75,11 +75,14 @@ pub fn rows(hits: &[Hit], snippets: &[Option<String>], width: usize, theme: &The
 }
 
 fn row(hit: &Hit, snippet: Option<&str>, width: usize, theme: &Theme) -> RenderedLine {
-    let place = hit.directory.as_deref().unwrap_or("history");
-    let text = if hit.kind == Kind::Subagent {
-        format!("{place} · subagent · {} · L{}", field_label(hit.kind, hit.field), hit.line_no)
-    } else {
-        format!("{place} · {} · L{}", field_label(hit.kind, hit.field), hit.line_no)
+    let text = match (hit.kind, hit.directory.as_deref()) {
+        (Kind::History, _) => format!("history · L{}", hit.line_no),
+        (Kind::Subagent, place) => {
+            format!("{} · subagent · {} · L{}", place.unwrap_or("history"), field_label(hit.field), hit.line_no)
+        }
+        (Kind::Transcript, place) => {
+            format!("{} · {} · L{}", place.unwrap_or("history"), field_label(hit.field), hit.line_no)
+        }
     };
     let mut line = RenderedLine::default();
     line.push(StyledSpan::new(truncate(&text, width), theme.style(Element::Body)));
@@ -97,14 +100,13 @@ fn collapsed(snippet: &str) -> String {
     snippet.split_whitespace().collect::<Vec<&str>>().join(" ")
 }
 
-const fn field_label(kind: Kind, field: Field) -> &'static str {
-    match (kind, field) {
-        (Kind::History, _) => "history",
-        (_, Field::UserPrompt) => "prompt",
-        (_, Field::AssistantText) => "assistant",
-        (_, Field::Thinking) => "thinking",
-        (_, Field::ToolInput) => "tool input",
-        (_, Field::ToolResult) => "tool result",
+const fn field_label(field: Field) -> &'static str {
+    match field {
+        Field::UserPrompt => "prompt",
+        Field::AssistantText => "assistant",
+        Field::Thinking => "thinking",
+        Field::ToolInput => "tool input",
+        Field::ToolResult => "tool result",
     }
 }
 
@@ -198,9 +200,9 @@ mod tests {
     }
 
     #[test]
-    fn a_history_hit_is_labelled_history_regardless_of_field() {
+    fn a_history_hit_says_history_once_and_not_as_its_own_project() {
         let rendered = row(&hit(None, Kind::History, Field::UserPrompt, 3), None, 80, &theme());
-        assert!(rendered.text().starts_with("history · history"));
+        assert_eq!(rendered.text(), "history · L3");
     }
 
     #[test]
@@ -236,7 +238,7 @@ mod tests {
     #[test]
     fn a_snippet_that_spans_lines_is_flattened_onto_the_one_row() {
         let rendered = row(&hit(None, Kind::History, Field::UserPrompt, 1), Some("first\n  second\tthird"), 80, &theme());
-        assert_eq!(rendered.text(), "history · history · L1  first second third");
+        assert_eq!(rendered.text(), "history · L1  first second third");
     }
 
     #[test]
