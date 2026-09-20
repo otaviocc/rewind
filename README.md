@@ -40,6 +40,10 @@ The column with the keyboard names itself twice: its heading takes the accent co
 its selected row takes a solid band while the other columns keep a faint one. `Tab` moves
 both.
 
+The status line names the selected session, then the focused column's position and
+percentage through its rows (nothing worth reading if it only has one), then `focus` when
+`f` is on.
+
 *Under construction — see the milestones for what works today.*
 
 ## Install
@@ -71,6 +75,7 @@ cargo install --locked --path .
 | `e` | export to a file |
 | `D` | what could not be read · `Esc` closes it |
 | `?` `F1` | every key and what it does · `Esc` closes it |
+| `r` | rescan `~/.claude` for new and changed projects |
 | `q` | quit |
 
 Mouse wheel scrolls whichever column is under the pointer, not whichever has focus. Clicking
