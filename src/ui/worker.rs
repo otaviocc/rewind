@@ -15,6 +15,7 @@ use crate::domain::cache::build::{self, Control};
 use crate::domain::cache::shard::Kind;
 use crate::domain::cache::store::{self, Outcome, Plan};
 use crate::domain::cancel::Cancel;
+use crate::domain::live::{self, Live};
 use crate::domain::project::{self, Project, ProjectError};
 use crate::domain::search::corpus::{self, Corpus, ShardEntry};
 use crate::domain::search::engine::Hit;
@@ -39,6 +40,7 @@ pub enum Wake {
     ShardReady { generation: u64, entry: ShardEntry },
     CorpusLoaded(Arc<Corpus>),
     HitResolved { generation: u64, target: Option<Opened> },
+    LiveScanned(Vec<Live>),
     InputLost(String),
 }
 
@@ -78,6 +80,14 @@ pub fn spawn_sessions_load(tx: &Sender<Wake>, project_dir: PathBuf, generation: 
     std::thread::spawn(move || {
         let sessions = session::discover(&project_dir);
         let _ = tx.send(Wake::SessionsLoaded { generation, sessions });
+    });
+}
+
+pub fn spawn_live_scan(tx: &Sender<Wake>, claude_dir: PathBuf) {
+    let tx = tx.clone();
+    std::thread::spawn(move || {
+        let live = live::scan(&claude_dir);
+        let _ = tx.send(Wake::LiveScanned(live));
     });
 }
 

@@ -11,6 +11,7 @@ use ratatui::layout::Size;
 use crate::ctx::Ctx;
 use crate::domain::cancel::{Cancel, Gate};
 use crate::domain::diagnostics::Diagnostics;
+use crate::domain::live::Live;
 use crate::domain::project::{Project, ProjectError};
 use crate::domain::search::{self, corpus::Corpus, engine::Hit, resolve::Opened};
 use crate::domain::session::Session;
@@ -27,6 +28,7 @@ use crate::ui::{Options, columns, diagnostics, help, listing, search as ui_searc
 
 pub const CHROME_ROWS: u16 = 5;
 pub const DEBOUNCE: Duration = Duration::from_millis(80);
+pub const LIVE_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Column {
@@ -237,6 +239,8 @@ pub struct App {
     export_prompt: Option<ExportPrompt>,
     pending_export: Option<(PathBuf, ExportPayload, bool)>,
     drag: Option<Drag>,
+    live: Vec<Live>,
+    live_due: Option<Instant>,
 }
 
 #[derive(Debug, Clone)]
@@ -353,6 +357,8 @@ impl App {
             export_prompt: None,
             pending_export: None,
             drag: None,
+            live: Vec::new(),
+            live_due: Some(Instant::now()),
         }
     }
 
@@ -659,6 +665,26 @@ impl App {
         }
         self.conversation_due = None;
         self.pending_conversation_load.take()
+    }
+
+    pub const fn live_due(&self) -> Option<Instant> {
+        self.live_due
+    }
+
+    pub fn take_live_poll(&mut self, now: Instant) -> Option<PathBuf> {
+        if self.live_due.is_none_or(|due| now < due) {
+            return None;
+        }
+        self.live_due = Some(now.checked_add(LIVE_POLL_INTERVAL).unwrap_or(now));
+        Some(self.claude_dir.clone())
+    }
+
+    pub fn set_live(&mut self, live: Vec<Live>) {
+        self.live = live;
+    }
+
+    pub fn live_for(&self, session_id: &str) -> Option<&Live> {
+        self.live.iter().find(|entry| entry.session_id == session_id)
     }
 
     pub fn set_conversation(&mut self, generation: u64, result: Result<Arc<Conversation>, ThreadError>, agents: Agents) {
@@ -2997,6 +3023,39 @@ mod tests {
         assert!(app.take_conversation_load(armed).is_some(), "it never fired at the deadline");
         assert!(app.conversation_due().is_none(), "the deadline must be cleared, or it re-fires every frame");
         assert!(app.take_conversation_load(elapsed()).is_none(), "one arming is one load");
+    }
+
+    #[test]
+    fn a_live_poll_is_armed_immediately_on_construction() {
+        let app = app(Size::new(120, 30));
+        assert!(app.live_due().is_some(), "the first live scan should not wait for anything");
+    }
+
+    #[test]
+    fn a_live_poll_reschedules_itself_two_seconds_out_each_time_it_fires() {
+        let mut app = app(Size::new(120, 30));
+        let due = app.live_due().expect("armed on construction");
+        assert!(app.take_live_poll(due.checked_sub(Duration::from_millis(1)).unwrap_or(due)).is_none(), "fired early");
+
+        let claude_dir = app.take_live_poll(due).expect("it fires at the deadline");
+        assert_eq!(claude_dir, app.claude_dir());
+        let rearmed = app.live_due().expect("a live poll is always rearmed, never left one-shot");
+        assert!(rearmed >= due.checked_add(LIVE_POLL_INTERVAL).unwrap_or(due), "the next poll is not two seconds out");
+        assert!(app.take_live_poll(due).is_none(), "one firing is one firing, not a repeat at the same instant");
+    }
+
+    #[test]
+    fn a_session_matching_a_live_pid_is_findable_by_id_and_a_stale_one_is_not() {
+        let mut app = app(Size::new(120, 30));
+        app.set_live(vec![crate::domain::live::Live {
+            pid: 4101,
+            session_id: "11111111-1111-4111-8111-111111111111".to_owned(),
+            status: crate::domain::live::Status::Busy,
+            waiting_for: None,
+            name: None,
+        }]);
+        assert!(app.live_for("11111111-1111-4111-8111-111111111111").is_some());
+        assert!(app.live_for("33333333-3333-4333-8333-333333333333").is_none());
     }
 
     #[test]

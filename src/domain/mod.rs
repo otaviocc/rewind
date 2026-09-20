@@ -7,6 +7,7 @@ pub mod command;
 pub mod diagnostics;
 pub mod latch;
 pub mod lines;
+pub mod live;
 pub mod project;
 pub mod record;
 pub mod scan;

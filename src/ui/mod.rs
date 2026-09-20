@@ -146,11 +146,15 @@ fn event_loop(
                 save::Attempt::Failed(error) => app.export_failed(&error),
             }
         }
+        if let Some(claude_dir) = app.take_live_poll(Instant::now()) {
+            worker::spawn_live_scan(tx, claude_dir);
+        }
     }
 }
 
 fn next(app: &App, rx: &Receiver<Wake>) -> Result<Wake, RecvTimeoutError> {
-    let Some(due) = app.conversation_due() else {
+    let due = [app.conversation_due(), app.live_due()].into_iter().flatten().min();
+    let Some(due) = due else {
         return rx.recv().map_err(|_| RecvTimeoutError::Disconnected);
     };
     rx.recv_timeout(due.saturating_duration_since(Instant::now()))
@@ -174,6 +178,7 @@ fn handle(app: &mut App, wake: Wake) -> Result<()> {
         Wake::ShardReady { generation, entry } => app.set_shard_ready(generation, entry),
         Wake::CorpusLoaded(corpus) => app.set_corpus(corpus),
         Wake::HitResolved { generation, target } => app.set_hit_resolved(generation, target),
+        Wake::LiveScanned(live) => app.set_live(live),
         Wake::InputLost(error) => bail!("cannot read keyboard input: {error}"),
     }
     Ok(())

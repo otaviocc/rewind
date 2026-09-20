@@ -337,4 +337,8 @@ session in the tree whose title can only come from the first human message.
   the source for the live badges: pid → `sessionId` → "running now". `4101.json` is `busy`
   and points at the baseline session; `999999.json` has a pid above any platform's `pid_max`,
   so it is reliably dead and its badge must not appear. The `.key` blob beside it is opaque
-  and must be ignored rather than parsed.
+  and must be ignored rather than parsed. On disk `4101` cannot itself be alive on the test
+  machine, so `common::fixture_tree` renames it to the current process's own pid and rewrites
+  the `"pid"` field to match — the only rewrite the harness does beyond the home-path
+  substitution, and it is what makes `tests/live.rs` exercise the real signal-0 check rather
+  than a stub.

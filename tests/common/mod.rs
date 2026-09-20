@@ -72,12 +72,15 @@ impl FixtureTree {
     }
 }
 
+pub const LIVE_SESSION_ID: &str = "11111111-1111-4111-8111-111111111111";
+
 pub fn fixture_tree() -> FixtureTree {
     let home = TempDir::new().expect("a temporary directory");
     let root = home.path().to_path_buf();
 
     copy_into(&fixture_root(), &root, &root);
     reencode_project_directories(&root);
+    stamp_live_pid(&root);
     for relative in WORKING_COPIES_THAT_EXIST {
         fs::create_dir_all(join_all(&root, relative)).expect("a working copy directory");
     }
@@ -107,6 +110,16 @@ fn reencode_project_directories(home: &Path) {
         };
         fs::rename(&path, projects.join(format!("{prefix}{tail}"))).expect("a renamed project directory");
     }
+}
+
+fn stamp_live_pid(root: &Path) {
+    let sessions = root.join("claude").join("sessions");
+    let source = sessions.join("4101.json");
+    let Ok(text) = fs::read_to_string(&source) else { return };
+    let pid = std::process::id();
+    let rewritten = text.replacen("\"pid\":4101", &format!("\"pid\":{pid}"), 1);
+    fs::write(&source, rewritten).expect("a rewritten live-session fixture");
+    fs::rename(&source, sessions.join(format!("{pid}.json"))).expect("a renamed live-session fixture");
 }
 
 fn join_all(base: &Path, relative: &str) -> PathBuf {

@@ -27,6 +27,7 @@ const HINT_GAP: usize = 2;
 const EDGE_PAD: u16 = 1;
 const CHEVRON: &str = "›";
 const GONE: &str = "⊘";
+const DOT: &str = "●";
 const INFO_WIDTH: u16 = 7;
 
 pub fn draw(frame: &mut Frame, app: &App) {
@@ -388,12 +389,22 @@ fn sessions_rows(area: Rect, buf: &mut Buffer, app: &App, focused: bool) {
         let Some(session) = sessions.get(index) else { continue };
         let y = area.y.saturating_add(u16::try_from(row_index).unwrap_or(u16::MAX));
         let picked = position == pane.selected;
-        let marker = if picked && focused { CHEVRON } else { " " };
-        row(Rect { y, height: 1, ..area }, buf, area.x, marker, app.theme().style(Element::Body));
+        let live = app.live_for(&session.id);
+        let marker = if picked && focused {
+            CHEVRON
+        } else if live.is_some() {
+            DOT
+        } else {
+            " "
+        };
+        let marker_style =
+            if live.is_some() { app.theme().style(Element::SessionLive) } else { app.theme().style(Element::Body) };
+        row(Rect { y, height: 1, ..area }, buf, area.x, marker, marker_style);
 
         let age = session.last_activity.map_or_else(|| "-".to_owned(), |at| age::relative(app.ctx.now, at));
         let info = format!("{age} {}", session.messages);
-        text_and_info(Rect { y, height: 1, ..area }, buf, &session.title, &info, app, Element::Body);
+        let title = live.map_or_else(|| session.title.clone(), |live| format!("{}{SEPARATOR}{}", session.title, live.describe()));
+        text_and_info(Rect { y, height: 1, ..area }, buf, &title, &info, app, Element::Body);
         band(Rect { y, height: 1, ..area }, buf, app, picked, focused);
     }
 }
@@ -533,6 +544,7 @@ mod tests {
     use super::*;
     use crate::ctx::Ctx;
     use crate::domain::diagnostics::{Defect, Diagnostics};
+    use crate::domain::live::{Live, Status};
     use crate::domain::project::{Project, ProjectError, Resolution};
     use crate::domain::session::{Session, TitleSource};
     use crate::ui::Options;
@@ -766,6 +778,64 @@ mod tests {
         let buffer = frame(&app, Size::new(120, 24));
         let row = text_row(&buffer, 3);
         assert!(row.starts_with(CHEVRON), "{row}");
+    }
+
+    fn live(session_id: &str, status: Status, waiting_for: Option<&str>) -> Live {
+        Live { pid: 4101, session_id: session_id.to_owned(), status, waiting_for: waiting_for.map(str::to_owned), name: None }
+    }
+
+    #[test]
+    fn a_live_session_carries_the_dot_and_its_status() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("a", true)]));
+        app.set_sessions(app.generation(), vec![session("s1", "a session")]);
+        app.set_live(vec![live("s1", Status::Busy, None)]);
+
+        let buffer = frame(&app, Size::new(120, 24));
+        let sessions_x = columns::placement(120, Mode::Browse)
+            .into_iter()
+            .find_map(|(column, x, _)| (column == Column::Sessions).then_some(x))
+            .expect("a sessions column");
+        let row = text_row(&buffer, 3);
+        assert!(row.contains(DOT), "{row}");
+        assert!(row.contains("busy"), "{row}");
+        let dot_style = app.theme().style(Element::SessionLive).fg.unwrap_or_default();
+        assert_eq!(buffer[(sessions_x, 3)].fg, dot_style, "the dot did not take the live style");
+    }
+
+    #[test]
+    fn a_session_with_no_live_entry_shows_no_dot() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("a", true)]));
+        app.set_sessions(app.generation(), vec![session("s1", "a session")]);
+
+        let buffer = frame(&app, Size::new(120, 24));
+        let row = text_row(&buffer, 3);
+        assert!(!row.contains(DOT), "{row}");
+    }
+
+    #[test]
+    fn waiting_for_input_reads_as_such_rather_than_a_generic_status() {
+        let mut app = app(Size::new(220, 24));
+        app.set_projects(app.generation(), Ok(vec![project("a", true)]));
+        app.set_sessions(app.generation(), vec![session("s1", "a session")]);
+        app.set_live(vec![live("s1", Status::Idle, Some("input"))]);
+
+        let buffer = frame(&app, Size::new(220, 24));
+        let row = text_row(&buffer, 3);
+        assert!(row.contains("waiting for input"), "{row}");
+    }
+
+    #[test]
+    fn a_dead_pids_session_never_carries_a_badge() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("a", true)]));
+        app.set_sessions(app.generation(), vec![session("s1", "a session")]);
+        app.set_live(vec![live("some-other-session", Status::Busy, None)]);
+
+        let buffer = frame(&app, Size::new(120, 24));
+        let row = text_row(&buffer, 3);
+        assert!(!row.contains(DOT), "{row}");
     }
 
     #[test]
