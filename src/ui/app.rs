@@ -1857,6 +1857,15 @@ impl App {
     }
 
     fn scroll_to_uuid(&mut self, uuid: &str) {
+        let node = {
+            let Loadable::Ready(rendered) = &self.conversation else { return };
+            let Some(node) = rendered.conversation().id_of(uuid) else { return };
+            node
+        };
+        if self.select_branch_to(node) {
+            self.view.bump();
+            self.rerender();
+        }
         let line = {
             let Loadable::Ready(rendered) = &self.conversation else { return };
             let Some(position) = rendered.transcript().landing(rendered.conversation(), uuid) else { return };
@@ -1864,6 +1873,21 @@ impl App {
             line
         };
         self.conversation_pane.top = line.min(self.last(Column::Conversation));
+    }
+
+    fn select_branch_to(&mut self, node: NodeId) -> bool {
+        let ancestry = {
+            let Loadable::Ready(rendered) = &self.conversation else { return false };
+            if rendered.walk(&self.view.branches).contains(&node) {
+                return false;
+            }
+            rendered.conversation().ancestry(node)
+        };
+        for pair in ancestry.windows(2) {
+            let (Some(&parent), Some(&child)) = (pair.first(), pair.get(1)) else { continue };
+            self.view.branches.insert(parent, child);
+        }
+        true
     }
 
     fn jump_filter(&mut self, forward: bool) {
@@ -2088,6 +2112,51 @@ mod tests {
         (conversation, path)
     }
 
+    fn rewound_conversation() -> Conversation {
+        let dir = tempfile::TempDir::new().expect("a temporary directory");
+        let path = dir.path().join("session.jsonl");
+        let human = r#"{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:00Z","origin":{"kind":"human"},"message":{"role":"user","content":"scan the grid"}}"#;
+        let mut lines = vec![human.to_owned()];
+        for index in 0..3u32 {
+            let minute = index.saturating_add(1);
+            lines.push(format!(
+                r#"{{"type":"user","uuid":"b{index}","parentUuid":"u1","sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:0{minute}:00Z","origin":{{"kind":"human"}},"message":{{"role":"user","content":"attempt {index}"}}}}"#
+            ));
+        }
+        std::fs::write(&path, lines.join("\n") + "\n").expect("a written transcript");
+        crate::domain::thread::build(&path).expect("a built conversation")
+    }
+
+    fn landed_on_in(uuid: &str, conversation: Conversation) -> App {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("a")]));
+        let _ = app.take_session_load();
+        app.set_hit_resolved(app.search_hit_generation.current(), Some(opened(uuid)));
+        let _ = app.take_session_load();
+        app.set_sessions(app.generation(), vec![session("s1")]);
+        let (_, generation) = app.take_conversation_load(elapsed()).expect("a conversation load was requested");
+        app.set_conversation(generation, Ok(Arc::new(conversation)), Agents::default());
+        app
+    }
+
+    #[test]
+    fn a_hit_on_a_rewound_branch_switches_to_the_branch_holding_it() {
+        let app = landed_on_in("b0", rewound_conversation());
+
+        let node = node_named(&app, "b0");
+        let Loadable::Ready(rendered) = &app.conversation else { panic!("the conversation is not loaded") };
+        assert!(rendered.walk(&app.view.branches).contains(&node), "the branch holding the hit is still not the one showing");
+        assert_eq!(node_at_top(&app).map(|position| position.node), Some(node), "the landing is not the rewound record");
+    }
+
+    #[test]
+    fn a_hit_already_on_the_branch_showing_pins_no_branch_it_did_not_have_to() {
+        let app = landed_on_in("b2", rewound_conversation());
+
+        assert!(app.view.branches.is_empty(), "landing on the branch already showing overrode it anyway");
+        assert_eq!(node_at_top(&app).map(|position| position.node), Some(node_named(&app, "b2")));
+    }
+
     fn with_calls(area: Size) -> App {
         let (conversation, path) = calls_conversation();
         let mut app = app(area);
@@ -2101,16 +2170,7 @@ mod tests {
     }
 
     fn landed_on(uuid: &str) -> App {
-        let mut app = app(Size::new(120, 30));
-        app.set_projects(app.generation(), Ok(vec![project("a")]));
-        let _ = app.take_session_load();
-        app.set_hit_resolved(app.search_hit_generation.current(), Some(opened(uuid)));
-        let _ = app.take_session_load();
-        app.set_sessions(app.generation(), vec![session("s1")]);
-        let (_, generation) = app.take_conversation_load(elapsed()).expect("a conversation load was requested");
-        let (conversation, _) = calls_conversation();
-        app.set_conversation(generation, Ok(Arc::new(conversation)), Agents::default());
-        app
+        landed_on_in(uuid, calls_conversation().0)
     }
 
     fn node_named(app: &App, uuid: &str) -> NodeId {

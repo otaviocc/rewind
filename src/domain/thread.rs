@@ -196,6 +196,18 @@ impl Conversation {
         if turns.len() < 2 { Vec::new() } else { turns }
     }
 
+    pub fn ancestry(&self, node: NodeId) -> Vec<NodeId> {
+        let mut path = vec![node];
+        let mut current = node;
+        for _ in 0..self.nodes.len() {
+            let Some(parent) = self.node(current).and_then(|found| found.parent) else { break };
+            path.push(parent);
+            current = parent;
+        }
+        path.reverse();
+        path
+    }
+
     pub fn thread_with(&self, overrides: &HashMap<NodeId, NodeId>) -> Vec<NodeId> {
         if overrides.is_empty() {
             return self.thread.clone();
@@ -739,6 +751,30 @@ mod tests {
         content.push('\n');
         fs::write(&path, content).expect("a writable temp file");
         (dir, path)
+    }
+
+    #[test]
+    fn the_ancestry_of_a_root_is_the_root_alone() {
+        let (_dir, path) = write(&[
+            r#"{"parentUuid":null,"isSidechain":false,"message":{"role":"user","content":"hi"},"type":"user","origin":{"kind":"human"},"uuid":"u1","timestamp":"2026-01-01T00:00:00Z","sessionId":"s1"}"#,
+        ]);
+        let conversation = build(&path).expect("a conversation");
+        let root = conversation.id_of("u1").expect("the root");
+
+        assert_eq!(conversation.ancestry(root), vec![root]);
+    }
+
+    #[test]
+    fn an_ancestry_reads_root_first_and_ends_at_the_node_asked_for() {
+        let (_dir, path) = write(&[
+            r#"{"parentUuid":null,"isSidechain":false,"message":{"role":"user","content":"hi"},"type":"user","origin":{"kind":"human"},"uuid":"u1","timestamp":"2026-01-01T00:00:00Z","sessionId":"s1"}"#,
+            r#"{"parentUuid":"u1","isSidechain":false,"message":{"model":"m","id":"msg1","role":"assistant","content":[{"type":"text","text":"one"}]},"type":"assistant","uuid":"a1","timestamp":"2026-01-01T00:01:00Z","sessionId":"s1"}"#,
+            r#"{"parentUuid":"a1","isSidechain":false,"message":{"role":"user","content":"more"},"type":"user","origin":{"kind":"human"},"uuid":"u2","timestamp":"2026-01-01T00:02:00Z","sessionId":"s1"}"#,
+        ]);
+        let conversation = build(&path).expect("a conversation");
+        let named = |uuid: &str| conversation.id_of(uuid).expect("the conversation holds that uuid");
+
+        assert_eq!(conversation.ancestry(named("u2")), vec![named("u1"), named("a1"), named("u2")]);
     }
 
     #[test]
