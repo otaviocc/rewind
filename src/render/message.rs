@@ -115,6 +115,17 @@ impl Transcript {
         Some(Position { node: span.node, offset: line.saturating_sub(span.line) })
     }
 
+    pub fn landing(&self, conversation: &Conversation, uuid: &str) -> Option<Position> {
+        let mut candidate = conversation.id_of(uuid)?;
+        for _ in 0..=self.spans.len() {
+            if self.spans.iter().any(|span| span.node == candidate) {
+                return Some(Position { node: candidate, offset: 0 });
+            }
+            candidate = conversation.node(candidate)?.parent?;
+        }
+        None
+    }
+
     pub fn line_of(&self, position: Position) -> Option<usize> {
         let index = self.spans.iter().position(|span| span.node == position.node)?;
         let span = self.spans.get(index)?;
@@ -587,11 +598,75 @@ mod tests {
     }
 
     fn built(lines: &[&str]) -> Transcript {
+        built_over(lines).1
+    }
+
+    fn built_over(lines: &[&str]) -> (Conversation, Transcript) {
         let dir = TempDir::new().expect("a temporary directory");
         let path = dir.path().join("session.jsonl");
         fs::write(&path, lines.join("\n") + "\n").expect("a written transcript");
         let conversation = thread::build(&path).expect("a built conversation");
-        transcript(&conversation, &plain(60))
+        let transcript = transcript(&conversation, &plain(60));
+        (conversation, transcript)
+    }
+
+    const BASH_CALL: &str = r#"[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]"#;
+
+    const TOOL_RESULT: &str = r#"{"type":"user","uuid":"u2","parentUuid":"a1","sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:03Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"total 0","is_error":false}]},"toolUseResult":{"stdout":"total 0\n","interrupted":false}}"#;
+
+    fn node_named(conversation: &Conversation, uuid: &str) -> NodeId {
+        conversation.id_of(uuid).expect("the conversation holds that uuid")
+    }
+
+    #[test]
+    fn a_tool_result_lands_on_the_assistant_turn_that_made_the_call() {
+        let call = assistant("a1", "u1", BASH_CALL);
+        let (conversation, transcript) = built_over(&[HUMAN, &call, TOOL_RESULT]);
+
+        let result = node_named(&conversation, "u2");
+        assert_eq!(
+            transcript.line_of(Position { node: result, offset: 0 }),
+            None,
+            "a tool result renders lines of its own, so this test proves nothing"
+        );
+
+        let landed = transcript.landing(&conversation, "u2").expect("a tool result lands somewhere");
+        assert_eq!(landed, Position { node: node_named(&conversation, "a1"), offset: 0 });
+    }
+
+    #[test]
+    fn an_attachment_that_renders_nothing_lands_on_the_record_above_it() {
+        let reply = assistant("a1", "u1", r#"[{"type":"text","text":"the array reads clean"}]"#);
+        let attachment = r#"{"type":"attachment","uuid":"x1","parentUuid":"a1","sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:02Z","attachment":{"type":"date","date":"2026-01-05"}}"#;
+        let (conversation, transcript) = built_over(&[HUMAN, &reply, attachment]);
+
+        let landed = transcript.landing(&conversation, "x1").expect("an attachment lands somewhere");
+        assert_eq!(landed, Position { node: node_named(&conversation, "a1"), offset: 0 });
+    }
+
+    #[test]
+    fn a_node_on_a_branch_that_is_not_showing_lands_on_the_fork_point() {
+        let reply = assistant("a1", "u1", r#"[{"type":"text","text":"the array reads clean"}]"#);
+        let rewound = r#"{"type":"user","uuid":"u2","parentUuid":"a1","sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:02Z","origin":{"kind":"human"},"message":{"role":"user","content":"try the port array"}}"#;
+        let taken = r#"{"type":"user","uuid":"u3","parentUuid":"a1","sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:03Z","origin":{"kind":"human"},"message":{"role":"user","content":"try the starboard array"}}"#;
+        let (conversation, transcript) = built_over(&[HUMAN, &reply, rewound, taken]);
+
+        assert!(transcript.line_of(Position { node: node_named(&conversation, "u3"), offset: 0 }).is_some());
+        assert_eq!(
+            transcript.line_of(Position { node: node_named(&conversation, "u2"), offset: 0 }),
+            None,
+            "the older sibling is on screen, so this test proves nothing"
+        );
+
+        let landed = transcript.landing(&conversation, "u2").expect("a hidden branch lands somewhere");
+        assert_eq!(landed, Position { node: node_named(&conversation, "a1"), offset: 0 });
+    }
+
+    #[test]
+    fn a_uuid_the_conversation_does_not_hold_lands_nowhere() {
+        let (conversation, transcript) = built_over(&[HUMAN]);
+
+        assert_eq!(transcript.landing(&conversation, "no-such-record"), None);
     }
 
     fn headers(lines: &[String]) -> usize {

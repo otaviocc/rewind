@@ -1857,9 +1857,12 @@ impl App {
     }
 
     fn scroll_to_uuid(&mut self, uuid: &str) {
-        let Loadable::Ready(rendered) = &self.conversation else { return };
-        let Some(node) = rendered.conversation().id_of(uuid) else { return };
-        let Some(line) = rendered.transcript().line_of(Position { node, offset: 0 }) else { return };
+        let line = {
+            let Loadable::Ready(rendered) = &self.conversation else { return };
+            let Some(position) = rendered.transcript().landing(rendered.conversation(), uuid) else { return };
+            let Some(line) = rendered.transcript().line_of(position) else { return };
+            line
+        };
         self.conversation_pane.top = line.min(self.last(Column::Conversation));
     }
 
@@ -2065,7 +2068,7 @@ mod tests {
         }
     }
 
-    fn with_calls(area: Size) -> App {
+    fn calls_conversation() -> (Conversation, PathBuf) {
         let dir = tempfile::TempDir::new().expect("a temporary directory");
         let path = dir.path().join("session.jsonl");
         let human = r#"{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:00Z","origin":{"kind":"human"},"message":{"role":"user","content":"do three things"}}"#;
@@ -2081,11 +2084,64 @@ mod tests {
         }
         std::fs::write(&path, lines.join("\n") + "\n").expect("a written transcript");
         let conversation = crate::domain::thread::build(&path).expect("a built conversation");
+        let _ = dir.keep();
+        (conversation, path)
+    }
+
+    fn with_calls(area: Size) -> App {
+        let (conversation, path) = calls_conversation();
         let mut app = app(area);
         app.pending_conversation_path = Some(path);
         app.set_conversation(app.conversation_generation(), Ok(Arc::new(conversation)), Agents::default());
-        let _ = dir.keep();
         app
+    }
+
+    fn opened(uuid: &str) -> Opened {
+        Opened { project_directory: "a".to_owned(), session_id: "s1".to_owned(), uuid: Some(uuid.to_owned()), agent_id: None }
+    }
+
+    fn landed_on(uuid: &str) -> App {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("a")]));
+        let _ = app.take_session_load();
+        app.set_hit_resolved(app.search_hit_generation.current(), Some(opened(uuid)));
+        let _ = app.take_session_load();
+        app.set_sessions(app.generation(), vec![session("s1")]);
+        let (_, generation) = app.take_conversation_load(elapsed()).expect("a conversation load was requested");
+        let (conversation, _) = calls_conversation();
+        app.set_conversation(generation, Ok(Arc::new(conversation)), Agents::default());
+        app
+    }
+
+    fn node_named(app: &App, uuid: &str) -> NodeId {
+        let Loadable::Ready(rendered) = &app.conversation else { panic!("the conversation is not loaded") };
+        rendered.conversation().id_of(uuid).expect("the conversation holds that uuid")
+    }
+
+    #[test]
+    fn a_hit_in_tool_output_lands_on_the_turn_that_made_the_call() {
+        let app = landed_on("r1");
+
+        assert_ne!(app.conversation_pane.top, 0, "the viewport never moved off the first line");
+        assert_eq!(
+            node_at_top(&app).map(|position| position.node),
+            Some(node_named(&app, "a1")),
+            "the landing is not the turn that made the call"
+        );
+    }
+
+    #[test]
+    fn a_hit_on_a_human_turn_still_lands_on_that_turn() {
+        let app = landed_on("u1");
+
+        assert_eq!(node_at_top(&app).map(|position| position.node), Some(node_named(&app, "u1")));
+    }
+
+    #[test]
+    fn a_hit_whose_record_is_not_in_the_conversation_leaves_the_viewport_alone() {
+        let app = landed_on("not-in-this-file");
+
+        assert_eq!(app.conversation_pane.top, 0, "a uuid the conversation does not hold moved the viewport");
     }
 
     fn call_lines(app: &App) -> Vec<String> {
