@@ -9,9 +9,10 @@ license = "MIT"
 readme = "README.md"
 keywords = ["claude", "terminal", "tui", "history", "viewer"]
 categories = ["command-line-utilities"]
-# Files about developing rewind rather than using it. `syntaxes/` and `themes/`
-# stay: the build script and the theme loader's `include_str!` need them to build
-# the crate at all. `tests/` stays too, so a vendored copy can be verified.
+# Files about developing rewind rather than using it. `syntaxes/`, `syntax-themes/`
+# and `themes/` stay: the build script and the two loaders' `include_str!` and
+# `include_bytes!` need them to build the crate at all. `tests/` stays too, so a
+# vendored copy can be verified.
 exclude = ["CLAUDE.md", "Makefile", "rustfmt.toml", ".github/", ".cargo/", "tools/"]
 
 [lib]

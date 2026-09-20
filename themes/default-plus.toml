@@ -16,8 +16,13 @@
 # Default+ green is the *comment* color and red is the *string* color, so
 # reusing them would make a failed tool call the same red as a string literal.
 # Upstream role names are in the comments.
+#
+# `syntax_theme` names a .tmTheme rewind bundles rather than one of syntect's
+# seven, because that inversion is where Default+'s signature actually lives,
+# and a code block painted in base16-ocean.dark would not show it. See
+# `syntax-themes/LICENSES.md`.
 name = "default-plus"
-syntax_theme = "base16-ocean.dark"
+syntax_theme = "default-plus"
 
 [palette]
 background           = "#171717"   # base.background

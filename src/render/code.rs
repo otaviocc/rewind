@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::io::Cursor;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use ratatui::style::{Color, Modifier, Style};
@@ -14,6 +15,7 @@ use crate::render::line::{self, StyledSpan};
 use crate::theme::{Element, Theme as RewindTheme};
 
 const FALLBACK: &str = "base16-ocean.dark";
+const BUILT_IN: [(&str, &[u8]); 1] = [("default-plus", include_bytes!("../../syntax-themes/default-plus.tmTheme"))];
 const PLAIN: &str = "Plain Text";
 const CAPACITY: usize = 256;
 
@@ -104,7 +106,14 @@ fn syntax_set() -> &'static SyntaxSet {
 
 fn theme_set() -> &'static ThemeSet {
     static THEMES: OnceLock<ThemeSet> = OnceLock::new();
-    THEMES.get_or_init(ThemeSet::load_defaults)
+    THEMES.get_or_init(|| {
+        let mut themes = ThemeSet::load_defaults();
+        for (name, bytes) in BUILT_IN {
+            let Ok(theme) = ThemeSet::load_from_reader(&mut Cursor::new(bytes)) else { continue };
+            themes.themes.insert(name.to_owned(), theme);
+        }
+        themes
+    })
 }
 
 fn syntect_theme(name: Option<&str>) -> (&'static str, Option<&'static SyntectTheme>) {
@@ -202,6 +211,21 @@ mod tests {
         let fallback = styles(&highlight(Some("rust"), CODE, &themed(FALLBACK)));
         assert_eq!(unknown, fallback, "an unknown syntax theme did not land on the fallback");
         assert!(unknown.iter().collect::<std::collections::HashSet<_>>().len() > 1, "the highlighting was dropped");
+    }
+
+    #[test]
+    fn the_bundled_syntax_theme_is_found_rather_than_falling_back() {
+        let (name, theme) = syntect_theme(Some("default-plus"));
+        assert_eq!(name, "default-plus");
+        assert!(theme.is_some(), "the bundled .tmTheme did not load");
+    }
+
+    #[test]
+    fn default_plus_paints_comments_green_and_strings_red() {
+        let lines = highlight(Some("rust"), "// note\nlet s = \"hi\";\n", &themed("default-plus"));
+        let colours: Vec<Option<Color>> = lines.iter().flatten().map(|span| span.style.fg).collect();
+        assert!(colours.contains(&Some(Color::Rgb(0x2e, 0xa8, 0x5b))), "the comment is not Default+ green: {colours:?}");
+        assert!(colours.contains(&Some(Color::Rgb(0xfc, 0x46, 0x51))), "the string is not Default+ red: {colours:?}");
     }
 
     #[test]

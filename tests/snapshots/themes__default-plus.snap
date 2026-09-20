@@ -2,7 +2,7 @@
 source: tests/themes.rs
 expression: "table(& built_in(\"default-plus\"))"
 ---
-syntax_theme  base16-ocean.dark
+syntax_theme  default-plus
 
 body                  fg #ffffff       bg -
 muted                 fg #4c4c4c       bg -

@@ -758,8 +758,9 @@ mod tests {
     }
 
     #[test]
-    fn every_built_in_names_a_syntax_theme_that_syntect_actually_ships() {
-        const BUNDLED: [&str; 7] = [
+    fn every_built_in_names_a_syntax_theme_that_rewind_can_actually_find() {
+        const BUNDLED: [&str; 8] = [
+            "default-plus",
             "base16-ocean.dark",
             "base16-eighties.dark",
             "base16-mocha.dark",
@@ -771,7 +772,7 @@ mod tests {
         for (name, text) in BUILT_INS {
             let theme = resolve(ThemeFile::parse(text, name).expect("a built-in parses"), name).expect("a built-in resolves");
             if let Some(syntax) = &theme.syntax_theme {
-                assert!(BUNDLED.contains(&syntax.as_str()), "{name} names {syntax:?}, which syntect does not bundle");
+                assert!(BUNDLED.contains(&syntax.as_str()), "{name} names {syntax:?}, which nothing bundles");
             }
         }
     }
