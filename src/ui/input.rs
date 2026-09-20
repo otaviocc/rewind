@@ -48,6 +48,8 @@ pub enum Action {
     Resize(Size),
     Scroll { column: Column, delta: isize },
     Click { column: Column, row: u16 },
+    Drag { column: Column, row: u16 },
+    Release,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +76,10 @@ fn mouse_action(mouse: MouseEvent, viewport: Viewport) -> Option<Action> {
         MouseEventKind::Down(MouseButton::Left) => {
             hit.and_then(|hit| Some(Action::Click { column: hit.column, row: u16::try_from(hit.row).ok()? }))
         }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            hit.and_then(|hit| Some(Action::Drag { column: hit.column, row: u16::try_from(hit.row).ok()? }))
+        }
+        MouseEventKind::Up(MouseButton::Left) => Some(Action::Release),
         _ => None,
     }
 }
@@ -333,9 +339,28 @@ mod tests {
     fn the_right_and_middle_buttons_are_ignored() {
         assert_eq!(action(&mouse(MouseEventKind::Down(MouseButton::Right), 5, 5), viewport()), None);
         assert_eq!(action(&mouse(MouseEventKind::Down(MouseButton::Middle), 5, 5), viewport()), None);
-        assert_eq!(action(&mouse(MouseEventKind::Up(MouseButton::Left), 5, 5), viewport()), None);
-        assert_eq!(action(&mouse(MouseEventKind::Drag(MouseButton::Left), 5, 5), viewport()), None);
+        assert_eq!(action(&mouse(MouseEventKind::Drag(MouseButton::Right), 5, 5), viewport()), None);
+        assert_eq!(action(&mouse(MouseEventKind::Up(MouseButton::Right), 5, 5), viewport()), None);
         assert_eq!(action(&mouse(MouseEventKind::Moved, 5, 5), viewport()), None);
+    }
+
+    #[test]
+    fn a_left_drag_resolves_to_the_column_and_row_under_the_pointer() {
+        assert_eq!(
+            action(&mouse(MouseEventKind::Drag(MouseButton::Left), 5, 5), viewport()),
+            Some(Action::Drag { column: Column::Projects, row: 2 })
+        );
+    }
+
+    #[test]
+    fn a_drag_outside_any_column_does_nothing() {
+        assert_eq!(action(&mouse(MouseEventKind::Drag(MouseButton::Left), 5, 0), viewport()), None);
+    }
+
+    #[test]
+    fn releasing_the_left_button_always_reaches_the_shell_no_matter_where_it_lands() {
+        assert_eq!(action(&mouse(MouseEventKind::Up(MouseButton::Left), 5, 5), viewport()), Some(Action::Release));
+        assert_eq!(action(&mouse(MouseEventKind::Up(MouseButton::Left), 0, 0), viewport()), Some(Action::Release));
     }
 
     #[test]

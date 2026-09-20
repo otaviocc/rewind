@@ -366,13 +366,16 @@ fn conversation_rows(area: Rect, buf: &mut Buffer, app: &App, focused: bool) {
     let top = app.pane(Column::Conversation).top;
     let last = lines.len().min(top.saturating_add(usize::from(area.height)));
     let cursor = app.cursor_rows();
+    let selected = app.selected_rows();
 
     for (row_index, index) in (top..last).enumerate() {
         let Some(line) = lines.get(index) else { continue };
         let y = area.y.saturating_add(u16::try_from(row_index).unwrap_or(u16::MAX));
         let row = Rect { y, height: 1, ..area };
         painted(row, buf, line);
-        band(row, buf, app, cursor.as_ref().is_some_and(|rows| rows.contains(&index)), focused);
+        let picked = cursor.as_ref().is_some_and(|rows| rows.contains(&index))
+            || selected.as_ref().is_some_and(|rows| rows.contains(&index));
+        band(row, buf, app, picked, focused);
     }
 }
 
@@ -998,6 +1001,31 @@ mod tests {
         let buffer = frame(&app, Size::new(120, 24));
         let cursor = app.theme().style(Element::CursorLine).bg.unwrap_or_default();
         assert_eq!(buffer[(x, y)].bg, cursor, "the conversation cursor line once the focus left it");
+    }
+
+    #[test]
+    fn a_drag_in_the_conversation_bands_every_row_it_spans() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("a", true)]));
+        app.set_sessions(app.generation(), vec![session("s1", "a session")]);
+        with_conversation(&mut app, "read the grid scanner back to me");
+
+        let x = columns::placement(120, Mode::Browse)
+            .into_iter()
+            .find_map(|(column, x, _)| (column == Column::Conversation).then_some(x))
+            .expect("a conversation column");
+
+        app.apply(Action::Click { column: Column::Conversation, row: 0 });
+        app.apply(Action::Drag { column: Column::Conversation, row: 1 });
+
+        let buffer = frame(&app, Size::new(120, 24));
+        let selection = app.theme().style(Element::Selection).bg.unwrap_or_default();
+        assert_eq!(buffer[(x, 3)].bg, selection, "the first row of the drag");
+        assert_eq!(buffer[(x, 4)].bg, selection, "the second row of the drag");
+
+        app.apply(Action::Release);
+        let buffer = frame(&app, Size::new(120, 24));
+        assert_ne!(buffer[(x, 3)].bg, selection, "the band clears once the selection is copied");
     }
 
     #[test]

@@ -18,7 +18,7 @@ use crate::domain::subagent::{Agent, Agents};
 use crate::domain::thread::{Conversation, NodeId, NodeKind, ThreadError};
 use crate::domain::tool;
 use crate::render::export;
-use crate::render::line::RenderedLine;
+use crate::render::line::{RenderedLine, split_at_width};
 use crate::render::message::{self, Anchor, Position, Transcript};
 use crate::render::{Branches, Ctx as RenderCtx, Expanded, Outputs, Overflow};
 use crate::theme::Theme;
@@ -234,6 +234,7 @@ pub struct App {
     notice: Option<String>,
     export_prompt: Option<ExportPrompt>,
     pending_export: Option<(PathBuf, ExportPayload, bool)>,
+    drag: Option<Drag>,
 }
 
 #[derive(Debug, Clone)]
@@ -277,6 +278,19 @@ struct ExportPrompt {
     path: String,
     format: ExportFormat,
     confirm: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Drag {
+    anchor: usize,
+    cursor: usize,
+    moved: bool,
+}
+
+impl Drag {
+    const fn range(&self) -> std::ops::RangeInclusive<usize> {
+        if self.anchor <= self.cursor { self.anchor..=self.cursor } else { self.cursor..=self.anchor }
+    }
 }
 
 impl App {
@@ -334,6 +348,7 @@ impl App {
             notice: None,
             export_prompt: None,
             pending_export: None,
+            drag: None,
         }
     }
 
@@ -761,7 +776,9 @@ impl App {
                 | Action::Type(_)
                 | Action::Untype
                 | Action::Scroll { .. }
-                | Action::Click { .. } => {}
+                | Action::Click { .. }
+                | Action::Drag { .. }
+                | Action::Release => {}
             }
             return;
         }
@@ -806,6 +823,8 @@ impl App {
             Action::CycleExportFormat | Action::Type(_) | Action::Untype => {}
             Action::Scroll { column, delta } => self.scroll_column(column, delta),
             Action::Click { column, row } => self.click(column, row),
+            Action::Drag { column, row } => self.drag(column, row),
+            Action::Release => self.release(),
         }
     }
 
@@ -844,7 +863,9 @@ impl App {
             | Action::ToggleExport
             | Action::CycleExportFormat
             | Action::Scroll { .. }
-            | Action::Click { .. } => {}
+            | Action::Click { .. }
+            | Action::Drag { .. }
+            | Action::Release => {}
         }
     }
 
@@ -878,7 +899,9 @@ impl App {
             | Action::ToggleExport
             | Action::CycleExportFormat
             | Action::Scroll { .. }
-            | Action::Click { .. } => {}
+            | Action::Click { .. }
+            | Action::Drag { .. }
+            | Action::Release => {}
         }
     }
 
@@ -964,7 +987,9 @@ impl App {
             | Action::Copy(_)
             | Action::Move(_)
             | Action::Scroll { .. }
-            | Action::Click { .. } => {}
+            | Action::Click { .. }
+            | Action::Drag { .. }
+            | Action::Release => {}
         }
     }
 
@@ -1183,6 +1208,7 @@ impl App {
     }
 
     fn rerender(&mut self) {
+        self.drag = None;
         let anchored = self.anchored();
         let width = columns::conversation_width(self.area, self.mode);
         if let Loadable::Ready(rendered) = &mut self.conversation {
@@ -1395,10 +1421,48 @@ impl App {
 
     fn click(&mut self, column: Column, row: u16) {
         self.focused = column;
+        self.drag = (column == Column::Conversation)
+            .then(|| self.conversation_pane.top.saturating_add(usize::from(row)))
+            .map(|line| Drag { anchor: line, cursor: line, moved: false });
         match column {
             Column::Projects | Column::Sessions => self.click_list(column, row),
             Column::Conversation => self.click_conversation(row),
         }
+    }
+
+    fn drag(&mut self, column: Column, row: u16) {
+        if column != Column::Conversation || self.drag.is_none() {
+            return;
+        }
+        let line = self.conversation_pane.top.saturating_add(usize::from(row)).min(self.last(Column::Conversation));
+        let Some(drag) = &mut self.drag else { return };
+        if line != drag.cursor {
+            drag.moved = true;
+        }
+        drag.cursor = line;
+    }
+
+    fn release(&mut self) {
+        let Some(drag) = self.drag.take() else { return };
+        if !drag.moved {
+            return;
+        }
+        let Some(text) = self.selected_text(&drag) else { return };
+        let lines = text.lines().count();
+        let plural = if lines == 1 { "line" } else { "lines" };
+        self.notice = Some(format!("copied selection · {lines} {plural}"));
+        self.pending_copy = Some(text);
+    }
+
+    fn selected_text(&self, drag: &Drag) -> Option<String> {
+        let lines = self.lines();
+        let selected = lines.get(drag.range())?;
+        let text = selected.iter().map(stripped_text).collect::<Vec<_>>().join("\n");
+        (!text.trim().is_empty()).then_some(text)
+    }
+
+    pub fn selected_rows(&self) -> Option<std::ops::RangeInclusive<usize>> {
+        self.drag.as_ref().filter(|drag| drag.moved).map(Drag::range)
     }
 
     fn click_list(&mut self, column: Column, row: u16) {
@@ -1444,6 +1508,7 @@ impl App {
     }
 
     fn request_conversation_for_selection(&mut self) {
+        self.drag = None;
         self.stack.clear();
         self.label = None;
         self.pending_subagent_load = None;
@@ -1777,6 +1842,12 @@ fn swap_extension(path: &str, format: ExportFormat) -> String {
     let wanted = format.extension();
     let other = format.toggled().extension();
     path.strip_suffix(&format!(".{other}")).map_or_else(|| format!("{path}.{wanted}"), |base| format!("{base}.{wanted}"))
+}
+
+fn stripped_text(line: &RenderedLine) -> String {
+    let text = line.text();
+    let (_, rest) = split_at_width(&text, line.inset);
+    rest.to_owned()
 }
 
 #[cfg(test)]
@@ -3549,5 +3620,60 @@ mod tests {
         assert_eq!(app.export_prompt_path(), Some("./out.mdx"));
         app.apply(Action::Untype);
         assert_eq!(app.export_prompt_path(), Some("./out.md"));
+    }
+
+    #[test]
+    fn dragging_in_the_conversation_highlights_the_range_and_copies_it_on_release() {
+        let mut app = with_calls(Size::new(120, 30));
+        app.apply(Action::Click { column: Column::Conversation, row: 0 });
+        assert!(app.selected_rows().is_none(), "a click with no movement is not yet a selection");
+
+        app.apply(Action::Drag { column: Column::Conversation, row: 2 });
+        assert_eq!(app.selected_rows(), Some(0..=2));
+
+        app.apply(Action::Release);
+        assert!(app.selected_rows().is_none(), "the highlight clears once the copy is handed off");
+        let text = app.take_copy().expect("a copied selection");
+        assert!(text.contains("do three things"), "{text}");
+        assert!(app.notice().is_some_and(|notice| notice.starts_with("copied selection")), "{:?}", app.notice());
+    }
+
+    #[test]
+    fn a_click_without_movement_copies_nothing_on_release() {
+        let mut app = with_calls(Size::new(120, 30));
+        app.apply(Action::Click { column: Column::Conversation, row: 1 });
+        app.apply(Action::Release);
+        assert!(app.take_copy().is_none(), "a plain click is not a drag");
+    }
+
+    #[test]
+    fn dragging_outside_the_conversation_column_does_nothing() {
+        let mut app = with_calls(Size::new(120, 30));
+        app.apply(Action::Click { column: Column::Conversation, row: 0 });
+        app.apply(Action::Drag { column: Column::Sessions, row: 2 });
+        assert!(app.selected_rows().is_none());
+    }
+
+    #[test]
+    fn a_fresh_click_clears_a_previous_selection() {
+        let mut app = with_calls(Size::new(120, 30));
+        app.apply(Action::Click { column: Column::Conversation, row: 0 });
+        app.apply(Action::Drag { column: Column::Conversation, row: 2 });
+        assert!(app.selected_rows().is_some());
+
+        app.apply(Action::Click { column: Column::Conversation, row: 0 });
+        assert!(app.selected_rows().is_none(), "a new click starts over rather than keeping the old range");
+    }
+
+    #[test]
+    fn a_resize_clears_a_stale_selection() {
+        let mut app = with_calls(Size::new(120, 30));
+        app.apply(Action::Click { column: Column::Conversation, row: 0 });
+        app.apply(Action::Drag { column: Column::Conversation, row: 2 });
+        assert!(app.selected_rows().is_some());
+
+        app.apply(Action::Resize(Size::new(80, 30)));
+        app.reflow();
+        assert!(app.selected_rows().is_none(), "a rewrap invalidates the line numbers a selection was built from");
     }
 }
