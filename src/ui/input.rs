@@ -41,6 +41,7 @@ pub enum Action {
     ToggleSearch,
     ToggleHelp,
     ToggleFilter,
+    Rescan,
     Copy(CopyTarget),
     ToggleExport,
     CycleExportFormat,
@@ -130,6 +131,7 @@ fn key_action(key: KeyEvent, text_entry: bool) -> Option<Action> {
         KeyCode::Char('Y') => Some(Action::Copy(CopyTarget::Session)),
         KeyCode::Char('c') => Some(Action::Copy(CopyTarget::Resume)),
         KeyCode::Char('e') => Some(Action::ToggleExport),
+        KeyCode::Char('r') => Some(Action::Rescan),
         KeyCode::Char('q') => Some(Action::Quit),
         _ => None,
     }
@@ -210,6 +212,7 @@ mod tests {
             (press(KeyCode::Char('Y')), Action::Copy(CopyTarget::Session)),
             (press(KeyCode::Char('c')), Action::Copy(CopyTarget::Resume)),
             (press(KeyCode::Char('e')), Action::ToggleExport),
+            (press(KeyCode::Char('r')), Action::Rescan),
             (press(KeyCode::Char('q')), Action::Quit),
             (control('c'), Action::Quit),
         ];

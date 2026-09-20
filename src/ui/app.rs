@@ -241,6 +241,7 @@ pub struct App {
     drag: Option<Drag>,
     live: Vec<Live>,
     live_due: Option<Instant>,
+    pending_projects_reload: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -359,6 +360,7 @@ impl App {
             drag: None,
             live: Vec::new(),
             live_due: Some(Instant::now()),
+            pending_projects_reload: false,
         }
     }
 
@@ -744,6 +746,23 @@ impl App {
         }
     }
 
+    fn rescan(&mut self) {
+        self.pending_project = self.selected_project().map(|project| project.directory.clone());
+        self.pending_session = self.selected_session().map(|session| session.id.clone());
+        self.generation.bump();
+        self.projects = Loadable::Loading;
+        self.pending_projects_reload = true;
+        self.notice = Some("rescanning…".to_owned());
+    }
+
+    pub fn take_projects_reload(&mut self) -> Option<(PathBuf, u64)> {
+        if !self.pending_projects_reload {
+            return None;
+        }
+        self.pending_projects_reload = false;
+        Some((self.claude_dir.clone(), self.generation.current()))
+    }
+
     pub fn take_scan(&mut self) -> Option<(PathBuf, PathBuf, Option<String>, Cancel)> {
         if !self.scan_requested {
             return None;
@@ -898,6 +917,7 @@ impl App {
             Action::ToggleSearch => self.toggle_search(),
             Action::ToggleHelp => self.toggle_help(),
             Action::ToggleFilter => self.toggle_filter(),
+            Action::Rescan => self.rescan(),
             Action::Copy(target) => self.copy(target),
             Action::ToggleExport => self.toggle_export(),
             Action::CycleExportFormat | Action::Type(_) | Action::Untype => {}
@@ -940,6 +960,7 @@ impl App {
             | Action::ToggleSearch
             | Action::ToggleHelp
             | Action::ToggleFilter
+            | Action::Rescan
             | Action::Copy(_)
             | Action::ToggleExport
             | Action::CycleExportFormat
@@ -968,6 +989,7 @@ impl App {
             | Action::ToggleDiagnostics
             | Action::ToggleSearch
             | Action::ToggleFilter
+            | Action::Rescan
             | Action::Copy(_)
             | Action::ToggleExport
             | Action::CycleExportFormat
@@ -998,6 +1020,7 @@ impl App {
             | Action::ToggleHelp
             | Action::ToggleSearch
             | Action::ToggleFilter
+            | Action::Rescan
             | Action::Copy(_)
             | Action::ToggleExport
             | Action::CycleExportFormat
@@ -1037,6 +1060,7 @@ impl App {
             | Action::ToggleSearch
             | Action::ToggleHelp
             | Action::ToggleFilter
+            | Action::Rescan
             | Action::Copy(_)
             | Action::ToggleExport
             | Action::CycleExportFormat
@@ -1126,6 +1150,7 @@ impl App {
             | Action::ToggleSearch
             | Action::ToggleHelp
             | Action::ToggleFilter
+            | Action::Rescan
             | Action::ToggleExport
             | Action::Copy(_)
             | Action::Move(_)
@@ -2675,6 +2700,64 @@ mod tests {
         let mut app = app(Size::new(120, 30));
         app.apply(Action::Quit);
         assert!(app.quit);
+    }
+
+    #[test]
+    fn r_arms_a_projects_reload_marks_the_list_loading_and_leaves_a_notice() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("a")]));
+
+        app.apply(Action::Rescan);
+
+        assert!(matches!(app.projects(), Loadable::Loading), "rescan should show the list is being reread");
+        assert!(app.notice().is_some_and(|notice| notice.contains("rescan")), "{:?}", app.notice());
+        let (dir, generation) = app.take_projects_reload().expect("a reload was requested");
+        assert_eq!(dir, app.claude_dir());
+        assert_eq!(generation, app.generation());
+    }
+
+    #[test]
+    fn one_rescan_is_one_reload_request() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("a")]));
+        app.apply(Action::Rescan);
+
+        assert!(app.take_projects_reload().is_some());
+        assert!(app.take_projects_reload().is_none(), "one press should not queue two loads");
+    }
+
+    #[test]
+    fn rescanning_re_selects_the_project_and_session_that_were_current() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("a"), project("b")]));
+        app.apply(Action::Move(Motion::Line(1)));
+        assert_eq!(app.selected_project().map(|project| project.directory.as_str()), Some("b"));
+        let sessions_generation = app.generation();
+        app.set_sessions(sessions_generation, vec![session("s1"), session("s2")]);
+        app.apply(Action::Focus { forward: true });
+        app.apply(Action::Move(Motion::Line(1)));
+        assert_eq!(app.selected_session().map(|session| session.id.as_str()), Some("s2"));
+
+        app.apply(Action::Rescan);
+        let (_, generation) = app.take_projects_reload().expect("a reload was requested");
+
+        app.set_projects(generation, Ok(vec![project("a"), project("b")]));
+        assert_eq!(app.selected_project().map(|project| project.directory.as_str()), Some("b"), "the project selection was lost");
+
+        let sessions_generation = app.generation();
+        app.set_sessions(sessions_generation, vec![session("s1"), session("s2")]);
+        assert_eq!(app.selected_session().map(|session| session.id.as_str()), Some("s2"), "the session selection was lost");
+    }
+
+    #[test]
+    fn rescan_does_nothing_while_an_overlay_has_the_keyboard() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("a")]));
+        app.apply(Action::ToggleSearch);
+
+        app.apply(Action::Rescan);
+
+        assert!(app.take_projects_reload().is_none(), "r must not reach the app while search owns the keyboard");
     }
 
     #[test]

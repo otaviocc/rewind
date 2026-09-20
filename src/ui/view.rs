@@ -1,5 +1,7 @@
 //! Painting one frame: header, hairline rules, the columns, and the status bar.
 
+use std::fmt::Write as _;
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect, Size};
 use ratatui::style::Style;
@@ -11,7 +13,7 @@ use crate::domain::project::Resolution;
 use crate::render::line::{RenderedLine, StyledSpan, truncate};
 use crate::theme::Element;
 use crate::ui::age;
-use crate::ui::app::{App, Column, Loadable};
+use crate::ui::app::{App, Column, Loadable, Mode};
 use crate::ui::columns;
 use crate::ui::diagnostics;
 use crate::ui::empty;
@@ -486,6 +488,8 @@ fn statusbar(area: Rect, buf: &mut Buffer, app: &App) {
     }
     if let Some(status) = app.filter_status() {
         row(area, buf, area.x, &status, app.theme().style(Element::Status));
+        let used = status.width().saturating_add(unreadable(area, buf, app, status.width()));
+        indexing(area, buf, app, used);
         return;
     }
     if let Some(status) = app.subagent_status() {
@@ -507,10 +511,29 @@ fn statusbar(area: Rect, buf: &mut Buffer, app: &App) {
     let branch = session.git_branch.as_deref().unwrap_or("-");
     let plural = if session.messages == 1 { "msg" } else { "msgs" };
     let age = session.last_activity.map_or_else(|| "-".to_owned(), |at| age::relative(app.ctx.now, at));
-    let text = format!("{} · {} {plural} · {branch} · {age}", session.id, session.messages);
+    let mut text = format!("{} · {} {plural} · {branch} · {age}", session.id, session.messages);
+    if let Some(position) = position_text(app) {
+        let _ = write!(text, "{SEPARATOR}{position}");
+    }
+    if app.mode() == Mode::Focus {
+        let _ = write!(text, "{SEPARATOR}focus");
+    }
     row(area, buf, area.x, &text, app.theme().style(Element::Status));
     let used = text.width().saturating_add(unreadable(area, buf, app, text.width()));
     indexing(area, buf, app, used);
+}
+
+fn position_text(app: &App) -> Option<String> {
+    let column = app.focused();
+    let total = app.visible_len(column);
+    if total <= 1 {
+        return None;
+    }
+    let pane = app.pane(column);
+    let raw = if column == Column::Conversation { pane.top } else { pane.selected };
+    let position = raw.min(total.saturating_sub(1));
+    let percentage = position.saturating_mul(100).checked_div(app.last(column).max(1)).unwrap_or(0);
+    Some(format!("{}/{total} · {percentage}%", position.saturating_add(1)))
 }
 
 fn unreadable(area: Rect, buf: &mut Buffer, app: &App, used: usize) -> usize {
@@ -906,6 +929,71 @@ mod tests {
         assert!(status.contains("s1"), "{status}");
         assert!(status.contains("6 msgs"), "{status}");
         assert!(status.contains("main"), "{status}");
+    }
+
+    #[test]
+    fn the_statusbar_carries_the_focused_columns_position_and_percentage() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("a", true)]));
+        let generation = app.generation();
+        app.set_sessions(generation, vec![session("s1", "one"), session("s2", "two"), session("s3", "three")]);
+        app.apply(Action::Focus { forward: true });
+        app.apply(Action::Move(Motion::Line(1)));
+
+        let buffer = frame(&app, Size::new(120, 24));
+        let status = text_row(&buffer, 23);
+        assert!(status.contains("2/3"), "{status}");
+        assert!(status.contains("50%"), "{status}");
+    }
+
+    #[test]
+    fn a_single_row_column_carries_no_percentage_worth_reading() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("a", true)]));
+        let generation = app.generation();
+        app.set_sessions(generation, vec![session("s1", "hello there")]);
+
+        let buffer = frame(&app, Size::new(120, 24));
+        let status = text_row(&buffer, 23);
+        assert!(!status.contains('%'), "{status}");
+    }
+
+    #[test]
+    fn focus_mode_is_named_in_the_status_bar() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("a", true)]));
+        let generation = app.generation();
+        app.set_sessions(generation, vec![session("s1", "hello there")]);
+        app.apply(Action::ToggleFocusMode);
+
+        let buffer = frame(&app, Size::new(120, 24));
+        let status = text_row(&buffer, 23);
+        assert!(status.contains("focus"), "{status}");
+    }
+
+    #[test]
+    fn browse_mode_says_nothing_about_focus() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("a", true)]));
+        let generation = app.generation();
+        app.set_sessions(generation, vec![session("s1", "hello there")]);
+
+        let buffer = frame(&app, Size::new(120, 24));
+        let status = text_row(&buffer, 23);
+        assert!(!status.contains("focus"), "{status}");
+    }
+
+    #[test]
+    fn a_locked_filter_still_carries_unreadable_and_indexing_segments() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("aaa", true), project("bbb", true)]));
+        app.set_scan_progress(3, 10);
+        app.apply(Action::ToggleFilter);
+        app.apply(Action::Type('a'));
+
+        let buffer = frame(&app, Size::new(120, 24));
+        let status = text_row(&buffer, 23);
+        assert!(status.ends_with("· indexing 3/10"), "{status}");
     }
 
     #[test]

@@ -107,6 +107,9 @@ fn event_loop(
         if app.quit {
             return Ok(());
         }
+        if let Some((claude_dir, generation)) = app.take_projects_reload() {
+            worker::spawn_projects_load(tx, claude_dir, generation);
+        }
         if let Some((dir, generation)) = app.take_session_load() {
             worker::spawn_sessions_load(tx, dir, generation);
         }
