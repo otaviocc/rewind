@@ -121,7 +121,9 @@ on release. `--no-mouse` turns capture off.
 ## Searching
 
 `s` opens a search over every project, ranking hits as you type; `Enter` opens the
-selected one.
+selected one, switching to the branch the hit is on, stopping on the line that carries the
+term and marking it there. The mark stays until your next keypress, so a hit in a long
+message is a glance rather than a hunt.
 
 | | |
 | --- | --- |
@@ -198,11 +200,11 @@ The fifteen slots, and what each drives when nothing more specific overrides it:
 | `selection_background` `selection_foreground` | a dragged mouse selection |
 | `error` | tool errors, removed diff lines, status errors |
 | `success` | added diff lines, the live-session badge |
-| `warning` | status notices, the highlighted search match |
+| `warning` | status notices, the marked terms in a message a search opened |
 | `accent` | tool names, the human gutter, a focused column's title, the header title, inline code, the scroll percentage |
 | `chrome` | nothing by default — free for a theme to point an element at |
 | `highlight` | links |
-| `notice` | the assistant gutter, the current search match |
+| `notice` | the assistant gutter |
 
 A slot left unsaid keeps its default, and `cursor` follows `subtle` unless you say
 otherwise.
