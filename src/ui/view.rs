@@ -258,7 +258,7 @@ fn search_overlay(area: Rect, buf: &mut Buffer, app: &App) {
         height: inner.height.saturating_sub(search::HEADER_ROWS),
         ..inner
     };
-    let rows = search::rows(app.search_results(), width, app.theme());
+    let rows = search::rows(app.search_results(), app.search_snippets(), width, app.theme());
     let pane = app.search_pane();
     let last = rows.len().min(pane.top.saturating_add(usize::from(list_area.height)));
     for (row_index, index) in (pane.top..last).enumerate() {

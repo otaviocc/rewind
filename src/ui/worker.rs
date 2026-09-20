@@ -24,6 +24,7 @@ use crate::domain::session::{self, Session};
 use crate::domain::subagent::{self, Agents};
 use crate::domain::thread::{self, Conversation, ThreadError};
 use crate::domain::tool;
+use crate::ui::app::SnippetRequest;
 use crate::ui::lru::{self, SessionLru};
 
 const SCAN_PROGRESS_INTERVAL: Duration = Duration::from_millis(50);
@@ -40,6 +41,7 @@ pub enum Wake {
     ShardReady { generation: u64, entry: ShardEntry },
     CorpusLoaded(Arc<Corpus>),
     HitResolved { generation: u64, target: Option<Opened> },
+    Snippets { generation: u64, snippets: Vec<(usize, String)> },
     LiveScanned(Vec<Live>),
     InputLost(String),
 }
@@ -272,6 +274,18 @@ pub fn spawn_resolve_hit(tx: &Sender<Wake>, claude_dir: PathBuf, hit: Hit, gener
     std::thread::spawn(move || {
         let target = resolve_hit(&claude_dir, &hit);
         let _ = tx.send(Wake::HitResolved { generation, target });
+    });
+}
+
+pub fn spawn_snippets(tx: &Sender<Wake>, claude_dir: PathBuf, request: SnippetRequest) {
+    let tx = tx.clone();
+    std::thread::spawn(move || {
+        let SnippetRequest { wanted, terms, generation } = request;
+        let snippets = wanted
+            .iter()
+            .filter_map(|(index, hit)| resolve::snippet(&claude_dir, hit, &terms).map(|text| (*index, text)))
+            .collect();
+        let _ = tx.send(Wake::Snippets { generation, snippets });
     });
 }
 

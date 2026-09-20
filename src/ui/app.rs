@@ -227,7 +227,10 @@ pub struct App {
     search_open: bool,
     search_query: String,
     search_results: Vec<Hit>,
+    search_snippets: Vec<Option<String>>,
     search_pane: Pane,
+    snippet_generation: Gate,
+    snippets_due: Option<Instant>,
     corpus: Option<Corpus>,
     corpus_requested: bool,
     corpus_wanted: bool,
@@ -245,6 +248,12 @@ pub struct App {
     live: Vec<Live>,
     live_due: Option<Instant>,
     pending_projects_reload: bool,
+}
+
+pub struct SnippetRequest {
+    pub wanted: Vec<(usize, Hit)>,
+    pub terms: Vec<String>,
+    pub generation: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -353,6 +362,9 @@ impl App {
             search_open: false,
             search_query: String::new(),
             search_results: Vec::new(),
+            search_snippets: Vec::new(),
+            snippet_generation: Gate::default(),
+            snippets_due: None,
             search_pane: Pane::default(),
             corpus: None,
             corpus_requested: false,
@@ -960,6 +972,7 @@ impl App {
                 let height = self.pane_height();
                 self.search_pane.selected = listing::target(motion, self.search_pane.selected, last, height);
                 self.search_pane.top = listing::revealed(self.search_pane.top, self.search_pane.selected, height);
+                self.arm_snippets();
             }
             Action::Descend => self.open_selected_hit(),
             Action::Ascend => self.toggle_search(),
@@ -1753,6 +1766,48 @@ impl App {
         &self.search_results
     }
 
+    pub fn search_snippets(&self) -> &[Option<String>] {
+        &self.search_snippets
+    }
+
+    pub const fn snippets_due(&self) -> Option<Instant> {
+        self.snippets_due
+    }
+
+    fn arm_snippets(&mut self) {
+        self.snippets_due = Some(Instant::now().checked_add(DEBOUNCE).unwrap_or_else(Instant::now));
+    }
+
+    pub fn take_snippet_load(&mut self, now: Instant) -> Option<SnippetRequest> {
+        if self.snippets_due.is_none_or(|due| now < due) {
+            return None;
+        }
+        self.snippets_due = None;
+        let height = self.pane_height();
+        let last = self.search_results.len().min(self.search_pane.top.saturating_add(height));
+        let wanted: Vec<(usize, Hit)> = (self.search_pane.top..last)
+            .filter(|index| self.search_snippets.get(*index).is_none_or(Option::is_none))
+            .filter_map(|index| self.search_results.get(index).map(|hit| (index, hit.clone())))
+            .collect();
+        if wanted.is_empty() {
+            return None;
+        }
+        let terms = search::query::parse(&self.search_query).positive;
+        self.snippet_generation.bump();
+        Some(SnippetRequest { wanted, terms, generation: self.snippet_generation.current() })
+    }
+
+    pub fn set_snippets(&mut self, generation: u64, snippets: Vec<(usize, String)>) {
+        if generation != self.snippet_generation.current() {
+            return;
+        }
+        for (index, text) in snippets {
+            if let Some(slot) = self.search_snippets.get_mut(index) {
+                *slot = Some(text);
+            }
+        }
+    }
+
     pub const fn search_pane(&self) -> Pane {
         self.search_pane
     }
@@ -1813,10 +1868,13 @@ impl App {
         self.search_pane = Pane::default();
         let Some(corpus) = &self.corpus else {
             self.search_results = Vec::new();
+            self.search_snippets = Vec::new();
             return;
         };
         let query = search::query::parse(&self.search_query);
         self.search_results = search::engine::search(corpus, &query, now_ms());
+        self.search_snippets = vec![None; self.search_results.len()];
+        self.arm_snippets();
     }
 
     fn open_selected_hit(&mut self) {
@@ -3616,6 +3674,84 @@ mod tests {
             &Options { claude_dir: PathBuf::from("/tmp"), cache_root: Some(PathBuf::from("/tmp/cache")), ..Options::default() },
             Size::new(120, 30),
         )
+    }
+
+    fn with_results(count: usize) -> App {
+        let mut app = cached_app();
+        app.apply(Action::ToggleSearch);
+        for character in "grid".chars() {
+            app.apply(Action::Type(character));
+        }
+        app.search_results = (0..count)
+            .map(|index| Hit {
+                score: 0,
+                directory: Some("-a".to_owned()),
+                file_name: format!("s{index}.jsonl"),
+                line_no: 1,
+                byte_off: 0,
+                ts_ms: 0,
+                kind: crate::domain::cache::shard::Kind::Transcript,
+                field: crate::domain::cache::shard::Field::UserPrompt,
+            })
+            .collect();
+        app.search_snippets = vec![None; count];
+        app.arm_snippets();
+        app
+    }
+
+    #[test]
+    fn snippets_are_asked_for_only_once_the_typing_has_settled() {
+        let mut app = with_results(3);
+
+        assert!(app.take_snippet_load(Instant::now()).is_none(), "a snippet job fired before the debounce elapsed");
+        assert!(app.take_snippet_load(elapsed()).is_some(), "the debounce elapsed and no snippet job was armed");
+        assert!(app.take_snippet_load(elapsed()).is_none(), "the job was requested twice for one settling");
+    }
+
+    #[test]
+    fn only_the_rows_on_screen_are_read_off_disk() {
+        let mut app = with_results(500);
+
+        let request = app.take_snippet_load(elapsed()).expect("a snippet job");
+        assert_eq!(request.wanted.len(), app.pane_height(), "the whole result list was read, not the visible window");
+        assert_eq!(request.wanted.first().map(|(index, _)| *index), Some(0));
+    }
+
+    #[test]
+    fn a_row_whose_snippet_already_arrived_is_not_read_again() {
+        let mut app = with_results(3);
+        let generation = app.take_snippet_load(elapsed()).expect("a snippet job").generation;
+        app.set_snippets(generation, vec![(0, "…the grid scanner…".to_owned())]);
+        app.arm_snippets();
+
+        let request = app.take_snippet_load(elapsed()).expect("a second snippet job");
+        assert_eq!(request.wanted.iter().map(|(index, _)| *index).collect::<Vec<usize>>(), vec![1, 2]);
+    }
+
+    #[test]
+    fn scrolling_the_result_list_asks_for_the_rows_that_came_into_view() {
+        let mut app = with_results(500);
+        let generation = app.take_snippet_load(elapsed()).expect("a snippet job").generation;
+        let filled: Vec<(usize, String)> = (0..app.pane_height()).map(|index| (index, "…a hit…".to_owned())).collect();
+        app.set_snippets(generation, filled);
+
+        app.apply(Action::Move(Motion::Bottom));
+
+        let request = app.take_snippet_load(elapsed()).expect("scrolling armed no snippet job");
+        assert!(request.wanted.iter().all(|(index, _)| *index >= app.pane_height()), "rows already read were read again");
+    }
+
+    #[test]
+    fn a_snippet_from_a_superseded_request_is_dropped_rather_than_shown() {
+        let mut app = with_results(3);
+        let stale = app.take_snippet_load(elapsed()).expect("a snippet job").generation;
+        app.arm_snippets();
+        let current = app.take_snippet_load(elapsed()).expect("a second snippet job").generation;
+        assert_ne!(stale, current, "the second request reused the first one's generation");
+
+        app.set_snippets(stale, vec![(0, "…from the request before…".to_owned())]);
+
+        assert_eq!(app.search_snippets().first(), Some(&None), "a superseded request's snippet was shown");
     }
 
     #[test]

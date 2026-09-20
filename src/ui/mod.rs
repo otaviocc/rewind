@@ -135,6 +135,9 @@ fn event_loop(
         if let Some((hit, generation)) = app.take_hit_resolve() {
             worker::spawn_resolve_hit(tx, app.claude_dir().to_path_buf(), hit, generation);
         }
+        if let Some(request) = app.take_snippet_load(Instant::now()) {
+            worker::spawn_snippets(tx, app.claude_dir().to_path_buf(), request);
+        }
         if let Some(text) = app.take_copy()
             && clipboard::copy(&text).is_err()
         {
@@ -158,7 +161,7 @@ fn event_loop(
 }
 
 fn next(app: &App, rx: &Receiver<Wake>) -> Result<Wake, RecvTimeoutError> {
-    let due = [app.conversation_due(), app.live_due()].into_iter().flatten().min();
+    let due = [app.conversation_due(), app.live_due(), app.snippets_due()].into_iter().flatten().min();
     let Some(due) = due else {
         return rx.recv().map_err(|_| RecvTimeoutError::Disconnected);
     };
@@ -189,6 +192,7 @@ fn handle(app: &mut App, wake: Wake) -> Result<()> {
         Wake::ShardReady { generation, entry } => app.set_shard_ready(generation, entry),
         Wake::CorpusLoaded(corpus) => app.set_corpus(corpus),
         Wake::HitResolved { generation, target } => app.set_hit_resolved(generation, target),
+        Wake::Snippets { generation, snippets } => app.set_snippets(generation, snippets),
         Wake::LiveScanned(live) => app.set_live(live),
         Wake::InputLost(error) => bail!("cannot read keyboard input: {error}"),
     }

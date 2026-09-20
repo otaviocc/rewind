@@ -15,6 +15,7 @@ const MARGIN_Y: u16 = 2;
 pub const HEADER_ROWS: u16 = 2;
 const PROMPT_PREFIX: &str = "? ";
 const PLACEHOLDER: &str = "type to search…";
+const SNIPPET_GAP: &str = "  ";
 const HELP: &str = "is:user|assistant|tool|thinking · project:name · -exclude · \"phrase\"";
 
 pub fn outer(area: Size) -> Size {
@@ -69,11 +70,11 @@ fn status_text(query: &str, status: CorpusStatus, count: usize) -> String {
     format!("{count} {plural}{suffix}")
 }
 
-pub fn rows(hits: &[Hit], width: usize, theme: &Theme) -> Vec<RenderedLine> {
-    hits.iter().map(|hit| row(hit, width, theme)).collect()
+pub fn rows(hits: &[Hit], snippets: &[Option<String>], width: usize, theme: &Theme) -> Vec<RenderedLine> {
+    hits.iter().enumerate().map(|(index, hit)| row(hit, snippets.get(index).and_then(Option::as_deref), width, theme)).collect()
 }
 
-fn row(hit: &Hit, width: usize, theme: &Theme) -> RenderedLine {
+fn row(hit: &Hit, snippet: Option<&str>, width: usize, theme: &Theme) -> RenderedLine {
     let place = hit.directory.as_deref().unwrap_or("history");
     let text = if hit.kind == Kind::Subagent {
         format!("{place} · subagent · {} · L{}", field_label(hit.kind, hit.field), hit.line_no)
@@ -82,7 +83,18 @@ fn row(hit: &Hit, width: usize, theme: &Theme) -> RenderedLine {
     };
     let mut line = RenderedLine::default();
     line.push(StyledSpan::new(truncate(&text, width), theme.style(Element::Body)));
+    let Some(snippet) = snippet.filter(|found| !found.is_empty()) else { return line };
+    let room = width.saturating_sub(line.width()).saturating_sub(SNIPPET_GAP.len());
+    if room == 0 {
+        return line;
+    }
+    line.push(StyledSpan::new(SNIPPET_GAP, theme.style(Element::Muted)));
+    line.push(StyledSpan::new(truncate(&collapsed(snippet), room), theme.style(Element::Muted)));
     line
+}
+
+fn collapsed(snippet: &str) -> String {
+    snippet.split_whitespace().collect::<Vec<&str>>().join(" ")
 }
 
 const fn field_label(kind: Kind, field: Field) -> &'static str {
@@ -186,26 +198,60 @@ mod tests {
 
     #[test]
     fn a_history_hit_is_labelled_history_regardless_of_field() {
-        let rendered = row(&hit(None, Kind::History, Field::UserPrompt, 3), 80, &theme());
+        let rendered = row(&hit(None, Kind::History, Field::UserPrompt, 3), None, 80, &theme());
         assert!(rendered.text().starts_with("history · history"));
     }
 
     #[test]
     fn a_transcript_hit_shows_its_project_field_and_line() {
-        let rendered = row(&hit(Some("-a-project"), Kind::Transcript, Field::ToolResult, 12), 80, &theme());
+        let rendered = row(&hit(Some("-a-project"), Kind::Transcript, Field::ToolResult, 12), None, 80, &theme());
         assert_eq!(rendered.text(), "-a-project · tool result · L12");
     }
 
     #[test]
     fn a_subagent_hit_is_distinguished_from_a_transcript_hit() {
-        let rendered = row(&hit(Some("-a-project"), Kind::Subagent, Field::UserPrompt, 5), 80, &theme());
+        let rendered = row(&hit(Some("-a-project"), Kind::Subagent, Field::UserPrompt, 5), None, 80, &theme());
         assert_eq!(rendered.text(), "-a-project · subagent · prompt · L5");
     }
 
     #[test]
     fn a_narrow_pane_truncates_rather_than_overflows() {
         let hits = [hit(Some("-a-very-long-project-directory-name-here"), Kind::Transcript, Field::AssistantText, 999)];
-        let rendered = rows(&hits, 20, &theme());
+        let rendered = rows(&hits, &[], 20, &theme());
         assert!(rendered.iter().all(|line| line.width() <= 20), "{rendered:?}");
+    }
+
+    #[test]
+    fn a_hit_with_a_snippet_shows_what_it_says_after_where_it_is() {
+        let rendered = row(
+            &hit(Some("-a-project"), Kind::Transcript, Field::ToolResult, 12),
+            Some("…212 src/engine/grid.rs…"),
+            80,
+            &theme(),
+        );
+        assert_eq!(rendered.text(), "-a-project · tool result · L12  …212 src/engine/grid.rs…");
+    }
+
+    #[test]
+    fn a_snippet_that_spans_lines_is_flattened_onto_the_one_row() {
+        let rendered = row(&hit(None, Kind::History, Field::UserPrompt, 1), Some("first\n  second\tthird"), 80, &theme());
+        assert_eq!(rendered.text(), "history · history · L1  first second third");
+    }
+
+    #[test]
+    fn a_snippet_never_widens_a_row_past_the_pane() {
+        let hits = [hit(Some("-a-very-long-project-directory-name-here"), Kind::Transcript, Field::AssistantText, 999)];
+        let snippets = [Some("a snippet long enough to overflow any narrow pane it is handed".to_owned())];
+        let rendered = rows(&hits, &snippets, 20, &theme());
+        assert!(rendered.iter().all(|line| line.width() <= 20), "{rendered:?}");
+    }
+
+    #[test]
+    fn a_hit_whose_snippet_has_not_arrived_reads_as_it_always_did() {
+        let hits = [hit(Some("-a-project"), Kind::Transcript, Field::ToolResult, 12)];
+        assert_eq!(
+            rows(&hits, &[None], 80, &theme()).first().map(RenderedLine::text),
+            rows(&hits, &[], 80, &theme()).first().map(RenderedLine::text)
+        );
     }
 }
