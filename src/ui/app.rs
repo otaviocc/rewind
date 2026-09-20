@@ -1421,12 +1421,15 @@ impl App {
 
     fn click(&mut self, column: Column, row: u16) {
         self.focused = column;
-        self.drag = (column == Column::Conversation)
-            .then(|| self.conversation_pane.top.saturating_add(usize::from(row)))
-            .map(|line| Drag { anchor: line, cursor: line, moved: false });
         match column {
-            Column::Projects | Column::Sessions => self.click_list(column, row),
-            Column::Conversation => self.click_conversation(row),
+            Column::Projects | Column::Sessions => {
+                self.drag = None;
+                self.click_list(column, row);
+            }
+            Column::Conversation => {
+                let line = self.conversation_pane.top.saturating_add(usize::from(row));
+                self.drag = Some(Drag { anchor: line, cursor: line, moved: false });
+            }
         }
     }
 
@@ -1445,6 +1448,7 @@ impl App {
     fn release(&mut self) {
         let Some(drag) = self.drag.take() else { return };
         if !drag.moved {
+            self.enter_or_expand_at(drag.anchor);
             return;
         }
         let Some(text) = self.selected_text(&drag) else { return };
@@ -1480,8 +1484,7 @@ impl App {
         }
     }
 
-    fn click_conversation(&mut self, row: u16) {
-        let line = self.conversation_pane.top.saturating_add(usize::from(row));
+    fn enter_or_expand_at(&mut self, line: usize) {
         let Some(cursor) = self
             .anchors()
             .iter()
@@ -2633,6 +2636,7 @@ mod tests {
             u16::try_from(app.anchors().first().map(|anchor| anchor.line).expect("at least one call")).expect("a small row");
 
         app.apply(Action::Click { column: Column::Conversation, row });
+        app.apply(Action::Release);
 
         assert_eq!(app.call_cursor(), Some(0));
         assert!(call_lines(&app).first().is_some_and(|text| text.contains('▾')), "the click expanded the call");
@@ -2649,6 +2653,7 @@ mod tests {
         let row = u16::try_from(line.saturating_sub(top)).expect("a small row");
 
         app.apply(Action::Click { column: Column::Conversation, row });
+        app.apply(Action::Release);
 
         assert_eq!(app.depth(), 1, "the click descended into the subagent");
     }
@@ -2662,6 +2667,7 @@ mod tests {
         let cursor = app.call_cursor();
 
         app.apply(Action::Click { column: Column::Conversation, row: 1 });
+        app.apply(Action::Release);
 
         assert_eq!(app.call_cursor(), cursor, "a body row is not a header row, so the cursor did not move");
     }
@@ -3675,5 +3681,21 @@ mod tests {
         app.apply(Action::Resize(Size::new(80, 30)));
         app.reflow();
         assert!(app.selected_rows().is_none(), "a rewrap invalidates the line numbers a selection was built from");
+    }
+
+    #[test]
+    fn dragging_that_starts_on_a_calls_header_does_not_expand_it() {
+        let mut app = with_calls(Size::new(120, 30));
+        app.apply(Action::Focus { forward: true });
+        app.apply(Action::Focus { forward: true });
+        let row =
+            u16::try_from(app.anchors().first().map(|anchor| anchor.line).expect("at least one call")).expect("a small row");
+
+        app.apply(Action::Click { column: Column::Conversation, row });
+        app.apply(Action::Drag { column: Column::Conversation, row: row.saturating_add(2) });
+        app.apply(Action::Release);
+
+        assert!(call_lines(&app).first().is_none_or(|text| !text.contains('▾')), "a drag must not expand the call it started on");
+        assert!(app.take_copy().is_some(), "the drag still copies its selection");
     }
 }
