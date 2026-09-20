@@ -246,9 +246,9 @@ accent = "#89b4fa"
 ```
 
 A theme may also name the syntax highlighting its code blocks use, with
-`syntax_theme = "..."`. The bundled ones are `base16-ocean.dark`, `base16-eighties.dark`,
-`base16-mocha.dark`, `base16-ocean.light`, `InspiredGitHub`, `Solarized (dark)` and
-`Solarized (light)`.
+`syntax_theme = "..."`. The bundled ones are `default-plus`, `base16-ocean.dark`,
+`base16-eighties.dark`, `base16-mocha.dark`, `base16-ocean.light`, `InspiredGitHub`,
+`Solarized (dark)` and `Solarized (light)`.
 
 ### A whole theme
 
