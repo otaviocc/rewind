@@ -130,10 +130,15 @@ message is a glance rather than a hunt.
 | `bare terms` | AND together |
 | `"a phrase"` | matched whole |
 | `-term` | excludes it |
-| `is:user` `is:assistant` `is:tool` `is:thinking` | restrict to one kind of text |
+| `is:user` `is:assistant` `is:tool` `is:thinking` `is:any` | restrict to one kind of text |
 | `project:name` | restrict to one project |
 
 Anything else is a literal term.
+
+A search with no `is:` looks only at what a human or the assistant wrote. Tool parameters,
+tool output and the model's thinking are indexed too, but they are bulky and would otherwise
+crowd out the conversation, so you reach them by asking: `is:tool`, `is:thinking`, or
+`is:any` for everything at once.
 
 Search is backed by a corpus rewind keeps under `$XDG_CACHE_HOME/rewind`, or
 `~/.cache/rewind` if that variable is unset. It builds in the background and is searchable
