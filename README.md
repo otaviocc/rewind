@@ -60,7 +60,7 @@ cargo install --locked --path .
 | `Esc` | leave a subagent · back out |
 | `f` | focus the conversation full-width |
 | `/` | filter the list |
-| `?` | search everything |
+| `s` | search everything |
 | `n` `p` `N` | next · previous tool call, or step through a locked `/` filter (`N` is an alias for `p`) |
 | `[` `]` | previous · next message |
 | `Space` `t` | expand one tool call · all of them |
@@ -70,6 +70,7 @@ cargo install --locked --path .
 | `c` | copy `claude --resume <id>` |
 | `e` | export to a file |
 | `D` | what could not be read · `Esc` closes it |
+| `?` `F1` | every key and what it does · `Esc` closes it |
 | `q` | quit |
 
 Mouse wheel scrolls whichever column is under the pointer, not whichever has focus. Clicking
