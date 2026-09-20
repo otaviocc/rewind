@@ -126,6 +126,7 @@ mod tests {
             ts_ms: 0,
             kind,
             field,
+            text_hash: 0,
         }
     }
 

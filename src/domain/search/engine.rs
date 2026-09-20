@@ -5,8 +5,9 @@
 //! floats.
 
 use std::cmp::Reverse;
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashSet};
 
+use crate::domain::cache::fnv;
 use crate::domain::cache::shard::{Field, Kind, Record, Shard};
 use crate::domain::search::corpus::{Corpus, ShardEntry};
 use crate::domain::search::matcher::Needles;
@@ -25,6 +26,7 @@ pub struct Hit {
     pub ts_ms: i64,
     pub kind: Kind,
     pub field: Field,
+    pub text_hash: u64,
 }
 
 pub fn search(corpus: &Corpus, query: &Query, now_ms: i64) -> Vec<Hit> {
@@ -52,8 +54,14 @@ pub fn search(corpus: &Corpus, query: &Query, now_ms: i64) -> Vec<Hit> {
 
     let mut merged: Vec<Hit> = per_shard.into_iter().flatten().collect();
     merged.sort_by_key(|hit| Reverse(hit.score));
+    drop_duplicated_history(&mut merged);
     merged.truncate(TOP_K_PER_SHARD);
     merged
+}
+
+fn drop_duplicated_history(hits: &mut Vec<Hit>) {
+    let transcribed: HashSet<u64> = hits.iter().filter(|hit| hit.kind != Kind::History).map(|hit| hit.text_hash).collect();
+    hits.retain(|hit| hit.kind != Kind::History || !transcribed.contains(&hit.text_hash));
 }
 
 fn project_allowed(query: &Query, directory: Option<&str>) -> bool {
@@ -109,6 +117,7 @@ fn push_bounded(heap: &mut BinaryHeap<Reverse<ScoredIndex>>, item: ScoredIndex) 
 fn to_hit(entry: &ShardEntry, shard: &Shard<'_>, record: &Record, score: u64) -> Option<Hit> {
     let file_idx = usize::try_from(record.file_idx).ok()?;
     let file_name = shard.files().get(file_idx)?.path.clone();
+    let text_hash = fnv::hash(shard.text(record).unwrap_or_default());
     Some(Hit {
         score,
         directory: entry.directory.clone(),
@@ -118,6 +127,7 @@ fn to_hit(entry: &ShardEntry, shard: &Shard<'_>, record: &Record, score: u64) ->
         ts_ms: record.ts_ms,
         kind: record.kind,
         field: record.field,
+        text_hash,
     })
 }
 
@@ -242,19 +252,55 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_history_shard_is_weighted_above_a_project_shard_for_an_otherwise_equal_hit() {
+    fn corpus_with_history(history_text: &str, transcript_text: &str) -> Corpus {
         let mut builder = Builder::new();
         let file = builder.push_file("history.jsonl", 1, 0, 0, 0);
-        builder.push_record(file, 0, 0, 1000, Kind::History, Field::UserPrompt, 0, 0, "grid scanner");
+        builder.push_record(file, 0, 0, 1000, Kind::History, Field::UserPrompt, 0, 0, history_text);
         let history_bytes = builder.finish(0);
 
-        let mut project_corpus = corpus_with(&[(Kind::Transcript, Field::UserPrompt, "grid scanner", 1000)]);
-        project_corpus.shards.push(ShardEntry { directory: None, weight: 110, bytes: history_bytes });
+        let mut corpus = corpus_with(&[(Kind::Transcript, Field::UserPrompt, transcript_text, 1000)]);
+        corpus.shards.push(ShardEntry { directory: None, weight: 110, bytes: history_bytes });
+        corpus
+    }
 
-        let hits = search(&project_corpus, &query::parse("grid scanner"), 1000);
+    #[test]
+    fn the_history_shard_is_weighted_above_a_project_shard_for_an_otherwise_equal_hit() {
+        let corpus = corpus_with_history("grid scanner", "grid scanner reads back");
+
+        let hits = search(&corpus, &query::parse("grid scanner"), 1000);
         assert_eq!(hits.len(), 2);
         assert!(hits.first().is_some_and(|hit| hit.directory.is_none()), "the history hit should rank first");
+    }
+
+    #[test]
+    fn a_history_hit_repeating_a_transcript_hit_word_for_word_is_dropped() {
+        let corpus = corpus_with_history("grid scanner", "grid scanner");
+
+        let hits = search(&corpus, &query::parse("grid scanner"), 1000);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(
+            hits.first().map(|hit| hit.kind),
+            Some(Kind::Transcript),
+            "the surviving copy must be the one that can open a session"
+        );
+    }
+
+    #[test]
+    fn a_history_hit_that_no_transcript_repeats_still_lists() {
+        let corpus = corpus_with_history("grid scanner", "something else entirely");
+
+        let hits = search(&corpus, &query::parse("grid scanner"), 1000);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits.first().map(|hit| hit.kind), Some(Kind::History));
+    }
+
+    #[test]
+    fn a_history_hit_is_kept_when_the_transcript_only_resembles_it() {
+        let corpus = corpus_with_history("grid scanner", "grid scanner reads back");
+
+        let hits = search(&corpus, &query::parse("grid scanner"), 1000);
+        assert!(hits.iter().any(|hit| hit.kind == Kind::History), "a near-match is a different prompt, not a duplicate");
+        assert!(hits.iter().any(|hit| hit.kind == Kind::Transcript));
     }
 
     #[test]

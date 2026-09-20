@@ -3692,6 +3692,7 @@ mod tests {
                 ts_ms: 0,
                 kind: crate::domain::cache::shard::Kind::Transcript,
                 field: crate::domain::cache::shard::Field::UserPrompt,
+                text_hash: 0,
             })
             .collect();
         app.search_snippets = vec![None; count];
