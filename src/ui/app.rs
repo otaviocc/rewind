@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Write as _;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -19,7 +20,7 @@ use crate::domain::subagent::{Agent, Agents};
 use crate::domain::thread::{Conversation, NodeId, NodeKind, ThreadError};
 use crate::domain::tool;
 use crate::render::export;
-use crate::render::line::{RenderedLine, split_at_width};
+use crate::render::line::{self, RenderedLine, split_at_width};
 use crate::render::message::{self, Anchor, Position, Transcript};
 use crate::render::{Branches, Ctx as RenderCtx, Expanded, Outputs, Overflow};
 use crate::theme::Theme;
@@ -28,7 +29,8 @@ use crate::ui::{Options, columns, diagnostics, help, listing, search as ui_searc
 
 pub const CHROME_ROWS: u16 = 5;
 pub const DEBOUNCE: Duration = Duration::from_millis(80);
-pub const LIVE_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const LANDING_LEAD_IN: usize = 2;
+const LIVE_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Column {
@@ -233,6 +235,7 @@ pub struct App {
     pending_hit_resolve: Option<(Hit, u64)>,
     pending_scroll_uuid: Option<String>,
     pending_hit_agent: Option<String>,
+    search_highlight: Option<SearchHighlight>,
     filter: Option<Filter>,
     pending_copy: Option<String>,
     notice: Option<String>,
@@ -242,6 +245,12 @@ pub struct App {
     live: Vec<Live>,
     live_due: Option<Instant>,
     pending_projects_reload: bool,
+}
+
+#[derive(Debug, Clone)]
+struct SearchHighlight {
+    uuid: String,
+    terms: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -352,6 +361,7 @@ impl App {
             pending_hit_resolve: None,
             pending_scroll_uuid: None,
             pending_hit_agent: None,
+            search_highlight: None,
             filter: None,
             pending_copy: None,
             notice: None,
@@ -864,6 +874,9 @@ impl App {
 
     pub fn apply(&mut self, action: Action) {
         self.notice = None;
+        if !matches!(action, Action::Resize(_) | Action::Drag { .. } | Action::Release) {
+            self.search_highlight = None;
+        }
         if self.export_prompt.is_some() {
             self.apply_export(action);
             return;
@@ -1720,6 +1733,18 @@ impl App {
         &self.search_query
     }
 
+    pub fn search_hit_generation(&self) -> u64 {
+        self.search_hit_generation.current()
+    }
+
+    pub fn search_highlight(&self) -> Option<(Range<usize>, &[String])> {
+        let highlight = self.search_highlight.as_ref()?;
+        let Loadable::Ready(rendered) = &self.conversation else { return None };
+        let node = rendered.conversation().id_of(&highlight.uuid)?;
+        let rows = rendered.transcript().rows(node)?;
+        Some((rows, highlight.terms.as_slice()))
+    }
+
     pub fn search_results(&self) -> &[Hit] {
         &self.search_results
     }
@@ -1844,6 +1869,10 @@ impl App {
     }
 
     fn open_search_hit(&mut self, target: Opened) {
+        self.search_highlight = target.uuid.as_ref().and_then(|uuid| {
+            let terms = search::query::parse(&self.search_query).positive;
+            (!terms.is_empty()).then(|| SearchHighlight { uuid: uuid.clone(), terms })
+        });
         self.search_open = false;
         self.filter = None;
         let Loadable::Ready(projects) = &self.projects else { return };
@@ -1866,13 +1895,20 @@ impl App {
             self.view.bump();
             self.rerender();
         }
-        let line = {
-            let Loadable::Ready(rendered) = &self.conversation else { return };
-            let Some(position) = rendered.transcript().landing(rendered.conversation(), uuid) else { return };
-            let Some(line) = rendered.transcript().line_of(position) else { return };
-            line
-        };
-        self.conversation_pane.top = line.min(self.last(Column::Conversation));
+        let Some((line, first)) = self.landing_line(uuid) else { return };
+        self.conversation_pane.top = line.saturating_sub(LANDING_LEAD_IN).max(first).min(self.last(Column::Conversation));
+        self.call_cursor = None;
+    }
+
+    fn landing_line(&self, uuid: &str) -> Option<(usize, usize)> {
+        let Loadable::Ready(rendered) = &self.conversation else { return None };
+        let transcript = rendered.transcript();
+        let position = transcript.landing(rendered.conversation(), uuid)?;
+        let first = transcript.line_of(position)?;
+        let terms = self.search_highlight.as_ref().map(|highlight| highlight.terms.as_slice()).unwrap_or_default();
+        let mut rows = transcript.rows(position.node).unwrap_or_else(|| first..first.saturating_add(1));
+        let marked = rows.find(|at| transcript.lines.get(*at).is_some_and(|found| !line::highlights(found, terms).is_empty()));
+        Some((marked.unwrap_or(first), first))
     }
 
     fn select_branch_to(&mut self, node: NodeId) -> bool {
@@ -2171,6 +2207,77 @@ mod tests {
 
     fn landed_on(uuid: &str) -> App {
         landed_on_in(uuid, calls_conversation().0)
+    }
+
+    fn prose_conversation(lines: &[&str]) -> Conversation {
+        let dir = tempfile::TempDir::new().expect("a temporary directory");
+        let path = dir.path().join("session.jsonl");
+        let human = r#"{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:00Z","origin":{"kind":"human"},"message":{"role":"user","content":"read it back"}}"#;
+        let prose = lines.join("\\n\\n");
+        let reply = format!(
+            r#"{{"type":"assistant","uuid":"a1","parentUuid":"u1","sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:01Z","requestId":"q1","message":{{"model":"opus-5","id":"m1","role":"assistant","content":[{{"type":"text","text":"{prose}"}}]}}}}"#
+        );
+        std::fs::write(&path, format!("{human}\n{reply}\n")).expect("a written transcript");
+        crate::domain::thread::build(&path).expect("a built conversation")
+    }
+
+    fn searched(query: &str, uuid: &str, conversation: Conversation) -> App {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("a")]));
+        let _ = app.take_session_load();
+        app.apply(Action::ToggleSearch);
+        for character in query.chars() {
+            app.apply(Action::Type(character));
+        }
+        app.set_hit_resolved(app.search_hit_generation(), Some(opened(uuid)));
+        let _ = app.take_session_load();
+        app.set_sessions(app.generation(), vec![session("s1")]);
+        let (_, generation) = app.take_conversation_load(elapsed()).expect("a conversation load was requested");
+        app.set_conversation(generation, Ok(Arc::new(conversation)), Agents::default());
+        app
+    }
+
+    #[test]
+    fn the_terms_marked_are_the_positive_ones_the_query_asked_for() {
+        let app = searched("is:user project:holodeck -warp grid", "a1", prose_conversation(&["the grid scanner"]));
+
+        let (_, terms) = app.search_highlight().expect("the hit left a mark");
+        assert_eq!(terms, ["grid".to_owned()], "an operator or a negation was marked as a term");
+    }
+
+    #[test]
+    fn a_query_of_nothing_but_operators_marks_nothing() {
+        let app = searched("is:user", "a1", prose_conversation(&["the grid scanner"]));
+
+        assert!(app.search_highlight().is_none(), "a query with no terms in it still armed a mark");
+    }
+
+    #[test]
+    fn a_uuid_the_conversation_does_not_hold_marks_nothing_rather_than_guessing() {
+        let app = searched("grid", "not-in-this-file", prose_conversation(&["the grid scanner"]));
+
+        assert!(app.search_highlight().is_none());
+    }
+
+    #[test]
+    fn landing_stops_on_the_line_carrying_the_term_rather_than_the_top_of_the_message() {
+        let app = searched("thruster", "a1", prose_conversation(&["the grid scanner", "the port array", "the thruster bank"]));
+
+        let (rows, terms) = app.search_highlight().expect("the hit left a mark");
+        let marked = rows
+            .clone()
+            .find(|at| app.lines().get(*at).is_some_and(|line| !line::highlights(line, terms).is_empty()))
+            .expect("the term is on some line of the message");
+        assert!(marked > rows.start, "the term is on the message's first line, so this test proves nothing");
+        assert_eq!(app.conversation_pane.top, marked.saturating_sub(LANDING_LEAD_IN).max(rows.start));
+    }
+
+    #[test]
+    fn the_lead_in_never_scrolls_up_past_the_start_of_the_message_it_landed_on() {
+        let app = searched("grid", "a1", prose_conversation(&["the grid scanner", "the port array"]));
+
+        let (rows, _) = app.search_highlight().expect("the hit left a mark");
+        assert_eq!(app.conversation_pane.top, rows.start, "the lead-in scrolled up into the message above");
     }
 
     fn node_named(app: &App, uuid: &str) -> NodeId {

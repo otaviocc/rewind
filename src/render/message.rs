@@ -2,6 +2,7 @@
 //! two-row head per tool call, and the same shape for a local slash command and its result.
 
 use std::collections::HashSet;
+use std::ops::Range;
 
 use ratatui::style::Style;
 
@@ -124,6 +125,13 @@ impl Transcript {
             candidate = conversation.node(candidate)?.parent?;
         }
         None
+    }
+
+    pub fn rows(&self, node: NodeId) -> Option<Range<usize>> {
+        let index = self.spans.iter().position(|span| span.node == node)?;
+        let span = self.spans.get(index)?;
+        let end = self.spans.get(index.saturating_add(1)).map_or(self.lines.len(), |next| next.line);
+        Some(span.line..end.max(span.line))
     }
 
     pub fn line_of(&self, position: Position) -> Option<usize> {
@@ -681,6 +689,36 @@ mod tests {
         format!(
             r#"{{"type":"assistant","uuid":"{uuid}","parentUuid":"{parent}","sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:01Z","message":{{"id":"msg_{uuid}","model":"opus-5","role":"assistant","content":{content}}}}}"#
         )
+    }
+
+    #[test]
+    fn a_nodes_rows_are_its_own_lines_and_stop_where_the_next_node_starts() {
+        let transcript = built(&[
+            HUMAN,
+            &assistant("a1", "u1", r#"[{"type":"text","text":"first"}]"#),
+            &assistant("a2", "a1", r#"[{"type":"text","text":"second"}]"#),
+        ]);
+
+        let mut seen: Vec<Range<usize>> = Vec::new();
+        for span in &transcript.spans {
+            let rows = transcript.rows(span.node).expect("every span's node has rows");
+            assert_eq!(rows.start, span.line, "a node's rows do not start where its span does");
+            for line in rows.clone() {
+                assert_eq!(
+                    transcript.position(line).map(|at| at.node),
+                    Some(span.node),
+                    "line {line} is inside one node's rows and reports another"
+                );
+            }
+            seen.push(rows);
+        }
+
+        let last = seen.last().cloned().expect("a transcript with spans");
+        assert_eq!(last.end, transcript.lines.len(), "the final node's rows stop short of the end");
+        for pair in seen.windows(2) {
+            let (left, right) = (pair.first().expect("a left"), pair.get(1).expect("a right"));
+            assert_eq!(left.end, right.start, "two nodes' rows leave a gap or overlap");
+        }
     }
 
     #[test]

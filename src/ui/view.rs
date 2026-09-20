@@ -10,7 +10,7 @@ use ratatui::{Frame, symbols};
 use unicode_width::UnicodeWidthStr;
 
 use crate::domain::project::Resolution;
-use crate::render::line::{RenderedLine, StyledSpan, truncate};
+use crate::render::line::{self, RenderedLine, StyledSpan, truncate};
 use crate::theme::Element;
 use crate::ui::age;
 use crate::ui::app::{App, Column, Loadable, Mode};
@@ -313,6 +313,18 @@ fn export_overlay(area: Rect, buf: &mut Buffer, app: &App) {
     painted(hint_row, buf, &export_prompt::hint_line(confirm, width, app.theme()));
 }
 
+fn highlighted(area: Rect, buf: &mut Buffer, line: &RenderedLine, terms: &[String], style: Style) {
+    for range in line::highlights(line, terms) {
+        let start = area.x.saturating_add(u16::try_from(range.start).unwrap_or(u16::MAX));
+        let end = area.x.saturating_add(u16::try_from(range.end).unwrap_or(u16::MAX));
+        for x in start..end.min(area.right()) {
+            if let Some(cell) = buf.cell_mut((x, area.y)) {
+                cell.set_style(style);
+            }
+        }
+    }
+}
+
 fn divider(x: u16, area: Rect, buf: &mut Buffer, style: Style) {
     for y in area.y..area.bottom() {
         if let Some(cell) = buf.cell_mut((x, y)) {
@@ -425,6 +437,7 @@ fn conversation_rows(area: Rect, buf: &mut Buffer, app: &App, focused: bool) {
     let last = lines.len().min(top.saturating_add(usize::from(area.height)));
     let cursor = app.cursor_rows();
     let selected = app.selected_rows();
+    let highlight = app.search_highlight();
 
     for (row_index, index) in (top..last).enumerate() {
         let Some(line) = lines.get(index) else { continue };
@@ -434,6 +447,11 @@ fn conversation_rows(area: Rect, buf: &mut Buffer, app: &App, focused: bool) {
         let picked = cursor.as_ref().is_some_and(|rows| rows.contains(&index))
             || selected.as_ref().is_some_and(|rows| rows.contains(&index));
         band(row, buf, app, picked, focused);
+        if let Some((rows, terms)) = highlight.as_ref()
+            && rows.contains(&index)
+        {
+            highlighted(row, buf, line, terms, app.theme().style(Element::SearchMatch));
+        }
     }
 }
 
@@ -1207,6 +1225,79 @@ mod tests {
             assert_ne!(buffer[(x, 3)].fg, ratatui::style::Color::Reset, "the divider at {x} took the terminal's foreground");
         }
         assert_eq!(buffer[(0, 1)].fg, hairline, "the top rule is no longer the hairline colour");
+    }
+
+    fn landed_on_a_hit(query: &str, text: &str) -> App {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("a", true)]));
+        app.apply(Action::ToggleSearch);
+        for character in query.chars() {
+            app.apply(Action::Type(character));
+        }
+        let opened = crate::domain::search::resolve::Opened {
+            project_directory: "a".to_owned(),
+            session_id: "s".to_owned(),
+            uuid: Some("u1".to_owned()),
+            agent_id: None,
+        };
+        app.set_hit_resolved(app.search_hit_generation(), Some(opened));
+        with_conversation(&mut app, text);
+        app
+    }
+
+    fn marked_cells(buffer: &Buffer, background: ratatui::style::Color) -> usize {
+        (0..buffer.area.height)
+            .flat_map(|y| (0..buffer.area.width).map(move |x| (x, y)))
+            .filter(|&at| buffer[at].bg == background)
+            .count()
+    }
+
+    #[test]
+    fn a_searched_term_is_painted_in_the_match_style_and_only_where_it_occurs() {
+        let app = landed_on_a_hit("grid", "the grid scanner is offline");
+
+        let buffer = frame(&app, Size::new(120, 24));
+        let background = app.theme().style(Element::SearchMatch).bg.expect("the match style names a background");
+        let row = (0..24).find(|&y| text_row(&buffer, y).contains("grid scanner")).expect("the message never drew");
+        let text = text_row(&buffer, row);
+        let offset = text.find("grid").expect("grid is on the row");
+        let start = u16::try_from(text.get(..offset).unwrap_or_default().width()).expect("a column");
+
+        for column in start..start.saturating_add(4) {
+            assert_eq!(buffer[(column, row)].bg, background, "column {column} of {text:?} is not marked");
+        }
+        assert_ne!(buffer[(start.saturating_add(4), row)].bg, background, "the space after the term is marked");
+        assert_ne!(buffer[(start.saturating_sub(1), row)].bg, background, "the space before the term is marked");
+    }
+
+    #[test]
+    fn nothing_is_painted_as_a_match_when_no_search_led_here() {
+        let app = app(Size::new(120, 24));
+        let buffer = frame(&app, Size::new(120, 24));
+        let background = app.theme().style(Element::SearchMatch).bg.expect("the match style names a background");
+
+        assert_eq!(marked_cells(&buffer, background), 0, "something is painted as a search match with no search behind it");
+    }
+
+    #[test]
+    fn the_next_keypress_takes_the_mark_away() {
+        let mut app = landed_on_a_hit("grid", "the grid scanner is offline");
+        let background = app.theme().style(Element::SearchMatch).bg.expect("the match style names a background");
+        assert_ne!(marked_cells(&frame(&app, Size::new(120, 24)), background), 0, "the hit never marked anything");
+
+        app.apply(Action::Move(crate::ui::input::Motion::Line(1)));
+
+        assert_eq!(marked_cells(&frame(&app, Size::new(120, 24)), background), 0, "the mark outlived the next keypress");
+    }
+
+    #[test]
+    fn a_resize_does_not_count_as_moving_on() {
+        let mut app = landed_on_a_hit("grid", "the grid scanner is offline");
+        let background = app.theme().style(Element::SearchMatch).bg.expect("the match style names a background");
+
+        app.apply(Action::Resize(Size::new(110, 24)));
+
+        assert_ne!(marked_cells(&frame(&app, Size::new(110, 24)), background), 0, "a reflow took the mark away");
     }
 
     #[test]

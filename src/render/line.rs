@@ -1,6 +1,8 @@
 //! The contract every renderer speaks: styled spans, a laid-out line, and the display-width
 //! arithmetic that turns prose into lines of a given column count.
 
+use std::ops::Range;
+
 use ratatui::style::Style;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -64,6 +66,49 @@ impl RenderedLine {
         self.inset = self.inset.saturating_add(span.width());
         self.spans.insert(0, span);
     }
+}
+
+pub fn highlights(line: &RenderedLine, terms: &[String]) -> Vec<Range<usize>> {
+    if terms.is_empty() {
+        return Vec::new();
+    }
+    let (lowered, columns) = lowered_with_columns(&line.text());
+
+    let mut found: Vec<Range<usize>> = Vec::new();
+    for term in terms.iter().filter(|term| !term.is_empty()) {
+        for (offset, matched) in lowered.match_indices(term.as_str()) {
+            let Some(&start) = columns.get(offset) else { continue };
+            let Some(&end) = columns.get(offset.saturating_add(matched.len())) else { continue };
+            if end > start {
+                found.push(start..end);
+            }
+        }
+    }
+    merge_ranges(found)
+}
+
+fn lowered_with_columns(text: &str) -> (String, Vec<usize>) {
+    let mut lowered = String::with_capacity(text.len());
+    let mut columns: Vec<usize> = Vec::with_capacity(text.len().saturating_add(1));
+    let mut column = 0usize;
+    for character in text.chars() {
+        lowered.extend(character.to_lowercase());
+        columns.resize(lowered.len(), column);
+        column = column.saturating_add(UnicodeWidthChar::width(character).unwrap_or(0));
+    }
+    columns.push(column);
+    (lowered, columns)
+}
+
+fn merge_ranges(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
+    ranges.sort_by_key(|range| (range.start, range.end));
+    ranges.into_iter().fold(Vec::new(), |mut merged: Vec<Range<usize>>, range| {
+        match merged.last_mut() {
+            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+            _ => merged.push(range),
+        }
+        merged
+    })
 }
 
 pub fn split_first_char(text: &str) -> (&str, &str) {
@@ -284,6 +329,73 @@ mod tests {
 
     fn texts(lines: &[RenderedLine]) -> Vec<String> {
         lines.iter().map(RenderedLine::text).collect()
+    }
+
+    fn line_of(pieces: &[&str]) -> RenderedLine {
+        let mut line = RenderedLine::default();
+        for piece in pieces {
+            line.push(StyledSpan::new(*piece, plain()));
+        }
+        line
+    }
+
+    fn terms(words: &[&str]) -> Vec<String> {
+        words.iter().map(|word| (*word).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_term_is_found_at_the_display_column_it_starts_on() {
+        let line = line_of(&["the grid scanner"]);
+        assert_eq!(highlights(&line, &terms(&["grid"])), vec![4..8]);
+    }
+
+    #[test]
+    fn a_term_spanning_two_spans_is_still_one_run() {
+        let line = line_of(&["the gr", "id scanner"]);
+        assert_eq!(highlights(&line, &terms(&["grid"])), vec![4..8]);
+    }
+
+    #[test]
+    fn matching_ignores_case_the_way_the_corpus_does() {
+        let line = line_of(&["The GRID Scanner"]);
+        assert_eq!(highlights(&line, &terms(&["grid"])), vec![4..8]);
+    }
+
+    #[test]
+    fn every_occurrence_of_a_term_is_found_not_only_the_first() {
+        let line = line_of(&["grid and grid"]);
+        assert_eq!(highlights(&line, &terms(&["grid"])), vec![0..4, 9..13]);
+    }
+
+    #[test]
+    fn wide_glyphs_before_a_term_push_it_along_by_their_display_width() {
+        let line = line_of(&["ホロ grid"]);
+        assert_eq!(highlights(&line, &terms(&["grid"])), vec![5..9]);
+    }
+
+    #[test]
+    fn a_wide_term_is_as_many_columns_wide_as_it_draws() {
+        let line = line_of(&["a ホロ b"]);
+        assert_eq!(highlights(&line, &terms(&["ホロ"])), vec![2..6]);
+    }
+
+    #[test]
+    fn overlapping_terms_merge_into_one_run_rather_than_painting_twice() {
+        let line = line_of(&["scanner"]);
+        assert_eq!(highlights(&line, &terms(&["scan", "anner"])), vec![0..7]);
+    }
+
+    #[test]
+    fn a_term_that_is_not_there_highlights_nothing_and_neither_does_no_term() {
+        let line = line_of(&["the grid scanner"]);
+        assert!(highlights(&line, &terms(&["warp"])).is_empty());
+        assert!(highlights(&line, &[]).is_empty());
+        assert!(highlights(&line, &terms(&[""])).is_empty());
+    }
+
+    #[test]
+    fn a_blank_line_survives_being_asked() {
+        assert!(highlights(&RenderedLine::blank(), &terms(&["grid"])).is_empty());
     }
 
     #[test]
