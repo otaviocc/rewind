@@ -5,13 +5,13 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::render::line::{RenderedLine, StyledSpan, truncate};
 use crate::theme::{Element, Theme};
+use crate::ui::FRAME;
 use crate::ui::app::ExportFormat;
 
 pub const TITLE: &str = " Export ";
 const MAX_WIDTH: u16 = 72;
 const MARGIN: u16 = 4;
-const BORDER: u16 = 2;
-pub const CONTENT_ROWS: u16 = 3;
+pub const CONTENT_ROWS: u16 = 4;
 const PATH_PREFIX: &str = "path:";
 const FORMAT_PREFIX: &str = "format:";
 const HINT: &str = "Enter to write · Tab for the other format · Esc to cancel";
@@ -19,7 +19,7 @@ const CONFIRM_HINT: &str = "that file exists — overwrite? y/n";
 
 pub fn outer(area: Size) -> Size {
     let width = area.width.saturating_sub(MARGIN).min(MAX_WIDTH);
-    let height = CONTENT_ROWS.saturating_add(BORDER).min(area.height);
+    let height = CONTENT_ROWS.saturating_add(FRAME).min(area.height);
     Size::new(width, height)
 }
 
@@ -62,7 +62,7 @@ fn labelled_line(label: &str, value: &str, width: usize, theme: &Theme) -> Rende
 pub fn hint_line(confirm: bool, width: usize, theme: &Theme) -> RenderedLine {
     let text = if confirm { CONFIRM_HINT } else { HINT };
     let mut line = RenderedLine::default();
-    let element = if confirm { Element::StatusNotice } else { Element::Muted };
+    let element = if confirm { Element::StatusNotice } else { Element::Status };
     line.push(StyledSpan::new(truncate(text, width), theme.style(element)));
     line
 }
@@ -106,6 +106,17 @@ mod tests {
         assert!(hint.text().contains("Enter to write"), "{}", hint.text());
         let confirm = hint_line(true, 80, &theme());
         assert!(confirm.text().contains("overwrite"), "{}", confirm.text());
+    }
+
+    #[test]
+    fn the_hint_reads_at_the_status_bars_colour_rather_than_the_dimmer_muted_one() {
+        let theme = theme();
+        let hint = hint_line(false, 80, &theme);
+        assert_eq!(hint.spans[0].style, theme.style(Element::Status));
+        assert_ne!(hint.spans[0].style, theme.style(Element::Muted));
+
+        let confirm = hint_line(true, 80, &theme);
+        assert_eq!(confirm.spans[0].style, theme.style(Element::StatusNotice), "the overwrite question must stay louder");
     }
 
     #[test]

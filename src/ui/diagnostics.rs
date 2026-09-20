@@ -10,28 +10,29 @@ use unicode_width::UnicodeWidthStr;
 use crate::domain::diagnostics::{Defect, Diagnostics};
 use crate::render::line::{RenderedLine, StyledSpan, truncate};
 use crate::theme::{Element, Theme};
+use crate::ui::FRAME;
 
 pub const TITLE: &str = " Diagnostics ";
 const MAX_WIDTH: u16 = 78;
 const MARGIN: u16 = 4;
-const BORDER: u16 = 2;
+const MARGIN_Y: u16 = 2;
 const NOTHING: &str = "Nothing unreadable.";
 const INSET: usize = 2;
 
 pub fn outer(area: Size) -> Size {
     let width = area.width.saturating_sub(MARGIN).min(MAX_WIDTH);
-    let height = area.height.saturating_sub(BORDER);
+    let height = area.height.saturating_sub(MARGIN_Y);
     Size::new(width, height)
 }
 
 pub fn inner(area: Size) -> Size {
     let outer = outer(area);
-    Size::new(outer.width.saturating_sub(BORDER), outer.height.saturating_sub(BORDER))
+    Size::new(outer.width.saturating_sub(FRAME), outer.height.saturating_sub(FRAME))
 }
 
 pub fn lines(drift: &BTreeMap<PathBuf, Diagnostics>, width: usize, theme: &Theme) -> Vec<RenderedLine> {
     if drift.is_empty() {
-        return vec![line(NOTHING, theme.style(Element::Muted), 0, width)];
+        return vec![line(NOTHING, theme.style(Element::Status), 0, width)];
     }
 
     let mut lines = Vec::new();
@@ -110,14 +111,17 @@ mod tests {
                 assert!(outer(area).width <= width, "{area:?}");
                 assert!(outer(area).height <= height, "{area:?}");
                 assert!(inner(area).width <= outer(area).width, "{area:?}");
+                assert!(inner(area).height <= outer(area).height, "{area:?}");
             }
         }
     }
 
     #[test]
     fn an_empty_store_still_says_something() {
-        let rendered = lines(&BTreeMap::new(), 80, &theme());
+        let theme = theme();
+        let rendered = lines(&BTreeMap::new(), 80, &theme);
         assert_eq!(texts(&rendered), [NOTHING]);
+        assert_eq!(rendered[0].spans[1].style, theme.style(Element::Status), "the one line in the window must be readable");
     }
 
     #[test]

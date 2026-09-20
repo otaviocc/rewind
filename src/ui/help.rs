@@ -4,6 +4,7 @@ use ratatui::layout::Size;
 
 use crate::render::line::{RenderedLine, StyledSpan, truncate};
 use crate::theme::{Element, Theme};
+use crate::ui::FRAME;
 
 pub const TITLE: &str = " Keys ";
 const WIDTH_FRACTION: u16 = 60;
@@ -12,7 +13,6 @@ const MAX_WIDTH: u16 = 76;
 const HEIGHT_FRACTION: u16 = 70;
 const MIN_HEIGHT: u16 = 9;
 const MAX_HEIGHT: u16 = 30;
-const BORDER: u16 = 2;
 const KEYS_COLUMN: usize = 20;
 
 const SECTIONS: &[(&str, &[(&str, &str)])] = &[
@@ -55,7 +55,7 @@ pub fn outer(area: Size) -> Size {
 
 pub fn inner(area: Size) -> Size {
     let outer = outer(area);
-    Size::new(outer.width.saturating_sub(BORDER), outer.height.saturating_sub(BORDER))
+    Size::new(outer.width.saturating_sub(FRAME), outer.height.saturating_sub(FRAME))
 }
 
 pub fn lines(width: usize, theme: &Theme) -> Vec<RenderedLine> {
@@ -113,6 +113,7 @@ mod tests {
                 assert!(outer(area).width <= width, "{area:?}");
                 assert!(outer(area).height <= height, "{area:?}");
                 assert!(inner(area).width <= outer(area).width, "{area:?}");
+                assert!(inner(area).height <= outer(area).height, "{area:?}");
             }
         }
     }

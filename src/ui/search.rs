@@ -6,11 +6,12 @@ use crate::domain::cache::shard::{Field, Kind};
 use crate::domain::search::engine::Hit;
 use crate::render::line::{RenderedLine, StyledSpan, truncate};
 use crate::theme::{Element, Theme};
+use crate::ui::FRAME;
 
 pub const TITLE: &str = " Search ";
 const MAX_WIDTH: u16 = 100;
 const MARGIN: u16 = 4;
-const BORDER: u16 = 2;
+const MARGIN_Y: u16 = 2;
 pub const HEADER_ROWS: u16 = 2;
 const PROMPT_PREFIX: &str = "? ";
 const PLACEHOLDER: &str = "type to search…";
@@ -18,13 +19,13 @@ const HELP: &str = "is:user|assistant|tool|thinking · project:name · -exclude 
 
 pub fn outer(area: Size) -> Size {
     let width = area.width.saturating_sub(MARGIN).min(MAX_WIDTH);
-    let height = area.height.saturating_sub(BORDER);
+    let height = area.height.saturating_sub(MARGIN_Y);
     Size::new(width, height)
 }
 
 pub fn inner(area: Size) -> Size {
     let outer = outer(area);
-    Size::new(outer.width.saturating_sub(BORDER), outer.height.saturating_sub(BORDER))
+    Size::new(outer.width.saturating_sub(FRAME), outer.height.saturating_sub(FRAME))
 }
 
 pub fn prompt_line(query: &str, width: usize, theme: &Theme) -> RenderedLine {
@@ -49,7 +50,7 @@ pub enum CorpusStatus {
 pub fn status_line(query: &str, status: CorpusStatus, count: usize, width: usize, theme: &Theme) -> RenderedLine {
     let text = status_text(query, status, count);
     let mut line = RenderedLine::default();
-    line.push(StyledSpan::new(truncate(&text, width), theme.style(Element::Muted)));
+    line.push(StyledSpan::new(truncate(&text, width), theme.style(Element::Status)));
     line
 }
 
@@ -124,6 +125,7 @@ mod tests {
                 assert!(outer(area).width <= width, "{area:?}");
                 assert!(outer(area).height <= height, "{area:?}");
                 assert!(inner(area).width <= outer(area).width, "{area:?}");
+                assert!(inner(area).height <= outer(area).height, "{area:?}");
             }
         }
     }
@@ -134,6 +136,16 @@ mod tests {
         assert_eq!(prompt.text(), format!("{PROMPT_PREFIX}{PLACEHOLDER}"));
         let status = status_line("", CorpusStatus::Complete, 0, 80, &theme());
         assert_eq!(status.text(), HELP);
+    }
+
+    #[test]
+    fn the_status_row_reads_at_the_status_bars_colour_and_the_placeholder_still_recedes() {
+        let theme = theme();
+        let status = status_line("", CorpusStatus::Complete, 0, 80, &theme);
+        assert_eq!(status.spans[0].style, theme.style(Element::Status));
+
+        let prompt = prompt_line("", 80, &theme);
+        assert_eq!(prompt.spans[1].style, theme.style(Element::Muted), "a placeholder is not prose to read");
     }
 
     #[test]

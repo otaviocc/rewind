@@ -5,13 +5,14 @@ use std::fmt::Write as _;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect, Size};
 use ratatui::style::Style;
-use ratatui::widgets::{Block, Clear, Widget};
+use ratatui::widgets::{Block, Clear, Padding, Widget};
 use ratatui::{Frame, symbols};
 use unicode_width::UnicodeWidthStr;
 
 use crate::domain::project::Resolution;
 use crate::render::line::{self, RenderedLine, StyledSpan, truncate};
 use crate::theme::Element;
+use crate::ui::FRAME;
 use crate::ui::age;
 use crate::ui::app::{App, Column, Loadable, Mode};
 use crate::ui::columns;
@@ -176,6 +177,24 @@ const fn centred(area: Rect, outer: Size) -> Rect {
     }
 }
 
+fn overlay_frame(area: Rect, outer: Size, buf: &mut Buffer, app: &App, title: &'static str) -> Option<Rect> {
+    if outer.width <= FRAME || outer.height <= FRAME {
+        return None;
+    }
+    let box_area = centred(area, outer);
+    Clear.render(box_area, buf);
+    buf.set_style(box_area, app.theme().style(Element::HelpWindow));
+    let title_style = app.theme().style(Element::HeaderTitle);
+    let frame = Block::bordered()
+        .padding(Padding::uniform(1))
+        .title(title)
+        .border_style(Style::default().fg(title_style.fg.unwrap_or_default()))
+        .title_style(title_style);
+    let inner = frame.inner(box_area);
+    frame.render(box_area, buf);
+    Some(inner)
+}
+
 fn overlay(area: Rect, buf: &mut Buffer, app: &App) {
     if app.export_prompt_open() {
         export_overlay(area, buf, app);
@@ -193,17 +212,7 @@ fn overlay(area: Rect, buf: &mut Buffer, app: &App) {
         return;
     }
     let outer = diagnostics::outer(Size::new(area.width, area.height));
-    if outer.width <= 2 || outer.height <= 2 {
-        return;
-    }
-    let box_area = centred(area, outer);
-    Clear.render(box_area, buf);
-    let frame = Block::bordered()
-        .title(diagnostics::TITLE)
-        .border_style(app.theme().style(Element::Hint))
-        .title_style(app.theme().style(Element::HeaderTitle));
-    let inner = frame.inner(box_area);
-    frame.render(box_area, buf);
+    let Some(inner) = overlay_frame(area, outer, buf, app, diagnostics::TITLE) else { return };
 
     let lines = app.diagnostics_lines();
     let top = app.diagnostics_top();
@@ -217,18 +226,7 @@ fn overlay(area: Rect, buf: &mut Buffer, app: &App) {
 
 fn help_overlay(area: Rect, buf: &mut Buffer, app: &App) {
     let outer = help::outer(Size::new(area.width, area.height));
-    if outer.width <= 2 || outer.height <= 2 {
-        return;
-    }
-    let box_area = centred(area, outer);
-    Clear.render(box_area, buf);
-    buf.set_style(box_area, app.theme().style(Element::HelpWindow));
-    let frame = Block::bordered()
-        .title(help::TITLE)
-        .border_style(app.theme().style(Element::Hint))
-        .title_style(app.theme().style(Element::HeaderTitle));
-    let inner = frame.inner(box_area);
-    frame.render(box_area, buf);
+    let Some(inner) = overlay_frame(area, outer, buf, app, help::TITLE) else { return };
 
     let lines = app.help_lines();
     let top = app.help_top();
@@ -242,17 +240,10 @@ fn help_overlay(area: Rect, buf: &mut Buffer, app: &App) {
 
 fn search_overlay(area: Rect, buf: &mut Buffer, app: &App) {
     let outer = search::outer(Size::new(area.width, area.height));
-    if outer.width <= 2 || outer.height <= search::HEADER_ROWS {
+    let Some(inner) = overlay_frame(area, outer, buf, app, search::TITLE) else { return };
+    if inner.height <= search::HEADER_ROWS {
         return;
     }
-    let box_area = centred(area, outer);
-    Clear.render(box_area, buf);
-    let frame = Block::bordered()
-        .title(search::TITLE)
-        .border_style(app.theme().style(Element::Hint))
-        .title_style(app.theme().style(Element::HeaderTitle));
-    let inner = frame.inner(box_area);
-    frame.render(box_area, buf);
 
     let width = usize::from(inner.width);
     let prompt = search::prompt_line(app.search_query(), width, app.theme());
@@ -287,17 +278,7 @@ fn search_overlay(area: Rect, buf: &mut Buffer, app: &App) {
 
 fn export_overlay(area: Rect, buf: &mut Buffer, app: &App) {
     let outer = export_prompt::outer(Size::new(area.width, area.height));
-    if outer.width <= 2 || outer.height <= 2 {
-        return;
-    }
-    let box_area = centred(area, outer);
-    Clear.render(box_area, buf);
-    let frame = Block::bordered()
-        .title(export_prompt::TITLE)
-        .border_style(app.theme().style(Element::Hint))
-        .title_style(app.theme().style(Element::HeaderTitle));
-    let inner = frame.inner(box_area);
-    frame.render(box_area, buf);
+    let Some(inner) = overlay_frame(area, outer, buf, app, export_prompt::TITLE) else { return };
 
     let (Some(format), Some(path)) = (app.export_prompt_format(), app.export_prompt_path()) else { return };
     let confirm = app.export_prompt_confirm();
@@ -309,7 +290,7 @@ fn export_overlay(area: Rect, buf: &mut Buffer, app: &App) {
     let path_row = Rect { y: inner.y.saturating_add(1), height: 1, ..inner };
     painted(path_row, buf, &export_prompt::path_line(path, width, app.theme()));
 
-    let hint_row = Rect { y: inner.y.saturating_add(2), height: 1, ..inner };
+    let hint_row = Rect { y: inner.y.saturating_add(3), height: 1, ..inner };
     painted(hint_row, buf, &export_prompt::hint_line(confirm, width, app.theme()));
 }
 
@@ -1298,6 +1279,65 @@ mod tests {
         app.apply(Action::Resize(Size::new(110, 24)));
 
         assert_ne!(marked_cells(&frame(&app, Size::new(110, 24)), background), 0, "a reflow took the mark away");
+    }
+
+    fn overlay_corner(buffer: &Buffer) -> (u16, u16) {
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                if buffer[(x, y)].symbol() == symbols::line::TOP_LEFT {
+                    return (x, y);
+                }
+            }
+        }
+        panic!("no overlay corner in the frame");
+    }
+
+    fn opened(action: Action) -> Buffer {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("a", true)]));
+        app.set_sessions(app.generation(), vec![drifting_session("s1")]);
+        with_conversation(&mut app, "read the grid scanner back to me");
+        app.apply(action);
+        frame(&app, Size::new(120, 24))
+    }
+
+    #[test]
+    fn the_frame_reserve_is_what_the_block_actually_carves_out() {
+        let outside = Rect::new(0, 0, 40, 20);
+        let inside = Block::bordered().padding(Padding::uniform(1)).inner(outside);
+        assert_eq!(outside.width.saturating_sub(inside.width), FRAME);
+        assert_eq!(outside.height.saturating_sub(inside.height), FRAME);
+    }
+
+    #[test]
+    fn an_overlay_border_is_the_colour_of_its_own_title_and_not_the_hairline_around_it() {
+        let app = app(Size::new(120, 24));
+        let titled = app.theme().style(Element::HeaderTitle).fg.expect("the header title style names a foreground");
+        let hairline = app.theme().style(Element::Hint).fg.expect("the hint style names a foreground");
+        assert_ne!(titled, hairline, "the test cannot tell the border from the rules if they are the same colour");
+
+        for action in [Action::ToggleHelp, Action::ToggleDiagnostics, Action::ToggleSearch, Action::ToggleExport] {
+            let buffer = opened(action);
+            let (x, y) = overlay_corner(&buffer);
+            assert_eq!(buffer[(x, y)].fg, titled, "{action:?} drew its border in something other than its title's colour");
+            assert_eq!(buffer[(0, 1)].fg, hairline, "{action:?} repainted the rule above it");
+        }
+    }
+
+    #[test]
+    fn an_overlay_insets_its_content_by_one_column_from_its_border() {
+        for (action, word) in
+            [(Action::ToggleHelp, "Moving"), (Action::ToggleDiagnostics, "s1.jsonl"), (Action::ToggleExport, "format:")]
+        {
+            let buffer = opened(action);
+            let (left, top) = overlay_corner(&buffer);
+            let row = (top..buffer.area.height)
+                .find(|&y| text_row(&buffer, y).contains(word))
+                .unwrap_or_else(|| panic!("{action:?} never drew {word}"));
+            let inset = left.saturating_add(1);
+            assert_eq!(buffer[(inset, row)].symbol(), " ", "{action:?} drew {word} flush against its border");
+            assert_ne!(buffer[(inset.saturating_add(1), row)].symbol(), " ", "{action:?} inset {word} by more than one column");
+        }
     }
 
     #[test]
