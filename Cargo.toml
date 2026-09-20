@@ -1,5 +1,5 @@
 [package]
-name = "rewind"
+name = "rewind-cli"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
@@ -13,6 +13,14 @@ categories = ["command-line-utilities"]
 # stay: the build script and the theme loader's `include_str!` need them to build
 # the crate at all. `tests/` stays too, so a vendored copy can be verified.
 exclude = ["CLAUDE.md", "Makefile", "rustfmt.toml", ".github/", ".cargo/", "tools/"]
+
+[lib]
+name = "rewind"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rewind"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
