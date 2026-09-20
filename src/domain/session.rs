@@ -72,8 +72,7 @@ pub(crate) struct Fields<'a> {
     timestamp: Option<&'a str>,
     git_branch: Option<&'a str>,
     slug: Option<&'a str>,
-    has_tool_use_result: bool,
-    is_meta: bool,
+    machine_authored: bool,
     is_sidechain: bool,
     origin: Option<&'a [u8]>,
     message: Option<&'a [u8]>,
@@ -93,8 +92,8 @@ pub(crate) fn scan_line(line: &[u8]) -> Fields<'_> {
             b"timestamp" => fields.timestamp = scan::as_str(&value),
             b"gitBranch" => fields.git_branch = scan::as_str(&value),
             b"slug" => fields.slug = scan::as_str(&value),
-            b"toolUseResult" => fields.has_tool_use_result = true,
-            b"isMeta" => fields.is_meta = scan::is_true(&value),
+            b"toolUseResult" => fields.machine_authored = true,
+            b"isMeta" | b"isCompactSummary" => fields.machine_authored |= scan::is_true(&value),
             b"isSidechain" => fields.is_sidechain = scan::is_true(&value),
             b"origin" => fields.origin = scan::as_object(&value),
             b"message" => fields.message = scan::as_object(&value),
@@ -214,7 +213,7 @@ fn load_session(path: &Path, id: &str, project_dir: &Path) -> Result<Session, Se
 }
 
 pub(crate) fn is_human_turn(fields: &Fields<'_>) -> bool {
-    if fields.has_tool_use_result || fields.is_meta {
+    if fields.machine_authored {
         return false;
     }
     fields.origin.and_then(|origin| scan::top_level_str(origin, "kind")).is_none_or(|kind| kind == "human")
@@ -484,6 +483,19 @@ mod tests {
     fn a_meta_user_record_is_not_a_human_turn() {
         let line = br#"{"type":"user","isMeta":true,"message":{"role":"user","content":"x"}}"#;
         assert!(!is_human_turn(&scan_line(line)));
+    }
+
+    #[test]
+    fn a_compaction_summary_is_not_a_human_turn_so_it_cannot_seed_a_title() {
+        let line =
+            br#"{"type":"user","isCompactSummary":true,"message":{"role":"user","content":"this session is being continued"}}"#;
+        assert!(!is_human_turn(&scan_line(line)));
+    }
+
+    #[test]
+    fn an_explicitly_false_meta_flag_leaves_a_record_human() {
+        let line = br#"{"type":"user","isMeta":false,"isCompactSummary":false,"message":{"role":"user","content":"x"}}"#;
+        assert!(is_human_turn(&scan_line(line)));
     }
 
     #[test]

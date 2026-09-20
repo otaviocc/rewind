@@ -16,7 +16,7 @@ use thiserror::Error;
 
 use crate::domain::cache::cursor::Cursor;
 
-pub const CACHE_VERSION: u16 = 1;
+pub const CACHE_VERSION: u16 = 2;
 
 const MAGIC: &[u8; 8] = b"RWNDCORP";
 const HEADER_SIZE: usize = 64;

@@ -6,8 +6,20 @@
 //! full force here. Excluded on purpose: `attachment` (the context injections — nearly as
 //! numerous as `assistant` records and none of it is searched for), `system` (hook chatter),
 //! every latch and event record, `summary`, and `image` blocks.
+//!
+//! Two more are excluded because they wear a human prompt's clothes, and both would index at
+//! `UserPrompt`, the heaviest field. A compaction summary is a machine-written recap of
+//! conversation the corpus already holds -- `session::is_human_turn` now counts it as machine
+//! authored, so it is turned away with the meta records. And a local slash command's `user`
+//! record carries the whole `<command-name>`/`<local-command-stdout>` envelope, whose stdout
+//! can be an entire file; `push_prompt` keeps the invocation and drops the rest.
+//!
+//! Removing them changes what a built shard holds, which is why `CACHE_VERSION` moved:
+//! `build::copy_forward` keeps an unchanged file's records, so without the bump every existing
+//! shard would serve this text forever.
 
 use crate::domain::cache::shard::{Field, TRUNCATED};
+use crate::domain::command::{self, Command};
 use crate::domain::scan::{self, Raw};
 use crate::domain::session;
 
@@ -60,7 +72,7 @@ fn extract_user(line: &[u8], out: &mut Vec<Extracted>) {
 
     if let Some(text) = scan::as_str(&content) {
         if human {
-            push_raw(out, Field::UserPrompt, text, None);
+            push_prompt(out, text);
         }
         return;
     }
@@ -75,7 +87,7 @@ fn extract_user_block(block: &Raw<'_>, human: bool, out: &mut Vec<Extracted>) {
     match scan::top_level_str(object, "type") {
         Some("text") if human => {
             if let Some(text) = scan::top_level_str(object, "text") {
-                push_raw(out, Field::UserPrompt, text, None);
+                push_prompt(out, text);
             }
         }
         Some("tool_result") => {
@@ -161,6 +173,20 @@ fn collect_value_strings(value: &Raw<'_>, out: &mut String) {
         for item in scan::array_values(array) {
             collect_value_strings(&item, out);
         }
+    }
+}
+
+fn push_prompt(out: &mut Vec<Extracted>, raw: &str) {
+    let mut text = String::new();
+    unescape_into(raw, &mut text);
+
+    match command::parse(&text) {
+        Some(Command::Output(_)) => {}
+        Some(Command::Invocation { name, args }) => {
+            let invocation = args.map_or_else(|| name.to_owned(), |args| format!("{name} {args}"));
+            push_owned(out, Field::UserPrompt, invocation, None);
+        }
+        None => push_owned(out, Field::UserPrompt, text, None),
     }
 }
 
@@ -336,6 +362,43 @@ mod tests {
         let joined = texts.first().copied().unwrap_or_default();
         assert!(joined.contains("read the scanner"));
         assert!(joined.contains("pending"));
+    }
+
+    #[test]
+    fn a_compaction_summary_extracts_nothing_though_it_reads_as_a_human_turn() {
+        let line = br#"{"type":"user","isCompactSummary":true,"message":{"role":"user","content":"this session is being continued from a previous conversation about the grid scanner"}}"#;
+        assert!(extract(line).is_empty());
+    }
+
+    #[test]
+    fn a_compaction_summary_in_a_content_array_extracts_nothing_either() {
+        let line = br#"{"type":"user","isCompactSummary":true,"message":{"role":"user","content":[{"type":"text","text":"this session is being continued"}]}}"#;
+        assert!(extract(line).is_empty());
+    }
+
+    #[test]
+    fn a_built_in_slash_command_extracts_its_name_and_not_the_envelope() {
+        let line = br#"{"type":"user","message":{"role":"user","content":"<command-name>/theme</command-name>\n<command-message>theme</command-message>\n<command-args></command-args>"}}"#;
+        assert_eq!(field_texts(&extract(line), Field::UserPrompt), ["/theme"]);
+    }
+
+    #[test]
+    fn a_slash_command_with_args_keeps_the_args_because_they_are_the_real_prompt() {
+        let line = br#"{"type":"user","message":{"role":"user","content":"<command-message>explore</command-message>\n<command-name>/explore</command-name>\n<command-args>the grid scanner is hard to read</command-args>"}}"#;
+        assert_eq!(field_texts(&extract(line), Field::UserPrompt), ["/explore the grid scanner is hard to read"]);
+    }
+
+    #[test]
+    fn local_command_stdout_extracts_nothing_however_large_it_is() {
+        let line = br#"{"type":"user","message":{"role":"user","content":"<local-command-stdout>Current Plan\n/Users/fixture/plans/grid.md\n\n# Rebuild the grid scanner</local-command-stdout>"}}"#;
+        assert!(extract(line).is_empty());
+    }
+
+    #[test]
+    fn a_prompt_that_merely_mentions_angle_brackets_is_not_mistaken_for_a_command() {
+        let line =
+            br#"{"type":"user","message":{"role":"user","content":"does <command-name> mean anything to the grid scanner"}}"#;
+        assert_eq!(field_texts(&extract(line), Field::UserPrompt), ["does <command-name> mean anything to the grid scanner"]);
     }
 
     #[test]
