@@ -160,6 +160,24 @@ fn the_binary_prints_every_resolved_path() {
 }
 
 #[test]
+fn a_claude_dir_that_does_not_exist_at_all_fails_at_discovery_not_at_the_path() {
+    let missing = PathBuf::from("/nonexistent-rewind-test/.claude");
+    let claude_dir = rewind::paths::claude_dir(Some(missing.clone())).expect("an override is returned as given");
+    assert_eq!(claude_dir, missing);
+
+    let error = discover(&claude_dir).expect_err("there is no projects directory to read");
+    assert!(error.to_string().contains("cannot read"), "{error}");
+}
+
+#[test]
+fn the_non_terminal_listing_fails_loudly_rather_than_panicking_on_a_missing_claude_dir() {
+    let output = rewind().arg("--claude-dir").arg("/nonexistent-rewind-test/.claude").output().expect("rewind runs");
+    assert!(!output.status.success(), "a missing ~/.claude should not succeed in the non-terminal listing path");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("cannot read"), "{stderr}");
+}
+
+#[test]
 fn the_projects_map_is_opened_read_only_and_never_written() {
     let tree = fixture_tree();
     let map: PathBuf = map_path(&tree.claude_dir());

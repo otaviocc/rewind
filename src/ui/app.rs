@@ -516,6 +516,53 @@ impl App {
         }
     }
 
+    fn filter_empty(&self, column: Column) -> Option<(String, Option<String>)> {
+        let filter = self.filter.as_ref()?;
+        if filter.column != column || !filter.visible.is_empty() {
+            return None;
+        }
+        Some((format!("No rows match \"{}\".", filter.query), None))
+    }
+
+    pub fn projects_empty(&self) -> Option<(String, Option<String>)> {
+        if let Some(message) = self.filter_empty(Column::Projects) {
+            return Some(message);
+        }
+        match &self.projects {
+            Loadable::Loading => Some((format!("Reading {}", self.claude_dir.display()), None)),
+            Loadable::Failed(message) => Some((message.clone(), None)),
+            Loadable::Ready(projects) if projects.is_empty() => {
+                Some(("No projects here yet. Claude Code writes one per directory it is run in.".to_owned(), None))
+            }
+            Loadable::Ready(_) => None,
+        }
+    }
+
+    pub fn sessions_empty(&self) -> Option<(String, Option<String>)> {
+        if let Some(message) = self.filter_empty(Column::Sessions) {
+            return Some(message);
+        }
+        match &self.sessions {
+            Loadable::Failed(message) => Some((message.clone(), None)),
+            Loadable::Ready(sessions) if sessions.is_empty() => Some(self.selected_project().map_or_else(
+                || ("No project selected.".to_owned(), None),
+                |project| ("No transcripts in this project.".to_owned(), Some(project.path.display().to_string())),
+            )),
+            Loadable::Loading | Loadable::Ready(_) => None,
+        }
+    }
+
+    pub fn conversation_empty(&self) -> Option<(String, Option<String>)> {
+        match &self.conversation {
+            Loadable::Loading if self.selected_session().is_none() => Some(("Pick a session.".to_owned(), None)),
+            Loadable::Failed(message) => Some((message.clone(), None)),
+            Loadable::Ready(rendered) if rendered.lines().is_empty() => {
+                Some(("Nothing readable in this session.".to_owned(), Some("D lists what could not be read".to_owned())))
+            }
+            Loadable::Loading | Loadable::Ready(_) => None,
+        }
+    }
+
     pub const fn take_session_load(&mut self) -> Option<(PathBuf, u64)> {
         self.pending_session_load.take()
     }

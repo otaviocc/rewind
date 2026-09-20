@@ -11,16 +11,13 @@ const APP: &str = "rewind";
 pub enum PathError {
     #[error("cannot find a home directory; set HOME or pass --claude-dir")]
     NoHome,
-    #[error("{0} is not a directory")]
-    NotADirectory(PathBuf),
 }
 
 pub fn claude_dir(override_dir: Option<PathBuf>) -> Result<PathBuf, PathError> {
-    let dir = match override_dir {
-        Some(dir) => dir,
-        None => home().ok_or(PathError::NoHome)?.join(".claude"),
-    };
-    if dir.is_dir() { Ok(dir) } else { Err(PathError::NotADirectory(dir)) }
+    match override_dir {
+        Some(dir) => Ok(dir),
+        None => Ok(home().ok_or(PathError::NoHome)?.join(".claude")),
+    }
 }
 
 pub fn config_dir() -> Option<PathBuf> {
@@ -65,9 +62,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_override_that_is_not_a_directory_is_an_error() {
-        let err = claude_dir(Some(PathBuf::from("/nonexistent/rewind-test"))).unwrap_err();
-        assert!(matches!(err, PathError::NotADirectory(_)));
+    fn an_override_that_does_not_exist_is_returned_as_given() {
+        let dir = claude_dir(Some(PathBuf::from("/nonexistent/rewind-test"))).expect("an override is never checked");
+        assert_eq!(dir, PathBuf::from("/nonexistent/rewind-test"));
     }
 
     #[test]

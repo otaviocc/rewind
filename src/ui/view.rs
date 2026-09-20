@@ -7,12 +7,14 @@ use ratatui::widgets::{Block, Clear, Widget};
 use ratatui::{Frame, symbols};
 use unicode_width::UnicodeWidthStr;
 
+use crate::domain::project::Resolution;
 use crate::render::line::{RenderedLine, StyledSpan, truncate};
 use crate::theme::Element;
 use crate::ui::age;
 use crate::ui::app::{App, Column, Loadable};
 use crate::ui::columns;
 use crate::ui::diagnostics;
+use crate::ui::empty;
 use crate::ui::export_prompt;
 use crate::ui::help;
 use crate::ui::search;
@@ -337,6 +339,10 @@ const fn label(column: Column) -> &'static str {
 }
 
 fn projects_rows(area: Rect, buf: &mut Buffer, app: &App, focused: bool) {
+    if let Some((primary, detail)) = app.projects_empty() {
+        empty_state(area, buf, app, &primary, detail.as_deref());
+        return;
+    }
     let Loadable::Ready(projects) = app.projects() else { return };
     let pane = app.pane(Column::Projects);
     let last = app.visible_len(Column::Projects).min(pane.top.saturating_add(usize::from(area.height)));
@@ -346,26 +352,33 @@ fn projects_rows(area: Rect, buf: &mut Buffer, app: &App, focused: bool) {
         let Some(project) = projects.get(index) else { continue };
         let y = area.y.saturating_add(u16::try_from(row_index).unwrap_or(u16::MAX));
         let picked = position == pane.selected;
-        let marker = if !project.present {
+        let gone = !project.present && project.resolution != Resolution::Unresolved;
+        let marker = if gone {
             GONE
         } else if picked && focused {
             CHEVRON
         } else {
             " "
         };
-        row(Rect { y, height: 1, ..area }, buf, area.x, marker, app.theme().style(Element::Body));
+        let marker_style = if gone { app.theme().style(Element::ProjectMissing) } else { app.theme().style(Element::Body) };
+        row(Rect { y, height: 1, ..area }, buf, area.x, marker, marker_style);
 
         let name = project
             .path
             .file_name()
             .map_or_else(|| project.path.display().to_string(), |name| name.to_string_lossy().into_owned());
         let info = format!("{} {}", age::relative(app.ctx.now, timestamp_of(project.last_activity)), project.sessions);
-        text_and_info(Rect { y, height: 1, ..area }, buf, &name, &info, app);
+        let name_element = if gone { Element::ProjectMissing } else { Element::Body };
+        text_and_info(Rect { y, height: 1, ..area }, buf, &name, &info, app, name_element);
         band(Rect { y, height: 1, ..area }, buf, app, picked, focused);
     }
 }
 
 fn sessions_rows(area: Rect, buf: &mut Buffer, app: &App, focused: bool) {
+    if let Some((primary, detail)) = app.sessions_empty() {
+        empty_state(area, buf, app, &primary, detail.as_deref());
+        return;
+    }
     let Loadable::Ready(sessions) = app.sessions() else { return };
     let pane = app.pane(Column::Sessions);
     let last = app.visible_len(Column::Sessions).min(pane.top.saturating_add(usize::from(area.height)));
@@ -380,12 +393,16 @@ fn sessions_rows(area: Rect, buf: &mut Buffer, app: &App, focused: bool) {
 
         let age = session.last_activity.map_or_else(|| "-".to_owned(), |at| age::relative(app.ctx.now, at));
         let info = format!("{age} {}", session.messages);
-        text_and_info(Rect { y, height: 1, ..area }, buf, &session.title, &info, app);
+        text_and_info(Rect { y, height: 1, ..area }, buf, &session.title, &info, app, Element::Body);
         band(Rect { y, height: 1, ..area }, buf, app, picked, focused);
     }
 }
 
 fn conversation_rows(area: Rect, buf: &mut Buffer, app: &App, focused: bool) {
+    if let Some((primary, detail)) = app.conversation_empty() {
+        empty_state(area, buf, app, &primary, detail.as_deref());
+        return;
+    }
     let lines = app.lines();
     let top = app.pane(Column::Conversation).top;
     let last = lines.len().min(top.saturating_add(usize::from(area.height)));
@@ -422,14 +439,26 @@ fn painted(area: Rect, buf: &mut Buffer, line: &RenderedLine) {
     }
 }
 
-fn text_and_info(area: Rect, buf: &mut Buffer, text: &str, info: &str, app: &App) {
+fn text_and_info(area: Rect, buf: &mut Buffer, text: &str, info: &str, app: &App, text_element: Element) {
     let x = area.x.saturating_add(2);
     let info_width = INFO_WIDTH.min(area.width);
     let text_width = area.width.saturating_sub(2).saturating_sub(info_width);
-    row(Rect { width: text_width, ..area }, buf, x, text, app.theme().style(Element::Body));
+    row(Rect { width: text_width, ..area }, buf, x, text, app.theme().style(text_element));
 
     let info_x = area.right().saturating_sub(u16::try_from(info.width()).unwrap_or(info_width).min(info_width));
     row(area, buf, info_x, info, app.theme().style(Element::Hint));
+}
+
+fn empty_state(area: Rect, buf: &mut Buffer, app: &App, primary: &str, detail: Option<&str>) {
+    let lines = empty::lines(primary, detail, usize::from(area.width), app.theme());
+    for (row_index, line) in lines.iter().enumerate() {
+        let Ok(row_index) = u16::try_from(row_index) else { continue };
+        let y = area.y.saturating_add(row_index);
+        if y >= area.bottom() {
+            break;
+        }
+        painted(Rect { y, height: 1, ..area }, buf, line);
+    }
 }
 
 fn timestamp_of(at: std::time::SystemTime) -> jiff::Timestamp {
@@ -452,6 +481,15 @@ fn statusbar(area: Rect, buf: &mut Buffer, app: &App) {
         row(area, buf, area.x, &status, app.theme().style(Element::Status));
         let used = status.width().saturating_add(unreadable(area, buf, app, status.width()));
         indexing(area, buf, app, used);
+        return;
+    }
+    if app.focused() == Column::Projects
+        && let Some(project) = app.selected_project()
+        && !project.present
+        && project.resolution != Resolution::Unresolved
+    {
+        let text = format!("{GONE} {}", project.path.display());
+        row(area, buf, area.x, &text, app.theme().style(Element::ProjectMissing));
         return;
     }
     let Some(session) = app.selected_session() else { return };
@@ -495,7 +533,7 @@ mod tests {
     use super::*;
     use crate::ctx::Ctx;
     use crate::domain::diagnostics::{Defect, Diagnostics};
-    use crate::domain::project::{Project, Resolution};
+    use crate::domain::project::{Project, ProjectError, Resolution};
     use crate::domain::session::{Session, TitleSource};
     use crate::ui::Options;
     use crate::ui::app::{Mode, Pane};
@@ -517,6 +555,17 @@ mod tests {
             sessions: 4,
             last_activity: SystemTime::UNIX_EPOCH,
             present,
+        }
+    }
+
+    fn unresolved_project(directory: &str) -> Project {
+        Project {
+            directory: directory.to_owned(),
+            path: PathBuf::from(directory),
+            resolution: Resolution::Unresolved,
+            sessions: 0,
+            last_activity: SystemTime::UNIX_EPOCH,
+            present: false,
         }
     }
 
@@ -597,6 +646,117 @@ mod tests {
         let buffer = frame(&app, Size::new(120, 24));
         let row = text_row(&buffer, 3);
         assert!(row.starts_with(GONE), "{row}");
+    }
+
+    #[test]
+    fn an_unresolved_project_is_not_claimed_gone() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![unresolved_project("jeffries-tube")]));
+        let buffer = frame(&app, Size::new(120, 24));
+        let row = text_row(&buffer, 3);
+        assert!(
+            !row.starts_with(GONE),
+            "an unresolved project's path is the raw directory name, not proof it went missing: {row}"
+        );
+    }
+
+    #[test]
+    fn the_status_bar_shows_the_full_path_of_a_gone_project_when_projects_is_focused() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("nomad", false)]));
+        let buffer = frame(&app, Size::new(120, 24));
+        let status = text_row(&buffer, 23);
+        assert!(status.contains(GONE), "{status}");
+        assert!(status.contains("/Users/fixture/nomad"), "{status}");
+    }
+
+    #[test]
+    fn no_projects_at_all_explains_rather_than_shows_a_blank_pane() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(Vec::new()));
+        let buffer = frame(&app, Size::new(120, 24));
+        let row = text_row(&buffer, 3);
+        assert!(row.contains("No projects here yet"), "{row}");
+    }
+
+    #[test]
+    fn a_still_loading_project_list_says_so_rather_than_showing_nothing() {
+        let app = app(Size::new(120, 24));
+        let buffer = frame(&app, Size::new(120, 24));
+        let row = text_row(&buffer, 3);
+        assert!(row.contains("Reading"), "{row}");
+        assert!(row.contains("/tmp"), "{row}");
+    }
+
+    #[test]
+    fn a_failed_project_scan_shows_its_error_instead_of_a_blank_pane() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Err(ProjectError::Unreadable(PathBuf::from("/tmp/projects"))));
+        let buffer = frame(&app, Size::new(120, 24));
+        let row = text_row(&buffer, 3);
+        assert!(row.contains("cannot read"), "{row}");
+        assert!(row.contains("/tmp/projects"), "{row}");
+    }
+
+    #[test]
+    fn a_project_with_no_transcripts_names_itself_in_the_sessions_pane() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("shuttlebay", true)]));
+        let generation = app.generation();
+        app.set_sessions(generation, Vec::new());
+        let buffer = frame(&app, Size::new(120, 24));
+        let row = text_row(&buffer, 3);
+        assert!(row.contains("No transcripts"), "{row}");
+        let detail = text_row(&buffer, 4);
+        assert!(detail.contains("/Users/fixture/shuttlebay"), "{detail}");
+    }
+
+    #[test]
+    fn no_session_selected_asks_you_to_pick_one() {
+        let app = app(Size::new(120, 24));
+        let buffer = frame(&app, Size::new(120, 24));
+        let row = text_row(&buffer, 3);
+        assert!(row.contains("Pick a session"), "{row}");
+    }
+
+    #[test]
+    fn a_session_that_parsed_to_nothing_says_so_and_points_at_diagnostics() {
+        use std::fs;
+
+        use tempfile::TempDir;
+
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("a", true)]));
+        app.set_sessions(app.generation(), vec![session("s1", "an empty session")]);
+
+        let dir = TempDir::new().expect("a temporary directory");
+        let path = dir.path().join("session.jsonl");
+        fs::write(&path, b"").expect("a written empty transcript");
+        let conversation = crate::domain::thread::build(&path).expect("an empty conversation still builds");
+        let generation = app.conversation_generation();
+        app.set_conversation(generation, Ok(Arc::new(conversation)), crate::domain::subagent::Agents::default());
+        app.reflow();
+
+        let buffer = frame(&app, Size::new(120, 24));
+        let row = text_row(&buffer, 3);
+        assert!(row.contains("Nothing readable"), "{row}");
+        let detail = text_row(&buffer, 4);
+        assert!(detail.contains("D lists"), "{detail}");
+    }
+
+    #[test]
+    fn a_locked_filter_matching_nothing_explains_rather_than_shows_a_blank_pane() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("aaa", true), project("bbb", true)]));
+        app.apply(Action::ToggleFilter);
+        for character in "zzz".chars() {
+            app.apply(Action::Type(character));
+        }
+        app.apply(Action::Descend);
+
+        let buffer = frame(&app, Size::new(120, 24));
+        let row = text_row(&buffer, 3);
+        assert!(row.contains("No rows match \"zzz\""), "{row}");
     }
 
     #[test]

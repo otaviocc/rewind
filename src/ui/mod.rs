@@ -5,6 +5,7 @@ pub mod app;
 pub mod clipboard;
 pub mod columns;
 pub mod diagnostics;
+pub mod empty;
 pub mod export_prompt;
 pub mod help;
 pub mod input;
