@@ -46,6 +46,10 @@ The status line names the selected session, then the focused column's position a
 percentage through its rows (nothing worth reading if it only has one), then `focus` when
 `f` is on.
 
+Below 50 columns there is no room for three side by side, so rewind shows **one pane at a
+time** — whichever is focused, full width. `Enter` descends into it, `Esc` goes back, and a
+pane with something behind it carries a `‹` before its name.
+
 *Under construction — see the milestones for what works today.*
 
 ## Install
@@ -76,7 +80,8 @@ rewind --session <id>      open one conversation directly
 
 `Tab` walks Projects → Sessions → Conversation, `Enter` descends into the selected row, and
 `q` leaves. A project whose working copy is gone still reads — it shows as `⊘` in the
-Projects column, because the transcript survives even when the directory does not.
+Projects column, because the transcript survives even when the directory does not. On a
+narrow terminal `Enter` and `Esc` do the same walking, one pane at a time.
 
 ## Keys
 
