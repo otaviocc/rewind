@@ -232,6 +232,8 @@ pub struct App {
     filter: Option<Filter>,
     pending_copy: Option<String>,
     notice: Option<String>,
+    export_prompt: Option<ExportPrompt>,
+    pending_export: Option<(PathBuf, ExportPayload, bool)>,
 }
 
 #[derive(Debug, Clone)]
@@ -240,6 +242,41 @@ struct Filter {
     query: String,
     editing: bool,
     visible: Vec<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportFormat {
+    Markdown,
+    Jsonl,
+}
+
+impl ExportFormat {
+    const fn extension(self) -> &'static str {
+        match self {
+            Self::Markdown => "md",
+            Self::Jsonl => "jsonl",
+        }
+    }
+
+    const fn toggled(self) -> Self {
+        match self {
+            Self::Markdown => Self::Jsonl,
+            Self::Jsonl => Self::Markdown,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum ExportPayload {
+    Text(String),
+    CopyFile(PathBuf),
+}
+
+#[derive(Debug, Clone)]
+struct ExportPrompt {
+    path: String,
+    format: ExportFormat,
+    confirm: bool,
 }
 
 impl App {
@@ -295,6 +332,8 @@ impl App {
             filter: None,
             pending_copy: None,
             notice: None,
+            export_prompt: None,
+            pending_export: None,
         }
     }
 
@@ -691,6 +730,10 @@ impl App {
 
     pub fn apply(&mut self, action: Action) {
         self.notice = None;
+        if self.export_prompt.is_some() {
+            self.apply_export(action);
+            return;
+        }
         if self.search_open {
             self.apply_search(action);
             return;
@@ -713,6 +756,8 @@ impl App {
                 | Action::ToggleSearch
                 | Action::ToggleFilter
                 | Action::Copy(_)
+                | Action::ToggleExport
+                | Action::CycleExportFormat
                 | Action::Type(_)
                 | Action::Untype
                 | Action::Scroll { .. }
@@ -757,7 +802,8 @@ impl App {
             Action::ToggleSearch => self.toggle_search(),
             Action::ToggleFilter => self.toggle_filter(),
             Action::Copy(target) => self.copy(target),
-            Action::Type(_) | Action::Untype => {}
+            Action::ToggleExport => self.toggle_export(),
+            Action::CycleExportFormat | Action::Type(_) | Action::Untype => {}
             Action::Scroll { column, delta } => self.scroll_column(column, delta),
             Action::Click { column, row } => self.click(column, row),
         }
@@ -795,6 +841,8 @@ impl App {
             | Action::ToggleSearch
             | Action::ToggleFilter
             | Action::Copy(_)
+            | Action::ToggleExport
+            | Action::CycleExportFormat
             | Action::Scroll { .. }
             | Action::Click { .. } => {}
         }
@@ -827,6 +875,8 @@ impl App {
             | Action::ToggleSearch
             | Action::ToggleFilter
             | Action::Copy(_)
+            | Action::ToggleExport
+            | Action::CycleExportFormat
             | Action::Scroll { .. }
             | Action::Click { .. } => {}
         }
@@ -879,6 +929,151 @@ impl App {
         let cwd = rendered.conversation().cwd()?;
         let Loadable::Ready(projects) = &self.projects else { return None };
         projects.iter().find(|project| project.present && project.path == cwd).map(|project| project.path.as_path())
+    }
+
+    fn toggle_export(&mut self) {
+        let (Loadable::Ready(_), Some(session)) = (&self.conversation, self.selected_session()) else {
+            self.notice = Some("nothing to export".to_owned());
+            return;
+        };
+        let format = ExportFormat::Markdown;
+        self.export_prompt = Some(ExportPrompt { path: default_export_path(session, format), format, confirm: false });
+    }
+
+    fn apply_export(&mut self, action: Action) {
+        match action {
+            Action::Type(character) => self.export_type(character),
+            Action::Untype => self.export_untype(),
+            Action::CycleExportFormat => self.cycle_export_format(),
+            Action::Descend => self.export_confirm_or_write(),
+            Action::Ascend => self.export_back_or_close(),
+            Action::Resize(size) => self.area = size,
+            Action::Quit => self.quit(),
+            Action::Focus { .. }
+            | Action::ToggleFocusMode
+            | Action::NextCall { .. }
+            | Action::NextTurn { .. }
+            | Action::ToggleCall
+            | Action::ToggleAllCalls
+            | Action::CycleBranch
+            | Action::ToggleInjections
+            | Action::ToggleDiagnostics
+            | Action::ToggleSearch
+            | Action::ToggleFilter
+            | Action::ToggleExport
+            | Action::Copy(_)
+            | Action::Move(_)
+            | Action::Scroll { .. }
+            | Action::Click { .. } => {}
+        }
+    }
+
+    fn export_type(&mut self, character: char) {
+        let confirm = self.export_prompt.as_ref().is_some_and(|prompt| prompt.confirm);
+        if confirm {
+            match character {
+                'y' | 'Y' => self.export_write(true),
+                'n' | 'N' => {
+                    if let Some(prompt) = &mut self.export_prompt {
+                        prompt.confirm = false;
+                    }
+                    self.notice = None;
+                }
+                _ => {}
+            }
+            return;
+        }
+        if let Some(prompt) = &mut self.export_prompt {
+            prompt.path.push(character);
+        }
+    }
+
+    fn export_untype(&mut self) {
+        let Some(prompt) = &mut self.export_prompt else { return };
+        if prompt.confirm {
+            return;
+        }
+        prompt.path.pop();
+    }
+
+    fn cycle_export_format(&mut self) {
+        let Some(prompt) = &mut self.export_prompt else { return };
+        if prompt.confirm {
+            return;
+        }
+        prompt.format = prompt.format.toggled();
+        prompt.path = swap_extension(&prompt.path, prompt.format);
+    }
+
+    fn export_confirm_or_write(&mut self) {
+        let confirm = self.export_prompt.as_ref().is_some_and(|prompt| prompt.confirm);
+        self.export_write(confirm);
+    }
+
+    fn export_back_or_close(&mut self) {
+        let Some(prompt) = &mut self.export_prompt else { return };
+        if prompt.confirm {
+            prompt.confirm = false;
+            self.notice = None;
+            return;
+        }
+        self.export_prompt = None;
+    }
+
+    fn export_write(&mut self, force: bool) {
+        let Some(prompt) = &self.export_prompt else { return };
+        let trimmed = prompt.path.trim();
+        if trimmed.is_empty() {
+            self.notice = Some("nothing to export".to_owned());
+            return;
+        }
+        let Loadable::Ready(rendered) = &self.conversation else {
+            self.export_prompt = None;
+            self.notice = Some("nothing to export".to_owned());
+            return;
+        };
+        let dest = PathBuf::from(trimmed);
+        let payload = match prompt.format {
+            ExportFormat::Markdown => ExportPayload::Text(export::session(rendered.conversation(), &self.render_ctx(rendered))),
+            ExportFormat::Jsonl => ExportPayload::CopyFile(rendered.path().to_path_buf()),
+        };
+        self.pending_export = Some((dest, payload, force));
+    }
+
+    pub const fn take_export(&mut self) -> Option<(PathBuf, ExportPayload, bool)> {
+        self.pending_export.take()
+    }
+
+    pub fn export_written(&mut self, path: &Path) {
+        self.export_prompt = None;
+        self.notice = Some(format!("exported to {}", path.display()));
+    }
+
+    pub fn export_needs_confirmation(&mut self) {
+        if let Some(prompt) = &mut self.export_prompt {
+            prompt.confirm = true;
+        }
+        self.notice = Some("overwrite? y/n".to_owned());
+    }
+
+    pub fn export_failed(&mut self, error: &str) {
+        self.notice = Some(format!("export failed: {error}"));
+    }
+
+    pub const fn export_prompt_open(&self) -> bool {
+        self.export_prompt.is_some()
+    }
+
+    pub fn export_prompt_path(&self) -> Option<&str> {
+        self.export_prompt.as_ref().map(|prompt| prompt.path.as_str())
+    }
+
+    pub fn export_prompt_format(&self) -> Option<ExportFormat> {
+        self.export_prompt.as_ref().map(|prompt| prompt.format)
+    }
+
+    pub fn export_prompt_confirm(&self) -> bool {
+        self.export_prompt.as_ref().is_some_and(|prompt| prompt.confirm)
     }
 
     fn toggle_injections(&mut self) {
@@ -1308,7 +1503,7 @@ impl App {
     }
 
     pub fn text_entry(&self) -> bool {
-        self.search_open || self.filter.as_ref().is_some_and(|filter| filter.editing)
+        self.search_open || self.filter.as_ref().is_some_and(|filter| filter.editing) || self.export_prompt.is_some()
     }
 
     pub fn filter_status(&self) -> Option<String> {
@@ -1570,6 +1765,18 @@ fn shell_quote(path: &Path) -> String {
     } else {
         format!("'{}'", text.replace('\'', "'\\''"))
     }
+}
+
+fn default_export_path(session: &Session, format: ExportFormat) -> String {
+    let id8: String = session.id.chars().take(8).collect();
+    let slug = session.slug.as_deref().filter(|slug| !slug.is_empty()).unwrap_or("session");
+    format!("./{slug}-{id8}.{}", format.extension())
+}
+
+fn swap_extension(path: &str, format: ExportFormat) -> String {
+    let wanted = format.extension();
+    let other = format.toggled().extension();
+    path.strip_suffix(&format!(".{other}")).map_or_else(|| format!("{path}.{wanted}"), |base| format!("{base}.{wanted}"))
 }
 
 #[cfg(test)]
@@ -3191,5 +3398,156 @@ mod tests {
         app.apply(Action::Copy(CopyTarget::Resume));
         assert!(app.take_copy().is_none());
         assert_eq!(app.notice(), Some("nothing to copy"));
+    }
+
+    fn with_calls_and_session(area: Size) -> App {
+        let mut app = with_calls(area);
+        app.sessions = Loadable::Ready(vec![session("s1")]);
+        app
+    }
+
+    fn has_extension(path: &str, extension: &str) -> bool {
+        Path::new(path).extension().is_some_and(|found| found == extension)
+    }
+
+    #[test]
+    fn e_opens_a_prompt_with_a_default_markdown_path() {
+        let mut app = with_calls_and_session(Size::new(120, 30));
+        app.apply(Action::ToggleExport);
+        assert!(app.export_prompt_open());
+        assert_eq!(app.export_prompt_format(), Some(ExportFormat::Markdown));
+        assert!(
+            app.export_prompt_path().is_some_and(|path| path.starts_with("./") && has_extension(path, "md")),
+            "{:?}",
+            app.export_prompt_path()
+        );
+    }
+
+    #[test]
+    fn e_with_nothing_loaded_confirms_nothing_rather_than_opening_a_prompt() {
+        let mut app = app(Size::new(120, 30));
+        app.apply(Action::ToggleExport);
+        assert!(!app.export_prompt_open());
+        assert_eq!(app.notice(), Some("nothing to export"));
+    }
+
+    #[test]
+    fn tab_cycles_the_format_and_swaps_the_extension() {
+        let mut app = with_calls_and_session(Size::new(120, 30));
+        app.apply(Action::ToggleExport);
+        let markdown_path = app.export_prompt_path().expect("a default path").to_owned();
+        assert!(has_extension(&markdown_path, "md"));
+
+        app.apply(Action::CycleExportFormat);
+        assert_eq!(app.export_prompt_format(), Some(ExportFormat::Jsonl));
+        assert!(app.export_prompt_path().is_some_and(|path| has_extension(path, "jsonl")), "{:?}", app.export_prompt_path());
+
+        app.apply(Action::CycleExportFormat);
+        assert_eq!(app.export_prompt_format(), Some(ExportFormat::Markdown));
+        assert_eq!(app.export_prompt_path(), Some(markdown_path.as_str()), "cycling back restores the original extension");
+    }
+
+    #[test]
+    fn enter_requests_a_markdown_write_and_confirms_once_the_run_loop_reports_success() {
+        let dir = tempfile::TempDir::new().expect("a temp dir");
+        let dest = dir.path().join("out.md");
+        let mut app = with_calls_and_session(Size::new(120, 30));
+        app.apply(Action::ToggleExport);
+        app.export_prompt =
+            Some(ExportPrompt { path: dest.to_string_lossy().into_owned(), format: ExportFormat::Markdown, confirm: false });
+
+        app.apply(Action::Descend);
+        let (written, payload, force) = app.take_export().expect("an export request");
+        assert_eq!(written, dest);
+        assert!(!force);
+        assert!(
+            matches!(payload, ExportPayload::Text(text) if text.contains("do three things")),
+            "the markdown export carries the session"
+        );
+
+        app.export_written(&dest);
+        assert!(!app.export_prompt_open(), "a successful write closes the prompt");
+        assert_eq!(app.notice(), Some(format!("exported to {}", dest.display())).as_deref());
+    }
+
+    #[test]
+    fn an_existing_destination_asks_before_a_second_write_is_requested() {
+        let dir = tempfile::TempDir::new().expect("a temp dir");
+        let dest = dir.path().join("out.md");
+        std::fs::write(&dest, "already here").expect("a pre-existing file");
+        let mut app = with_calls_and_session(Size::new(120, 30));
+        app.apply(Action::ToggleExport);
+        app.export_prompt =
+            Some(ExportPrompt { path: dest.to_string_lossy().into_owned(), format: ExportFormat::Markdown, confirm: false });
+
+        app.apply(Action::Descend);
+        let (_, _, force) = app.take_export().expect("the first export request");
+        assert!(!force);
+
+        app.export_needs_confirmation();
+        assert!(app.export_prompt_confirm());
+        assert_eq!(app.notice(), Some("overwrite? y/n"));
+
+        app.apply(Action::Type('n'));
+        assert!(!app.export_prompt_confirm(), "n backs out of the confirmation");
+        assert!(app.export_prompt_open(), "and stays on the prompt rather than closing it");
+
+        app.export_needs_confirmation();
+        app.apply(Action::Type('y'));
+        let (_, _, force) = app.take_export().expect("the confirmed export request");
+        assert!(force, "y carries the force flag through on the next attempt");
+    }
+
+    #[test]
+    fn escape_backs_out_of_a_confirmation_before_it_closes_the_prompt() {
+        let mut app = with_calls_and_session(Size::new(120, 30));
+        app.apply(Action::ToggleExport);
+        app.export_needs_confirmation();
+        assert!(app.export_prompt_confirm());
+
+        app.apply(Action::Ascend);
+        assert!(app.export_prompt_open(), "the first escape only cancels the confirmation");
+        assert!(!app.export_prompt_confirm());
+
+        app.apply(Action::Ascend);
+        assert!(!app.export_prompt_open(), "the second escape closes the prompt");
+    }
+
+    #[test]
+    fn the_jsonl_format_copies_the_raw_transcript_rather_than_rendering_it() {
+        let dir = tempfile::TempDir::new().expect("a temp dir");
+        let dest = dir.path().join("out.jsonl");
+        let mut app = with_calls_and_session(Size::new(120, 30));
+        app.apply(Action::ToggleExport);
+        app.export_prompt =
+            Some(ExportPrompt { path: dest.to_string_lossy().into_owned(), format: ExportFormat::Jsonl, confirm: false });
+
+        app.apply(Action::Descend);
+        let (_, payload, _) = app.take_export().expect("an export request");
+        assert!(matches!(payload, ExportPayload::CopyFile(_)), "raw JSONL copies the transcript file verbatim");
+    }
+
+    #[test]
+    fn an_export_is_requested_once_rather_than_on_every_poll() {
+        let dir = tempfile::TempDir::new().expect("a temp dir");
+        let dest = dir.path().join("out.md");
+        let mut app = with_calls_and_session(Size::new(120, 30));
+        app.apply(Action::ToggleExport);
+        app.export_prompt =
+            Some(ExportPrompt { path: dest.to_string_lossy().into_owned(), format: ExportFormat::Markdown, confirm: false });
+        app.apply(Action::Descend);
+        assert!(app.take_export().is_some());
+        assert!(app.take_export().is_none(), "one write request is handed over once");
+    }
+
+    #[test]
+    fn typing_edits_the_path_and_backspace_removes_from_the_end() {
+        let mut app = with_calls_and_session(Size::new(120, 30));
+        app.apply(Action::ToggleExport);
+        app.export_prompt = Some(ExportPrompt { path: "./out.md".to_owned(), format: ExportFormat::Markdown, confirm: false });
+        app.apply(Action::Type('x'));
+        assert_eq!(app.export_prompt_path(), Some("./out.mdx"));
+        app.apply(Action::Untype);
+        assert_eq!(app.export_prompt_path(), Some("./out.md"));
     }
 }

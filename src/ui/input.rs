@@ -41,6 +41,8 @@ pub enum Action {
     ToggleSearch,
     ToggleFilter,
     Copy(CopyTarget),
+    ToggleExport,
+    CycleExportFormat,
     Type(char),
     Untype,
     Resize(Size),
@@ -119,6 +121,7 @@ fn key_action(key: KeyEvent, text_entry: bool) -> Option<Action> {
         KeyCode::Char('y') => Some(Action::Copy(CopyTarget::Message)),
         KeyCode::Char('Y') => Some(Action::Copy(CopyTarget::Session)),
         KeyCode::Char('c') => Some(Action::Copy(CopyTarget::Resume)),
+        KeyCode::Char('e') => Some(Action::ToggleExport),
         KeyCode::Char('q') => Some(Action::Quit),
         _ => None,
     }
@@ -130,6 +133,7 @@ const fn text_entry_action(key: KeyEvent) -> Option<Action> {
         KeyCode::Backspace => Some(Action::Untype),
         KeyCode::Down => Some(Action::Move(Motion::Line(1))),
         KeyCode::Up => Some(Action::Move(Motion::Line(-1))),
+        KeyCode::Tab => Some(Action::CycleExportFormat),
         KeyCode::Enter => Some(Action::Descend),
         KeyCode::Esc => Some(Action::Ascend),
         _ => None,
@@ -195,6 +199,7 @@ mod tests {
             (press(KeyCode::Char('y')), Action::Copy(CopyTarget::Message)),
             (press(KeyCode::Char('Y')), Action::Copy(CopyTarget::Session)),
             (press(KeyCode::Char('c')), Action::Copy(CopyTarget::Resume)),
+            (press(KeyCode::Char('e')), Action::ToggleExport),
             (press(KeyCode::Char('q')), Action::Quit),
             (control('c'), Action::Quit),
         ];
@@ -227,6 +232,11 @@ mod tests {
         assert_eq!(action(&press(KeyCode::Backspace), text_viewport()), Some(Action::Untype));
         assert_eq!(action(&press(KeyCode::Down), text_viewport()), Some(Action::Move(Motion::Line(1))));
         assert_eq!(action(&press(KeyCode::Up), text_viewport()), Some(Action::Move(Motion::Line(-1))));
+    }
+
+    #[test]
+    fn in_text_entry_mode_tab_cycles_the_export_format_rather_than_moving_focus() {
+        assert_eq!(action(&press(KeyCode::Tab), text_viewport()), Some(Action::CycleExportFormat));
     }
 
     #[test]

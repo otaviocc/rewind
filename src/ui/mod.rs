@@ -5,9 +5,11 @@ pub mod app;
 pub mod clipboard;
 pub mod columns;
 pub mod diagnostics;
+pub mod export_prompt;
 pub mod input;
 pub mod listing;
 mod lru;
+pub mod save;
 pub mod search;
 pub mod view;
 mod worker;
@@ -130,6 +132,17 @@ fn event_loop(
             && clipboard::copy(&text).is_err()
         {
             app.copy_failed();
+        }
+        if let Some((dest, payload, force)) = app.take_export() {
+            let attempt = match payload {
+                app::ExportPayload::Text(text) => save::attempt_text(&dest, &text, force),
+                app::ExportPayload::CopyFile(source) => save::attempt_copy(&source, &dest, force),
+            };
+            match attempt {
+                save::Attempt::Written(path) => app.export_written(&path),
+                save::Attempt::NeedsConfirmation => app.export_needs_confirmation(),
+                save::Attempt::Failed(error) => app.export_failed(&error),
+            }
         }
     }
 }

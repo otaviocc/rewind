@@ -13,6 +13,7 @@ use crate::ui::age;
 use crate::ui::app::{App, Column, Loadable};
 use crate::ui::columns;
 use crate::ui::diagnostics;
+use crate::ui::export_prompt;
 use crate::ui::search;
 
 const TITLE_PREFIX: &str = "rewind";
@@ -158,6 +159,10 @@ fn content(area: Rect, buf: &mut Buffer, app: &App) {
 }
 
 fn overlay(area: Rect, buf: &mut Buffer, app: &App) {
+    if app.export_prompt_open() {
+        export_overlay(area, buf, app);
+        return;
+    }
     if app.search_open() {
         search_overlay(area, buf, app);
         return;
@@ -241,6 +246,39 @@ fn search_overlay(area: Rect, buf: &mut Buffer, app: &App) {
         }
         painted(row_rect, buf, line);
     }
+}
+
+fn export_overlay(area: Rect, buf: &mut Buffer, app: &App) {
+    let outer = export_prompt::outer(Size::new(area.width, area.height));
+    if outer.width <= 2 || outer.height <= 2 {
+        return;
+    }
+    let box_area = Rect {
+        x: area.x.saturating_add(area.width.saturating_sub(outer.width).saturating_div(2)),
+        y: area.y.saturating_add(area.height.saturating_sub(outer.height).saturating_div(2)),
+        width: outer.width,
+        height: outer.height,
+    };
+    Clear.render(box_area, buf);
+    let frame = Block::bordered()
+        .title(export_prompt::TITLE)
+        .border_style(app.theme().style(Element::Hint))
+        .title_style(app.theme().style(Element::HeaderTitle));
+    let inner = frame.inner(box_area);
+    frame.render(box_area, buf);
+
+    let (Some(format), Some(path)) = (app.export_prompt_format(), app.export_prompt_path()) else { return };
+    let confirm = app.export_prompt_confirm();
+    let width = usize::from(inner.width);
+
+    let format_row = Rect { height: 1, ..inner };
+    painted(format_row, buf, &export_prompt::format_line(format, width, app.theme()));
+
+    let path_row = Rect { y: inner.y.saturating_add(1), height: 1, ..inner };
+    painted(path_row, buf, &export_prompt::path_line(path, width, app.theme()));
+
+    let hint_row = Rect { y: inner.y.saturating_add(2), height: 1, ..inner };
+    painted(hint_row, buf, &export_prompt::hint_line(confirm, width, app.theme()));
 }
 
 fn divider(x: u16, area: Rect, buf: &mut Buffer, style: Style) {
@@ -629,6 +667,21 @@ mod tests {
         let buffer = frame(&app, Size::new(120, 24));
         let status = text_row(&buffer, 23);
         assert!(status.contains("s1"), "{status}");
+    }
+
+    #[test]
+    fn e_opens_an_overlay_carrying_the_format_the_path_and_a_hint() {
+        let mut app = app(Size::new(120, 24));
+        app.set_projects(app.generation(), Ok(vec![project("a", true)]));
+        app.set_sessions(app.generation(), vec![session("s1", "a session")]);
+        with_conversation(&mut app, "read the grid scanner back to me");
+
+        app.apply(Action::ToggleExport);
+        let buffer = frame(&app, Size::new(120, 24));
+        let rows: Vec<String> = (0..24).map(|y| text_row(&buffer, y)).collect();
+        assert!(rows.iter().any(|row| row.contains("Export")), "{rows:?}");
+        assert!(rows.iter().any(|row| row.contains("Markdown")), "{rows:?}");
+        assert!(rows.iter().any(|row| row.contains("Enter to write")), "{rows:?}");
     }
 
     fn drifting_session(id: &str) -> Session {
