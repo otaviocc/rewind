@@ -32,6 +32,7 @@ use crate::ui::app::App;
 use crate::ui::worker::{Job, Wake};
 
 pub const FRAME: u16 = 4;
+pub const OVERLAY_ROWS: u16 = 4;
 
 #[derive(Debug, Clone, Default)]
 pub struct Options {

@@ -25,7 +25,7 @@ use crate::render::message::{self, Anchor, Position, Transcript};
 use crate::render::{Branches, Ctx as RenderCtx, Expanded, Outputs, Overflow};
 use crate::theme::Theme;
 use crate::ui::input::{Action, CopyTarget, Motion};
-use crate::ui::{Options, columns, diagnostics, help, listing, search as ui_search};
+use crate::ui::{OVERLAY_ROWS, Options, columns, diagnostics, help, listing, search as ui_search};
 
 pub const CHROME_ROWS: u16 = 5;
 pub const DEBOUNCE: Duration = Duration::from_millis(80);
@@ -838,11 +838,11 @@ impl App {
     }
 
     pub fn diagnostics_lines(&self) -> Vec<RenderedLine> {
-        diagnostics::lines(&self.drift, usize::from(diagnostics::inner(self.diagnostics_area()).width), &self.theme)
+        diagnostics::lines(&self.drift, usize::from(diagnostics::inner(self.overlay_area()).width), &self.theme)
     }
 
-    const fn diagnostics_area(&self) -> Size {
-        Size::new(self.area.width, self.area.height.saturating_sub(CHROME_ROWS))
+    const fn overlay_area(&self) -> Size {
+        Size::new(self.area.width, self.area.height.saturating_sub(OVERLAY_ROWS))
     }
 
     pub const fn help_open(&self) -> bool {
@@ -858,7 +858,7 @@ impl App {
     }
 
     pub fn help_lines(&self) -> Vec<RenderedLine> {
-        help::lines(usize::from(help::inner(self.diagnostics_area()).width), &self.theme)
+        help::lines(usize::from(help::inner(self.overlay_area()).width), &self.theme)
     }
 
     fn toggle_help(&mut self) {
@@ -868,7 +868,7 @@ impl App {
 
     fn scroll_help(&mut self, motion: Motion) {
         let last = self.help_lines().len().saturating_sub(1);
-        let height = usize::from(help::inner(self.diagnostics_area()).height);
+        let height = usize::from(help::inner(self.overlay_area()).height);
         self.help_pane.top = listing::scroll_target(motion, self.help_pane.top, last, height);
     }
 
@@ -884,7 +884,7 @@ impl App {
 
     fn scroll_diagnostics(&mut self, motion: Motion) {
         let last = self.diagnostics_lines().len().saturating_sub(1);
-        let height = usize::from(diagnostics::inner(self.diagnostics_area()).height);
+        let height = usize::from(diagnostics::inner(self.overlay_area()).height);
         self.diagnostics_pane.top = listing::scroll_target(motion, self.diagnostics_pane.top, last, height);
     }
 
@@ -969,7 +969,7 @@ impl App {
             }
             Action::Move(motion) => {
                 let last = self.search_results.len().saturating_sub(1);
-                let height = self.pane_height();
+                let height = self.search_list_height();
                 self.search_pane.selected = listing::target(motion, self.search_pane.selected, last, height);
                 self.search_pane.top = listing::revealed(self.search_pane.top, self.search_pane.selected, height);
                 self.arm_snippets();
@@ -1742,6 +1742,10 @@ impl App {
         usize::from(self.area.height.saturating_sub(CHROME_ROWS)).max(1)
     }
 
+    fn search_list_height(&self) -> usize {
+        usize::from(ui_search::list_height(self.overlay_area())).max(1)
+    }
+
     pub const fn search_open(&self) -> bool {
         self.search_open
     }
@@ -1783,7 +1787,7 @@ impl App {
             return None;
         }
         self.snippets_due = None;
-        let height = self.pane_height();
+        let height = self.search_list_height();
         let last = self.search_results.len().min(self.search_pane.top.saturating_add(height));
         let wanted: Vec<(usize, Hit)> = (self.search_pane.top..last)
             .filter(|index| self.search_snippets.get(*index).is_none_or(Option::is_none))
@@ -2153,6 +2157,7 @@ mod tests {
     use super::*;
     use crate::domain::diagnostics::Diagnostics;
     use crate::domain::project::Resolution;
+    use crate::theme::Element;
     use crate::ui::input::{self, Viewport};
     use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
@@ -3687,7 +3692,7 @@ mod tests {
                 score: 0,
                 directory: Some("-a".to_owned()),
                 file_name: format!("s{index}.jsonl"),
-                line_no: 1,
+                line_no: u32::try_from(index).unwrap_or(u32::MAX),
                 byte_off: 0,
                 ts_ms: 0,
                 kind: crate::domain::cache::shard::Kind::Transcript,
@@ -3698,6 +3703,62 @@ mod tests {
         app.search_snippets = vec![None; count];
         app.arm_snippets();
         app
+    }
+
+    fn drawn(app: &App) -> ratatui::buffer::Buffer {
+        let size = app.area;
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(size.width, size.height)).expect("a test terminal");
+        terminal.draw(|frame| crate::ui::view::draw(frame, app)).expect("a drawn frame");
+        terminal.backend().buffer().clone()
+    }
+
+    fn row_text(buffer: &ratatui::buffer::Buffer, y: u16) -> String {
+        (0..buffer.area.width).map(|x| buffer[(x, y)].symbol()).collect::<String>().trim_end().to_owned()
+    }
+
+    fn line_no_on(buffer: &ratatui::buffer::Buffer, y: u16) -> Option<usize> {
+        let text = row_text(buffer, y);
+        let (_, tail) = text.rsplit_once(" · L")?;
+        tail.chars().take_while(char::is_ascii_digit).collect::<String>().parse::<usize>().ok()
+    }
+
+    fn results_on_screen(buffer: &ratatui::buffer::Buffer) -> Vec<usize> {
+        (0..buffer.area.height).filter_map(|y| line_no_on(buffer, y)).collect()
+    }
+
+    fn highlighted_result(buffer: &ratatui::buffer::Buffer, background: ratatui::style::Color) -> Option<usize> {
+        let painted = |y: u16| (0..buffer.area.width).filter(|&x| buffer[(x, y)].bg == background).count();
+        let widest = (0..buffer.area.height).max_by_key(|&y| painted(y))?;
+        if painted(widest) == 0 { None } else { line_no_on(buffer, widest) }
+    }
+
+    #[test]
+    fn the_result_rows_drawn_are_exactly_the_rows_the_scroll_math_counts_on() {
+        let app = with_results(500);
+
+        let height = app.search_list_height();
+        assert_eq!(results_on_screen(&drawn(&app)), (0..height).collect::<Vec<usize>>());
+    }
+
+    #[test]
+    fn the_selected_result_stays_on_screen_as_the_cursor_walks_down() {
+        let mut app = with_results(500);
+        let background = app.theme().style(Element::Selection).bg.expect("the selection style names a background");
+
+        for step in 0..app.search_list_height().saturating_add(5) {
+            app.apply(Action::Move(Motion::Line(1)));
+            let selected = app.search_pane().selected;
+            assert_eq!(selected, step.saturating_add(1), "the cursor did not move one row");
+            assert_eq!(highlighted_result(&drawn(&app), background), Some(selected), "the selected row is not painted");
+        }
+    }
+
+    #[test]
+    fn the_prefetch_window_is_the_search_window_not_the_column_window() {
+        let app = with_results(3);
+
+        assert!(app.search_list_height() < app.pane_height(), "the search list is not shorter than a column list");
     }
 
     #[test]
@@ -3714,7 +3775,7 @@ mod tests {
         let mut app = with_results(500);
 
         let request = app.take_snippet_load(elapsed()).expect("a snippet job");
-        assert_eq!(request.wanted.len(), app.pane_height(), "the whole result list was read, not the visible window");
+        assert_eq!(request.wanted.len(), app.search_list_height(), "the whole result list was read, not the visible window");
         assert_eq!(request.wanted.first().map(|(index, _)| *index), Some(0));
     }
 
@@ -3733,13 +3794,13 @@ mod tests {
     fn scrolling_the_result_list_asks_for_the_rows_that_came_into_view() {
         let mut app = with_results(500);
         let generation = app.take_snippet_load(elapsed()).expect("a snippet job").generation;
-        let filled: Vec<(usize, String)> = (0..app.pane_height()).map(|index| (index, "…a hit…".to_owned())).collect();
+        let filled: Vec<(usize, String)> = (0..app.search_list_height()).map(|index| (index, "…a hit…".to_owned())).collect();
         app.set_snippets(generation, filled);
 
         app.apply(Action::Move(Motion::Bottom));
 
         let request = app.take_snippet_load(elapsed()).expect("scrolling armed no snippet job");
-        assert!(request.wanted.iter().all(|(index, _)| *index >= app.pane_height()), "rows already read were read again");
+        assert!(request.wanted.iter().all(|(index, _)| *index >= app.search_list_height()), "rows already read were read again");
     }
 
     #[test]

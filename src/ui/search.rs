@@ -29,6 +29,10 @@ pub fn inner(area: Size) -> Size {
     Size::new(outer.width.saturating_sub(FRAME), outer.height.saturating_sub(FRAME))
 }
 
+pub fn list_height(area: Size) -> u16 {
+    inner(area).height.saturating_sub(HEADER_ROWS)
+}
+
 pub fn prompt_line(query: &str, width: usize, theme: &Theme) -> RenderedLine {
     let mut line = RenderedLine::default();
     line.push(StyledSpan::new(PROMPT_PREFIX, theme.style(Element::Label)));
@@ -141,6 +145,17 @@ mod tests {
                 assert!(outer(area).height <= height, "{area:?}");
                 assert!(inner(area).width <= outer(area).width, "{area:?}");
                 assert!(inner(area).height <= outer(area).height, "{area:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_list_height_is_what_is_left_after_the_frame_and_the_header() {
+        for width in 1..200u16 {
+            for height in 1..40u16 {
+                let area = Size::new(width, height);
+                assert_eq!(list_height(area), inner(area).height.saturating_sub(HEADER_ROWS), "{area:?}");
+                assert!(list_height(area) < height, "{area:?}");
             }
         }
     }
