@@ -1,5 +1,9 @@
 //! The query syntax: bare terms AND together, `"quoted phrases"`, `is:user|assistant|tool|
-//! thinking`, `project:name`, `-negation`. Anything unrecognized is a literal term.
+//! thinking|any`, `project:name`, `-negation`. Anything unrecognized is a literal term.
+//!
+//! A query that names no category searches `Category::Said` — what a human or the assistant
+//! wrote. `Said` is the default rather than a token, so it is not parsed and not in the help
+//! string; naming any other category is how the rest of the corpus is reached.
 //!
 //! Both bare terms and phrases end up as literal byte strings to search for — a phrase is
 //! only a term that happened to contain spaces — so `Query` does not keep them apart.
@@ -8,19 +12,23 @@ use crate::domain::cache::shard::Field;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
+    Said,
     User,
     Assistant,
     Tool,
     Thinking,
+    Any,
 }
 
 impl Category {
     pub const fn matches(self, field: Field) -> bool {
         match self {
+            Self::Said => matches!(field, Field::UserPrompt | Field::AssistantText),
             Self::User => matches!(field, Field::UserPrompt),
             Self::Assistant => matches!(field, Field::AssistantText),
             Self::Tool => matches!(field, Field::ToolInput | Field::ToolResult),
             Self::Thinking => matches!(field, Field::Thinking),
+            Self::Any => true,
         }
     }
 
@@ -30,6 +38,7 @@ impl Category {
             "assistant" => Some(Self::Assistant),
             "tool" => Some(Self::Tool),
             "thinking" => Some(Self::Thinking),
+            "any" => Some(Self::Any),
             _ => None,
         }
     }
@@ -200,5 +209,35 @@ mod tests {
         assert!(!Category::Tool.matches(Field::UserPrompt));
         assert!(Category::User.matches(Field::UserPrompt));
         assert!(!Category::User.matches(Field::AssistantText));
+    }
+
+    #[test]
+    fn the_said_category_takes_user_and_assistant_text_and_nothing_else() {
+        assert!(Category::Said.matches(Field::UserPrompt));
+        assert!(Category::Said.matches(Field::AssistantText));
+        assert!(!Category::Said.matches(Field::Thinking));
+        assert!(!Category::Said.matches(Field::ToolInput));
+        assert!(!Category::Said.matches(Field::ToolResult));
+    }
+
+    #[test]
+    fn the_any_category_takes_every_field() {
+        for field in [Field::UserPrompt, Field::AssistantText, Field::Thinking, Field::ToolInput, Field::ToolResult] {
+            assert!(Category::Any.matches(field));
+        }
+    }
+
+    #[test]
+    fn is_any_parses_as_a_category_rather_than_a_literal_term() {
+        let query = parse("is:any grid");
+        assert_eq!(query.category, Some(Category::Any));
+        assert_eq!(query.positive, ["grid"]);
+    }
+
+    #[test]
+    fn said_is_the_default_and_is_not_reachable_as_a_token() {
+        let query = parse("is:said grid");
+        assert_eq!(query.category, None);
+        assert_eq!(query.positive, ["is:said", "grid"]);
     }
 }

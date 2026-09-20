@@ -16,7 +16,7 @@ pub const HEADER_ROWS: u16 = 2;
 const PROMPT_PREFIX: &str = "? ";
 const PLACEHOLDER: &str = "type to search…";
 const SNIPPET_GAP: &str = "  ";
-const HELP: &str = "is:user|assistant|tool|thinking · project:name · -exclude · \"phrase\"";
+const HELP: &str = "is:user|assistant|tool|thinking|any · project:name · -term · \"phrase\"";
 
 pub fn outer(area: Size) -> Size {
     let width = area.width.saturating_sub(MARGIN).min(MAX_WIDTH);

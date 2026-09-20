@@ -11,7 +11,7 @@ use crate::domain::cache::fnv;
 use crate::domain::cache::shard::{Field, Kind, Record, Shard};
 use crate::domain::search::corpus::{Corpus, ShardEntry};
 use crate::domain::search::matcher::Needles;
-use crate::domain::search::query::Query;
+use crate::domain::search::query::{Category, Query};
 
 pub const TOP_K_PER_SHARD: usize = 200;
 const RECENCY_WINDOW_MS: i64 = 180 * 24 * 60 * 60 * 1000;
@@ -80,9 +80,7 @@ fn search_shard(entry: &ShardEntry, query: &Query, needles: &Needles, now_ms: i6
     let mut heap: BinaryHeap<Reverse<ScoredIndex>> = BinaryHeap::new();
 
     for (index, record) in shard.records().iter().enumerate() {
-        if let Some(category) = query.category
-            && !category.matches(record.field)
-        {
+        if !query.category.unwrap_or(Category::Said).matches(record.field) {
             continue;
         }
         let Some(text) = shard.text(record) else { continue };
@@ -194,7 +192,7 @@ mod tests {
             (Kind::Transcript, Field::ToolResult, "212 src/engine/grid.rs", 1000),
             (Kind::Transcript, Field::UserPrompt, "read the grid scanner back", 1000),
         ]);
-        let hits = search(&corpus, &query::parse("grid"), 1000);
+        let hits = search(&corpus, &query::parse("is:any grid"), 1000);
         assert_eq!(hits.len(), 2);
         assert_eq!(hits.first().map(|hit| hit.field), Some(Field::UserPrompt));
         assert!(hits.first().map(|hit| hit.score) > hits.get(1).map(|hit| hit.score));
@@ -208,6 +206,48 @@ mod tests {
         ]);
         let hits = search(&corpus, &query::parse("grid -offline"), 1000);
         assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn a_bare_query_searches_only_what_a_human_or_the_assistant_said() {
+        let corpus = corpus_with(&[
+            (Kind::Transcript, Field::ToolResult, "grid scanner output", 1000),
+            (Kind::Transcript, Field::ToolInput, "grid scanner path", 1000),
+            (Kind::Transcript, Field::Thinking, "grid scanner pondering", 1000),
+            (Kind::Transcript, Field::UserPrompt, "grid scanner reads", 1000),
+            (Kind::Transcript, Field::AssistantText, "grid scanner answers", 1000),
+        ]);
+        let fields: Vec<Field> = search(&corpus, &query::parse("grid"), 1000).iter().map(|hit| hit.field).collect();
+        assert_eq!(fields.len(), 2);
+        assert!(fields.contains(&Field::UserPrompt));
+        assert!(fields.contains(&Field::AssistantText));
+    }
+
+    #[test]
+    fn tool_text_the_default_hides_is_reachable_by_naming_it() {
+        let corpus = corpus_with(&[
+            (Kind::Transcript, Field::ToolResult, "grid scanner output", 1000),
+            (Kind::Transcript, Field::ToolInput, "grid scanner path", 1000),
+        ]);
+        assert!(search(&corpus, &query::parse("grid"), 1000).is_empty());
+        assert_eq!(search(&corpus, &query::parse("is:tool grid"), 1000).len(), 2);
+    }
+
+    #[test]
+    fn thinking_is_out_of_the_default_and_in_when_named() {
+        let corpus = corpus_with(&[(Kind::Transcript, Field::Thinking, "grid scanner pondering", 1000)]);
+        assert!(search(&corpus, &query::parse("grid"), 1000).is_empty());
+        assert_eq!(search(&corpus, &query::parse("is:thinking grid"), 1000).len(), 1);
+    }
+
+    #[test]
+    fn is_any_reaches_every_field_so_nothing_is_unsearchable() {
+        let corpus = corpus_with(&[
+            (Kind::Transcript, Field::ToolResult, "grid scanner output", 1000),
+            (Kind::Transcript, Field::Thinking, "grid scanner pondering", 1000),
+            (Kind::Transcript, Field::UserPrompt, "grid scanner reads", 1000),
+        ]);
+        assert_eq!(search(&corpus, &query::parse("is:any grid"), 1000).len(), 3);
     }
 
     #[test]
@@ -243,7 +283,7 @@ mod tests {
         let strong_but_stale = (Kind::Transcript, Field::UserPrompt, "the grid scanner reads back", 0_i64);
         let weak_but_fresh = (Kind::Transcript, Field::ToolResult, "gridlock", 1000_i64);
         let corpus = corpus_with(&[strong_but_stale, weak_but_fresh]);
-        let hits = search(&corpus, &query::parse("grid"), 1000);
+        let hits = search(&corpus, &query::parse("is:any grid"), 1000);
         assert_eq!(hits.len(), 2);
         assert_eq!(
             hits.first().map(|hit| hit.byte_off),
