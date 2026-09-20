@@ -130,15 +130,20 @@ message is a glance rather than a hunt.
 | `bare terms` | AND together |
 | `"a phrase"` | matched whole |
 | `-term` | excludes it |
-| `is:user` `is:assistant` `is:tool` `is:thinking` `is:any` | restrict to one kind of text |
+| `is:user` `is:assistant` `is:tool` `is:thinking` `is:history` `is:any` | restrict to one kind of text |
 | `project:name` | restrict to one project |
 
 Anything else is a literal term.
 
-A search with no `is:` looks only at what a human or the assistant wrote. Tool parameters,
-tool output and the model's thinking are indexed too, but they are bulky and would otherwise
-crowd out the conversation, so you reach them by asking: `is:tool`, `is:thinking`, or
-`is:any` for everything at once.
+A search with no `is:` looks only at what a human or the assistant wrote in a conversation.
+Everything else is indexed too, but it is bulky and would otherwise crowd the conversation
+out, so you reach it by asking: `is:tool` for tool parameters and output, `is:thinking` for
+the model's reasoning, `is:history` for the prompt log, or `is:any` for all of it at once.
+
+`is:history` searches `~/.claude/history.jsonl`, which is every prompt you have ever typed.
+It outlives the transcripts — most of its entries belong to sessions that have since been
+cleaned up — so a hit there often has no conversation left to open. That is also why it is
+worth searching when nothing else turns your prompt up.
 
 Search is backed by a corpus rewind keeps under `$XDG_CACHE_HOME/rewind`, or
 `~/.cache/rewind` if that variable is unset. It builds in the background and is searchable
