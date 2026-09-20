@@ -44,7 +44,7 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
         "Taking away",
         &[("y Y", "copy the message · the whole session"), ("c", "copy claude --resume <id>"), ("e", "export to a file")],
     ),
-    ("Leaving", &[("? F1", "these keys · Esc closes this window"), ("q", "quit")]),
+    ("Leaving", &[("? F1", "these keys · Esc or q closes this window"), ("q", "quit")]),
 ];
 
 pub fn outer(area: Size) -> Size {
@@ -120,7 +120,13 @@ mod tests {
 
     #[test]
     fn every_key_it_advertises_is_actually_bound() {
-        let viewport = Viewport { area: Size::new(120, 24), mode: Mode::Browse, focused: Column::Projects, text_entry: false };
+        let viewport = Viewport {
+            area: Size::new(120, 24),
+            mode: Mode::Browse,
+            focused: Column::Projects,
+            text_entry: false,
+            overlay: false,
+        };
         for (_, keys) in SECTIONS {
             for (keys, _) in *keys {
                 for token in keys.split(' ') {

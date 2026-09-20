@@ -837,6 +837,10 @@ impl App {
         self.help_open
     }
 
+    pub const fn overlay_open(&self) -> bool {
+        self.help_open || self.diagnostics_open
+    }
+
     pub const fn help_top(&self) -> usize {
         self.help_pane.top
     }
@@ -2091,6 +2095,8 @@ mod tests {
     use super::*;
     use crate::domain::diagnostics::Diagnostics;
     use crate::domain::project::Resolution;
+    use crate::ui::input::{self, Viewport};
+    use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
     fn ctx() -> Ctx {
         Ctx { now: "2026-01-12T00:00:00Z".parse().expect("a valid instant") }
@@ -2923,6 +2929,29 @@ mod tests {
         let mut app = app(Size::new(120, 30));
         app.apply(Action::Quit);
         assert!(app.quit);
+    }
+
+    #[test]
+    fn q_over_an_open_window_closes_the_window_and_leaves_the_program_running() {
+        for open in [Action::ToggleHelp, Action::ToggleDiagnostics] {
+            let mut app = app(Size::new(120, 30));
+            app.apply(open);
+            assert!(app.overlay_open(), "{open:?} did not open its window");
+
+            let viewport = Viewport {
+                area: app.area(),
+                mode: app.mode(),
+                focused: app.focused(),
+                text_entry: app.text_entry(),
+                overlay: app.overlay_open(),
+            };
+            let event = Event::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+            let action = input::action(&event, viewport).expect("q resolves to an action");
+            app.apply(action);
+
+            assert!(!app.overlay_open(), "q left the {open:?} window open");
+            assert!(!app.quit, "q quit the program instead of closing the {open:?} window");
+        }
     }
 
     #[test]

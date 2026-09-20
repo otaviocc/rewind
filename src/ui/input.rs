@@ -60,11 +60,12 @@ pub struct Viewport {
     pub mode: Mode,
     pub focused: Column,
     pub text_entry: bool,
+    pub overlay: bool,
 }
 
 pub fn action(event: &Event, viewport: Viewport) -> Option<Action> {
     match event {
-        Event::Key(key) if key.kind == KeyEventKind::Press => key_action(*key, viewport.text_entry),
+        Event::Key(key) if key.kind == KeyEventKind::Press => key_action(*key, viewport.text_entry, viewport.overlay),
         Event::Resize(columns, rows) => Some(Action::Resize(Size::new(*columns, *rows))),
         Event::Mouse(mouse) => mouse_action(*mouse, viewport),
         _ => None,
@@ -87,7 +88,7 @@ fn mouse_action(mouse: MouseEvent, viewport: Viewport) -> Option<Action> {
     }
 }
 
-fn key_action(key: KeyEvent, text_entry: bool) -> Option<Action> {
+fn key_action(key: KeyEvent, text_entry: bool, overlay: bool) -> Option<Action> {
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         return match key.code {
             KeyCode::Char('d') => Some(Action::Move(Motion::HalfPage(1))),
@@ -102,6 +103,10 @@ fn key_action(key: KeyEvent, text_entry: bool) -> Option<Action> {
 
     if text_entry {
         return text_entry_action(key);
+    }
+
+    if overlay && key.code == KeyCode::Char('q') {
+        return Some(Action::Ascend);
     }
 
     match key.code {
@@ -164,7 +169,7 @@ mod tests {
     }
 
     fn viewport() -> Viewport {
-        Viewport { area: Size::new(120, 24), mode: Mode::Browse, focused: Column::Projects, text_entry: false }
+        Viewport { area: Size::new(120, 24), mode: Mode::Browse, focused: Column::Projects, text_entry: false, overlay: false }
     }
 
     fn mouse(kind: MouseEventKind, column: u16, row: u16) -> Event {
@@ -223,7 +228,7 @@ mod tests {
     }
 
     fn text_viewport() -> Viewport {
-        Viewport { area: Size::new(120, 24), mode: Mode::Browse, focused: Column::Projects, text_entry: true }
+        Viewport { area: Size::new(120, 24), mode: Mode::Browse, focused: Column::Projects, text_entry: true, overlay: false }
     }
 
     #[test]
@@ -233,6 +238,28 @@ mod tests {
         assert_eq!(action(&press(KeyCode::Char('?')), text_viewport()), Some(Action::Type('?')));
         assert_eq!(action(&press(KeyCode::Char('y')), text_viewport()), Some(Action::Type('y')));
         assert_eq!(action(&press(KeyCode::Char('c')), text_viewport()), Some(Action::Type('c')));
+    }
+
+    fn overlay_viewport() -> Viewport {
+        Viewport { area: Size::new(120, 24), mode: Mode::Browse, focused: Column::Projects, text_entry: false, overlay: true }
+    }
+
+    #[test]
+    fn with_a_window_open_q_closes_the_window_rather_than_the_program() {
+        assert_eq!(action(&press(KeyCode::Char('q')), overlay_viewport()), Some(Action::Ascend));
+        assert_eq!(action(&press(KeyCode::Esc), overlay_viewport()), Some(Action::Ascend));
+        assert_eq!(action(&press(KeyCode::Char('q')), viewport()), Some(Action::Quit));
+    }
+
+    #[test]
+    fn with_a_window_open_ctrl_c_is_still_the_way_out_of_the_program() {
+        assert_eq!(action(&control('c'), overlay_viewport()), Some(Action::Quit));
+    }
+
+    #[test]
+    fn a_window_takes_nothing_from_the_other_keys_it_leaves_alone() {
+        assert_eq!(action(&press(KeyCode::Char('j')), overlay_viewport()), Some(Action::Move(Motion::Line(1))));
+        assert_eq!(action(&press(KeyCode::Char('?')), overlay_viewport()), Some(Action::ToggleHelp));
     }
 
     #[test]
@@ -373,7 +400,13 @@ mod tests {
 
     #[test]
     fn a_click_in_focus_mode_always_hits_the_conversation() {
-        let focused = Viewport { area: Size::new(120, 24), mode: Mode::Focus, focused: Column::Projects, text_entry: false };
+        let focused = Viewport {
+            area: Size::new(120, 24),
+            mode: Mode::Focus,
+            focused: Column::Projects,
+            text_entry: false,
+            overlay: false,
+        };
         assert_eq!(
             action(&mouse(MouseEventKind::Down(MouseButton::Left), 5, 5), focused),
             Some(Action::Click { column: Column::Conversation, row: 2 })
@@ -382,7 +415,13 @@ mod tests {
 
     #[test]
     fn a_click_on_a_narrow_terminal_always_hits_the_focused_column() {
-        let narrow = Viewport { area: Size::new(40, 24), mode: Mode::Browse, focused: Column::Sessions, text_entry: false };
+        let narrow = Viewport {
+            area: Size::new(40, 24),
+            mode: Mode::Browse,
+            focused: Column::Sessions,
+            text_entry: false,
+            overlay: false,
+        };
         assert_eq!(
             action(&mouse(MouseEventKind::Down(MouseButton::Left), 39, 5), narrow),
             Some(Action::Click { column: Column::Sessions, row: 2 })

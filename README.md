@@ -104,10 +104,10 @@ narrow terminal `Enter` and `Esc` do the same walking, one pane at a time.
 | `y` `Y` | copy the message · the whole session |
 | `c` | copy `claude --resume <id>` |
 | `e` | export to a file |
-| `D` | what could not be read · `Esc` closes it |
-| `?` `F1` | every key and what it does · `Esc` closes it |
+| `D` | what could not be read · `Esc` or `q` closes it |
+| `?` `F1` | every key and what it does · `Esc` or `q` closes it |
 | `r` | rescan `~/.claude` for new and changed projects |
-| `q` `Ctrl-C` | quit |
+| `q` `Ctrl-C` | quit — with a window open, `q` closes the window and `Ctrl-C` still quits |
 
 The `/` filter and the `e` export prompt take typing: letters type instead of acting,
 `Backspace` deletes, `↑`/`↓` still move, `Enter` accepts, and `Esc` cancels. In the export
