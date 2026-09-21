@@ -28,8 +28,6 @@ Below 50 columns there is no room for three side by side, so rewind shows **one 
 time** — whichever is focused, full width. `Enter` descends into it, `Esc` goes back, and a
 pane with something behind it carries a `‹` before its name.
 
-*Under construction — see the milestones for what works today.*
-
 ## Install
 
 Homebrew, from my tap:
