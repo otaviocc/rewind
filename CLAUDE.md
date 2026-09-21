@@ -17,13 +17,12 @@ make audit                                   cargo audit --deny warnings
 cargo run -- --claude-dir tests/data/claude  run against the fixtures
 ```
 
-**CI is disabled and verification is local.** The repository is private until there is
-something people can use, and GitHub Actions does not run on it. `.github/workflows/ci.yml`
-is committed and known-good but disabled at the repository level; re-enabling it is part of
-#26, alongside going public.
+**CI is disabled and verification is local.** The repository is private, and GitHub Actions
+does not run on it. `.github/workflows/ci.yml` is committed and known-good but disabled at
+the repository level.
 
-So `make check` is the gate, not a convenience: **run it before every commit that closes an
-issue, and say in the closing comment that it passed.** Nothing else will catch a regression.
+So `make check` is the gate, not a convenience: **run it before every commit, and say in the
+commit body that it passed.** Nothing else will catch a regression.
 
 ### Two machines
 
@@ -39,13 +38,12 @@ either — but they do not check the same things.
 So between the two, four of the five CI jobs are covered on every platform CI would build
 for except one. What is left:
 
-- **Windows is unverified** until CI returns at M6. Prefer `Path::join` over string
-  concatenation, keep platform assumptions behind `cfg`, and do not assume `\n` line endings
-  or a particular terminal.
+- **Windows is unverified** while CI is off. Prefer `Path::join` over string concatenation,
+  keep platform assumptions behind `cfg`, and do not assume `\n` line endings or a particular
+  terminal.
 - **The MSRV is only enforced on Fedora.** Work done solely on the macOS box can introduce a
   `std` API stabilised after `rust-version` and nothing will say so. Run `make check` on
-  Fedora before closing an issue whose work was written on macOS, or expect to find it at
-  M6 instead.
+  Fedora before calling macOS work finished, or expect to find it when CI returns.
 
 `make msrv` reads `rust-version` straight out of `Cargo.toml`, the way the CI job does, so
 the MSRV is stated in exactly one place. It skips where rustup is absent and **fails** where
@@ -223,10 +221,10 @@ statting the checkout, and see `tests/data/README.md` before changing a fixture.
 
 - **No comments in Rust.** A file may carry a single `//!` line saying what it is, for
   navigation. Nothing else: no `///`, no `//`. A comment is a claim nobody checks, and it
-  lends authority to whatever it sits above. Put the explanation in the commit message and
-  the PR body, which are dated and tied to a diff. If code needs a paragraph to be
-  understood, prefer a name, a smaller function, or a test. TOML and YAML in this repo *are*
-  commented; the rule is about code.
+  lends authority to whatever it sits above. Put the explanation in the commit message, which
+  is dated and tied to a diff. If code needs a paragraph to be understood, prefer a name, a
+  smaller function, or a test. TOML and YAML in this repo *are* commented; the rule is about
+  code.
 - No `unsafe`. No `unwrap` outside tests; `expect` only with an invariant message.
 - `anyhow` at the binary boundary, `thiserror` inside modules the UI matches on.
 - `indexing_slicing`, `arithmetic_side_effects` and `as_conversions` are denied. Index with
@@ -234,55 +232,45 @@ statting the checkout, and see `tests/data/README.md` before changing a fixture.
   is not friction to route around — it is what makes a corrupt cache file a rejected shard
   instead of a panic.
 - `clippy -D warnings` makes `dead_code` and an unconstructed enum variant build failures.
-  **That decides how a large feature splits: slice it by feature, not by module, so every PR
-  constructs what it adds.**
+  **That decides how a large feature splits: slice it by feature, not by module, so every
+  commit constructs what it adds.**
 - New inputs go into the existing context structs (`Ctx`, `Options`) rather than into
   parameter lists that ripple through every signature and every test.
 - Add a dependency only when it earns its place, and say why in the commit body.
 - `README.md` is a **product page** for someone using the program, with no architecture
-  section. A change to a flag, key, theme key, or default updates it in the same PR (own
+  section. A change to a flag, key, theme key, or default updates it on the same branch (own
   commit, `docs:` prefix); a change to how the code works does not touch it.
 
 ## Workflow
 
-Work is tracked as GitHub issues under a milestone. An issue's **Scope** checklist and
-**Exit criteria** are the spec — read them first, and treat them as the definition of done.
+Branch off `main`, one branch per change, named for the change rather than for a ticket
+(`top-level-scanner`, `narrow-threshold`). Conventional Commits. Rebase rather than merge, so
+the history stays linear.
 
-```
-gh issue list --milestone "M1 · Walking skeleton"
-gh issue view 7
-```
+**The commit message is the only record.** There is no tracker and no thread: a future session
+reads the log to understand why the code looks the way it does, so the body has to carry what
+a thread used to. Say what the change is, what was wrong before, what was rejected and why,
+and how it was verified. Put in the reasoning you would otherwise have to rediscover — the
+constraint that made the obvious approach wrong, the measurement behind a threshold, the case
+a test exists to pin.
 
-Branch as `t<issue>-<slug>` (e.g. `t7-top-level-scanner`). Conventional Commits. PR title
-`<type>: <summary>`. `Closes #N` only on the PR that actually meets the exit criteria.
+**Write it for the diff, not for the moment.** The message describes the change itself, in
+terms that are still true a year later:
 
-**Comment on the issue as you go.** Before starting, comment with the approach and anything
-the issue did not anticipate. On finishing, comment with what was built, what changed from
-the plan and why, the files touched, and how it was verified. A future session reads the
-issue thread, not the diff, to understand why the code looks the way it does.
+- No ticket, issue, PR or milestone references, and no platform-specific links. Git outlives
+  whatever is hosting it, and a `#7` either dangles or, worse, silently points at something
+  unrelated once numbering restarts somewhere else.
+- No "part 1 of", "follow-up to", "deferred from", "ticks the scope item". Work that only
+  makes sense relative to other work should say what it *is* instead.
+- Name the thing, not the number: "the append fast path", not "#20".
+- Upstream references are fine — `rust-lang/rust#51114`, a vendored project's URL — because
+  they point outward at something that exists independently.
 
-```
-gh issue comment 7 --body "..."
-```
+A decision you made *against* belongs in the body as much as one you made for. Leaving it out
+is what makes a future session re-litigate it.
 
-**Tick the Scope checklist as each item lands**, not in one sweep at the end. A half-ticked
-list is the only thing that says how far the work got when a session stops mid-issue, and the
-diff cannot say which scope items were deliberate. `gh issue edit` replaces the whole body,
-so round-trip it:
-
-```
-gh issue view 7 --json body -q .body > /tmp/7.md
-gh issue edit 7 --body-file /tmp/7.md
-```
-
-Tick only what is done and verified — never in advance, and never to make the list look
-finished. An item you decided against stays **unticked**, and the closing comment says why;
-deleting it or ticking it hides a decision. If the scope itself turned out to be wrong, edit
-the line and say so in a comment: the checklist is the spec, so changing it is exactly the
-kind of thing a future session needs to find.
-
-If the work reveals something a later milestone needs to know, open or update that issue
-rather than leaving it in a commit message. Never close an issue without a closing comment.
+Run `make check` before every commit, and say in the body that it passed and on which machine
+— the MSRV is only enforced on Fedora, so which box ran it is part of the claim.
 
 ## Smoke-testing the TUI
 
