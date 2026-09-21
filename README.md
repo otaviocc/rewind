@@ -16,17 +16,21 @@ never writes to `~/.claude`.
 
 ![rewind](docs/screenshot.jpg)
 
-Two things mark the focused column: its title is in the accent color, and its selected row
-carries a solid band. The other columns keep a fainter band on their own selection, so you
-can still see where you left each one. `Tab` moves the focus.
+Projects on the left, the sessions inside the selected one in the middle, and the
+conversation on the right. Two things mark the column the keyboard is in: its title is in
+the accent color, which is `Conversation` in the shot above, and its selected row carries a
+solid band. The other columns keep a fainter band on their own selection, so you can still
+see where you left each one. `Tab` moves between them.
 
-The status line names the selected session, then the focused column's position and
-percentage through its rows (nothing worth reading if it only has one), then `focus` when
-`f` is on.
+The status line along the bottom names the selected session, then the focused column's
+position and percentage through its rows (nothing worth reading if it only has one). It ends
+with the word `focus` when the conversation is filling the terminal on its own, which is
+what `f` in the [Keys](#keys) table below does.
 
-Below 50 columns there is no room for three side by side, so rewind shows **one pane at a
-time**, whichever is focused, full width. `Enter` descends into it, `Esc` goes back, and a
-pane with something behind it carries a `‹` before its name.
+In a terminal narrower than 50 characters there is no room for the three columns side by
+side, so rewind shows **one of them at a time**, whichever is focused, full width. `Enter`
+descends into it, `Esc` goes back, and a column with something behind it carries a `‹`
+before its name.
 
 ## Install
 
