@@ -1,6 +1,8 @@
+[![CI](https://img.shields.io/github/actions/workflow/status/otaviocc/rewind/ci.yml?branch=main)](https://github.com/otaviocc/rewind/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/otaviocc/rewind)](https://github.com/otaviocc/rewind/releases/latest)
 [![crates.io](https://img.shields.io/crates/v/rewind-cli)](https://crates.io/crates/rewind-cli)
-![msrv](https://img.shields.io/badge/msrv-1.88-orange)
-![license](https://img.shields.io/badge/license-MIT-blue)
+[![msrv](https://img.shields.io/crates/msrv/rewind-cli)](https://github.com/otaviocc/rewind/blob/main/Cargo.toml)
+[![license](https://img.shields.io/github/license/otaviocc/rewind)](https://github.com/otaviocc/rewind/blob/main/LICENSE)
 
 # rewind
 
