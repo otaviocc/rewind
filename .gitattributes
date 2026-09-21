@@ -1,5 +1,5 @@
 # The fixture tree is byte-exact on purpose. One transcript ends in a line cut mid-JSON with
 # no trailing newline, which is what exercises the unparseable-line path in `diagnostics`.
-# Without this, git's EOL normalisation rewrites those bytes on a Windows checkout and the
-# fixture silently stops testing what it claims to.
+# Without this, git's EOL normalisation rewrites those bytes wherever `core.autocrlf` is on,
+# and the fixture silently stops testing what it claims to.
 tests/data/** -text

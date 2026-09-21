@@ -12,7 +12,6 @@ On every platform, including macOS:
 ```
 $XDG_CONFIG_HOME/rewind/theme.toml
 ~/.config/rewind/theme.toml          if XDG_CONFIG_HOME is unset
-%APPDATA%\rewind\theme.toml          on Windows, if neither is set
 ```
 
 Named themes go beside it in `themes/<name>.toml` and are selected with `--theme <name>`.

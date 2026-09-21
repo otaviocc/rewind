@@ -8,9 +8,7 @@
 #     gh workflow enable ci.yml
 #
 # `make check` covers fmt, clippy, test, msrv and audit, and development happens
-# on both macOS and Fedora, so between the two machines the only leg with no
-# local equivalent is `test (windows-latest)`. That is the job most likely to
-# fail the first time this comes back on.
+# on both macOS and Fedora, so every job here has a local equivalent.
 
 name: CI
 
@@ -55,7 +53,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

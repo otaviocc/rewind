@@ -10,7 +10,7 @@ MSRV := $(shell sed -n 's/^rust-version *= *"\(.*\)"/\1/p' Cargo.toml)
 #
 # `msrv` runs wherever rustup is available and skips where it is not, so this is
 # the same command on both development machines and the Fedora box is the one
-# that actually enforces the MSRV. Windows stays unverified until CI returns.
+# that actually enforces the MSRV locally; CI enforces it on every push.
 check: fmt-check lint test msrv audit
 
 build:

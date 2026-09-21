@@ -16,7 +16,6 @@ use ratatui::crossterm::execute;
 enum Target {
     MacOs,
     Unix,
-    Windows,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,7 +25,6 @@ struct Helper {
 }
 
 const PBCOPY: Helper = Helper { program: "pbcopy", args: &[] };
-const CLIP: Helper = Helper { program: "clip.exe", args: &[] };
 const WL_COPY: Helper = Helper { program: "wl-copy", args: &[] };
 const XCLIP: Helper = Helper { program: "xclip", args: &["-selection", "clipboard"] };
 const XSEL: Helper = Helper { program: "xsel", args: &["--clipboard", "--input"] };
@@ -49,7 +47,6 @@ fn native(text: &str) -> Option<io::Result<()>> {
 const fn helpers(target: Target, wayland: bool, x11: bool) -> &'static [Helper] {
     match (target, wayland, x11) {
         (Target::MacOs, _, _) => &[PBCOPY],
-        (Target::Windows, _, _) => &[CLIP],
         (Target::Unix, true, true) => &[WL_COPY, XCLIP, XSEL],
         (Target::Unix, true, false) => &[WL_COPY],
         (Target::Unix, false, true) => &[XCLIP, XSEL],
@@ -77,13 +74,7 @@ fn run(helper: &Helper, text: &str) -> io::Result<()> {
 }
 
 const fn target() -> Target {
-    if cfg!(target_os = "macos") {
-        Target::MacOs
-    } else if cfg!(target_os = "windows") {
-        Target::Windows
-    } else {
-        Target::Unix
-    }
+    if cfg!(target_os = "macos") { Target::MacOs } else { Target::Unix }
 }
 
 fn set(name: &str) -> bool {
@@ -102,11 +93,6 @@ mod tests {
     fn macos_copies_with_pbcopy_whatever_the_display_variables_say() {
         assert_eq!(programs(helpers(Target::MacOs, false, false)), ["pbcopy"]);
         assert_eq!(programs(helpers(Target::MacOs, true, true)), ["pbcopy"]);
-    }
-
-    #[test]
-    fn windows_copies_with_clip() {
-        assert_eq!(programs(helpers(Target::Windows, false, false)), ["clip.exe"]);
     }
 
     #[test]

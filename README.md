@@ -48,7 +48,7 @@ From crates.io. The crate is `rewind-cli` and the binary it installs is `rewind`
 cargo install rewind-cli --locked
 ```
 
-Prebuilt archives for Linux, macOS and Windows are attached to every
+Prebuilt archives for Linux and macOS are attached to every
 [release](https://github.com/otaviocc/rewind/releases): unpack one and put `rewind` on your
 `PATH`.
 
@@ -161,8 +161,7 @@ tokyo-night-day   vesper
 
 To change anything, `rewind` reads one file. On every platform, including macOS, it lives at
 `$XDG_CONFIG_HOME/rewind/theme.toml`, or `~/.config/rewind/theme.toml` if that variable is
-unset, or `%APPDATA%\rewind\theme.toml` on Windows if neither is set. Named themes go beside
-it in `themes/<name>.toml` and are selected with `--theme`.
+unset. Named themes go beside it in `themes/<name>.toml` and are selected with `--theme`.
 
 Everything is optional. A theme states what it wants moved and inherits the rest, so this is
 a complete and valid file:

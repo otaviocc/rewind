@@ -21,17 +21,14 @@ pub fn claude_dir(override_dir: Option<PathBuf>) -> Result<PathBuf, PathError> {
 }
 
 pub fn config_dir() -> Option<PathBuf> {
-    config_dir_from(var("XDG_CONFIG_HOME"), home(), var("APPDATA"))
+    config_dir_from(var("XDG_CONFIG_HOME"), home())
 }
 
-fn config_dir_from(xdg: Option<PathBuf>, home: Option<PathBuf>, appdata: Option<PathBuf>) -> Option<PathBuf> {
+fn config_dir_from(xdg: Option<PathBuf>, home: Option<PathBuf>) -> Option<PathBuf> {
     if let Some(xdg) = present(xdg) {
         return Some(xdg.join(APP));
     }
-    if let Some(home) = present(home) {
-        return Some(home.join(".config").join(APP));
-    }
-    present(appdata).map(|appdata| appdata.join(APP))
+    present(home).map(|home| home.join(".config").join(APP))
 }
 
 pub fn cache_dir() -> Option<PathBuf> {
@@ -69,37 +66,27 @@ mod tests {
 
     #[test]
     fn the_config_directory_prefers_xdg_config_home() {
-        let dir = config_dir_from(
-            Some(PathBuf::from("/xdg")),
-            Some(PathBuf::from("/home/someone")),
-            Some(PathBuf::from(r"C:\Users\someone\AppData")),
-        );
+        let dir = config_dir_from(Some(PathBuf::from("/xdg")), Some(PathBuf::from("/home/someone")));
         assert_eq!(dir, Some(PathBuf::from("/xdg/rewind")));
     }
 
     #[test]
     fn the_config_directory_is_dot_config_under_home_and_never_library() {
-        let dir = config_dir_from(None, Some(PathBuf::from("/Users/someone")), None).expect("a home directory is enough");
+        let dir = config_dir_from(None, Some(PathBuf::from("/Users/someone"))).expect("a home directory is enough");
         assert_eq!(dir, PathBuf::from("/Users/someone/.config/rewind"));
         assert!(!dir.to_string_lossy().contains("Library"), "{dir:?} went to ~/Library");
     }
 
     #[test]
-    fn appdata_is_the_config_directory_only_when_there_is_no_home() {
-        let appdata = PathBuf::from(r"C:\Users\someone\AppData");
-        assert_eq!(config_dir_from(None, None, Some(appdata.clone())), Some(appdata.join(APP)));
-    }
-
-    #[test]
     fn there_is_no_config_directory_when_the_environment_says_nothing() {
-        assert_eq!(config_dir_from(None, None, None), None);
+        assert_eq!(config_dir_from(None, None), None);
     }
 
     #[test]
     fn an_empty_variable_is_skipped_rather_than_joined_onto() {
-        let dir = config_dir_from(Some(PathBuf::from("")), Some(PathBuf::from("/home/someone")), None);
+        let dir = config_dir_from(Some(PathBuf::from("")), Some(PathBuf::from("/home/someone")));
         assert_eq!(dir, Some(PathBuf::from("/home/someone/.config/rewind")), "an empty XDG_CONFIG_HOME was treated as set");
-        assert_eq!(config_dir_from(Some(PathBuf::from("")), Some(PathBuf::from("")), Some(PathBuf::from(""))), None);
+        assert_eq!(config_dir_from(Some(PathBuf::from("")), Some(PathBuf::from(""))), None);
     }
 
     #[test]

@@ -12,7 +12,6 @@ use filetime::FileTime;
 use tempfile::TempDir;
 
 const NOWHERE: &str = "/nonexistent-rewind-test";
-const NOWHERE_ON_WINDOWS: &str = r"C:\nonexistent-rewind-test";
 
 const FIXTURE_HOME: &str = "/Users/fixture";
 const FIXTURE_HOME_ENCODED: &str = "-Users-fixture";
@@ -34,11 +33,8 @@ pub fn rewind() -> Command {
     let mut command = Command::cargo_bin("rewind").expect("the binary is built by the test harness");
     command.env_remove("NO_COLOR");
     command.env("HOME", NOWHERE);
-    command.env("USERPROFILE", NOWHERE_ON_WINDOWS);
     command.env("XDG_CONFIG_HOME", NOWHERE);
     command.env("XDG_CACHE_HOME", NOWHERE);
-    command.env("APPDATA", NOWHERE_ON_WINDOWS);
-    command.env("LOCALAPPDATA", NOWHERE_ON_WINDOWS);
     command
 }
 

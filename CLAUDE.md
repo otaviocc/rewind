@@ -17,12 +17,15 @@ make audit                                   cargo audit --deny warnings
 cargo run -- --claude-dir tests/data/claude  run against the fixtures
 ```
 
-**CI is disabled and verification is local.** The repository is private, and GitHub Actions
-does not run on it. `.github/workflows/ci.yml` is committed and known-good but disabled at
-the repository level.
+**CI runs on every push to `main`**, and `make check` is the same set of checks locally:
+fmt, clippy `-D warnings`, test, msrv and audit. Run it before every commit and say in the
+commit body that it passed — CI is the backstop, not the first place a regression should
+be found.
 
-So `make check` is the gate, not a convenience: **run it before every commit, and say in the
-commit body that it passed.** Nothing else will catch a regression.
+**Linux and macOS only.** Windows is not supported and is not built, tested or shipped for.
+There is no Windows box to validate against, and a platform nobody can exercise is a claim
+rather than a feature. There is no `cfg(windows)` anywhere; if one is ever needed, that is
+the moment to reopen the question rather than to add it quietly.
 
 ### Two machines
 
@@ -32,18 +35,12 @@ either — but they do not check the same things.
 | | macOS | Fedora |
 | --- | --- | --- |
 | toolchain | Homebrew rust, no rustup | rustup (dnf) |
-| `msrv` | skipped, with a notice | **runs** — this is where the MSRV is enforced |
+| `msrv` | skipped, with a notice | **runs** |
 | test matrix leg | macOS | Linux |
 
-So between the two, four of the five CI jobs are covered on every platform CI would build
-for except one. What is left:
-
-- **Windows is unverified** while CI is off. Prefer `Path::join` over string concatenation,
-  keep platform assumptions behind `cfg`, and do not assume `\n` line endings or a particular
-  terminal.
-- **The MSRV is only enforced on Fedora.** Work done solely on the macOS box can introduce a
-  `std` API stabilised after `rust-version` and nothing will say so. Run `make check` on
-  Fedora before calling macOS work finished, or expect to find it when CI returns.
+So the two machines between them cover everything CI does. The one gap is local: **`make
+check` on macOS does not check the MSRV**, so work written there can reach for a `std` API
+stabilised after `rust-version` and pass. Fedora catches it, and so does CI.
 
 `make msrv` reads `rust-version` straight out of `Cargo.toml`, the way the CI job does, so
 the MSRV is stated in exactly one place. It skips where rustup is absent and **fails** where
@@ -200,8 +197,8 @@ session summaries; its absence should be invisible except for a progress line.
 snapshots for rendered output and `ratatui::backend::TestBackend` for frames.
 
 Tests read the fixture tree in `tests/data/`, never the developer's real `~/.claude`.
-`tests/common/mod.rs` pins `HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME` and the Windows
-equivalents at nonexistent paths, so a local theme cannot repaint a snapshot and a bug that
+`tests/common/mod.rs` pins `HOME`, `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` at nonexistent
+paths, so a local theme cannot repaint a snapshot and a bug that
 falls back to the real `~/.claude` fails loudly instead of quietly reading hundreds of
 megabytes of personal history.
 
