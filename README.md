@@ -1,3 +1,5 @@
+[![crates.io](https://img.shields.io/crates/v/rewind-cli)](https://crates.io/crates/rewind-cli)
+![msrv](https://img.shields.io/badge/msrv-1.88-orange)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 
 # rewind
@@ -30,21 +32,35 @@ pane with something behind it carries a `‹` before its name.
 
 ## Install
 
+Homebrew, from my tap:
+
 ```
-cargo install --locked --path .
+brew install otaviocc/apps/rewind
 ```
 
-or from source:
+It builds from source, so Homebrew pulls in a Rust toolchain as a build dependency.
+
+From crates.io — the crate is `rewind-cli`, because `rewind` was taken; the binary it
+installs is `rewind`:
+
+```
+cargo install rewind-cli --locked
+```
+
+Prebuilt archives for Linux, macOS and Windows are attached to every
+[release](https://github.com/otaviocc/rewind/releases): unpack one and put `rewind` on your
+`PATH`.
+
+Or from source, which needs Rust 1.88 or newer:
 
 ```
 git clone https://github.com/otaviocc/rewind
 cd rewind
-cargo build --release
-./target/release/rewind
+cargo install --locked --path .
 ```
 
-Homebrew and prebuilt binaries for Linux, macOS and Windows arrive with the first tagged
-release.
+*Nothing is published yet — the tap, the crate and the archives all arrive with the first
+tagged release. Until then, build from source.*
 
 ## Quick start
 
