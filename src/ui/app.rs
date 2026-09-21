@@ -833,7 +833,10 @@ impl App {
         if let Some(wanted) = self.pending_session.take() {
             match sessions.iter().position(|session| session.id == wanted.id) {
                 Some(index) => self.sessions_pane.selected = index,
-                None if wanted.required => self.notice = Some(SESSION_GONE.to_owned()),
+                None if wanted.required => {
+                    self.notice = Some(SESSION_GONE.to_owned());
+                    self.focused = Column::Sessions;
+                }
                 None => {}
             }
         }
@@ -2350,6 +2353,7 @@ mod tests {
 
         assert_eq!(app.notice(), Some(SESSION_GONE), "a pruned session opened the newest one without a word");
         assert_eq!(app.sessions_pane.selected, 0);
+        assert_eq!(app.focused, Column::Sessions, "the reader was dropped into a conversation that is not the hit");
     }
 
     #[test]
@@ -2374,6 +2378,7 @@ mod tests {
 
         assert_eq!(app.notice(), None, "{:?}", app.notice());
         assert_eq!(app.sessions_pane.selected, 0);
+        assert_eq!(app.focused, Column::Conversation, "a hit that opens must leave the reader in the conversation");
     }
 
     #[test]
