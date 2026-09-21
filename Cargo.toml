@@ -13,7 +13,7 @@ categories = ["command-line-utilities"]
 # and `themes/` stay: the build script and the two loaders' `include_str!` and
 # `include_bytes!` need them to build the crate at all. `tests/` stays too, so a
 # vendored copy can be verified.
-exclude = ["CLAUDE.md", "Makefile", "rustfmt.toml", ".github/", ".cargo/", "tools/"]
+exclude = ["CLAUDE.md", "Makefile", "rustfmt.toml", ".github/", ".cargo/", "docs/", "tools/"]
 
 [lib]
 name = "rewind"
