@@ -1447,6 +1447,8 @@ mod tests {
         with_conversation(&mut app, &"prose ".repeat(200));
 
         app.apply(Action::Move(Motion::Bottom));
+        let height = isize::try_from(columns::conversation_height(app.area())).expect("a pane height");
+        app.apply(Action::Move(Motion::Line(1 - height)));
         let buffer = frame(&app, Size::new(60, 24));
         let last_row = buffer.area.height.saturating_sub(3);
         assert!(!text_row(&buffer, last_row).is_empty(), "the last content row went unused after scrolling to the end");

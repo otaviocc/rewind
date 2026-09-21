@@ -3860,14 +3860,14 @@ mod tests {
 
         app.apply(Action::Move(Motion::Line(1)));
         assert_eq!(app.pane(Column::Conversation).selected, 0, "the conversation has no line cursor");
-        assert_eq!(app.pane(Column::Conversation).top, 0, "a short transcript does not scroll");
+        assert_eq!(app.pane(Column::Conversation).top, 1, "the pane scrolled instead");
 
         app.apply(Action::Move(Motion::Bottom));
-        assert_eq!(app.pane(Column::Conversation).top, 0);
+        assert_eq!(app.pane(Column::Conversation).top, app.last(Column::Conversation));
     }
 
     #[test]
-    fn a_transcript_taller_than_the_pane_scrolls_and_stops_at_the_last_line() {
+    fn a_transcript_taller_than_the_pane_scrolls_and_stops_with_the_last_line_at_the_top() {
         let mut app = app(Size::new(60, 10));
         app.set_projects(app.generation(), Ok(vec![project("a")]));
         app.set_sessions(app.generation(), vec![session("s1")]);
@@ -3880,7 +3880,7 @@ mod tests {
 
         app.apply(Action::Move(Motion::Bottom));
         let bottom = app.pane(Column::Conversation).top;
-        assert_eq!(bottom, last.saturating_sub(height.saturating_sub(1)), "the last line lands on the last row");
+        assert_eq!(bottom, last, "the last line lands on the first row");
 
         app.apply(Action::Move(Motion::Line(1)));
         assert_eq!(app.pane(Column::Conversation).top, bottom, "there is nothing below the last line");

@@ -17,13 +17,7 @@ pub fn step(selected: usize, delta: isize, last: usize) -> usize {
 }
 
 pub fn scroll_target(motion: Motion, top: usize, last: usize, height: usize) -> usize {
-    let height_isize = isize::try_from(height.max(1)).unwrap_or(isize::MAX);
-    match motion {
-        Motion::Line(delta) => scrolled(top, delta, last, height),
-        Motion::HalfPage(delta) => scrolled(top, delta.saturating_mul((height_isize / 2).max(1)), last, height),
-        Motion::Top => 0,
-        Motion::Bottom => scrolled(top, isize::MAX, last, height),
-    }
+    target(motion, top, last, height)
 }
 
 pub fn scrolled(top: usize, delta: isize, last: usize, height: usize) -> usize {
@@ -73,6 +67,20 @@ mod tests {
     #[test]
     fn a_list_shorter_than_the_box_does_not_scroll_at_all() {
         assert_eq!(scrolled(0, 3, 2, 10), 0);
+    }
+
+    #[test]
+    fn a_free_scrolling_pane_stops_with_the_last_line_on_the_first_row() {
+        assert_eq!(scroll_target(Motion::Line(100), 0, 9, 5), 9);
+        assert_eq!(scroll_target(Motion::HalfPage(100), 0, 9, 5), 9);
+        assert_eq!(scroll_target(Motion::Bottom, 0, 9, 5), 9);
+        assert_eq!(scroll_target(Motion::Line(-1), 0, 9, 5), 0);
+        assert_eq!(scroll_target(Motion::Top, 9, 9, 5), 0);
+    }
+
+    #[test]
+    fn a_free_scrolling_pane_shorter_than_the_box_still_scrolls() {
+        assert_eq!(scroll_target(Motion::Line(3), 0, 2, 10), 2);
     }
 
     #[test]
