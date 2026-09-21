@@ -83,8 +83,8 @@ narrow terminal `Enter` and `Esc` do the same walking, one pane at a time.
 | `j` `k` `↓` `↑` | move within a column |
 | `g` `G` `Home` `End` | top · bottom of the column |
 | `d` `u` `Ctrl-d` `Ctrl-u` | half page down · up |
-| `Enter` | descend · expand the selected tool call · enter a subagent |
-| `Esc` | leave a subagent · back out |
+| `Enter` | descend · expand the selected tool call · enter a subagent · read a plan |
+| `Esc` | leave a subagent · close a plan · back out |
 | `f` | focus the conversation full-width |
 | `/` | filter the list |
 | `s` | search everything |
@@ -100,6 +100,11 @@ narrow terminal `Enter` and `Esc` do the same walking, one pane at a time.
 | `?` `F1` | every key and what it does · `Esc` or `q` closes it |
 | `r` | rescan `~/.claude` for new and changed projects |
 | `q` `Ctrl-C` | quit; with a window open, `q` closes the window and `Ctrl-C` still quits |
+
+A tool call marked `⏎` has something behind it: a subagent to enter, or, on the call that
+ends plan mode, the plan itself. `Space` expands the call in place and shows the plan's
+opening; `Enter` opens the whole thing in its own scrollable window, and `Esc` or `q` closes
+it again.
 
 The `/` filter and the `e` export prompt take typing: letters type instead of acting,
 `Backspace` deletes, `↑`/`↓` still move, `Enter` accepts, and `Esc` cancels. In the export
