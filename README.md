@@ -60,9 +60,6 @@ cd rewind
 cargo install --locked --path .
 ```
 
-*Nothing is published yet. The tap, the crate, and the archives all arrive with the first
-tagged release. Until then, build from source.*
-
 ## Quick start
 
 ```
