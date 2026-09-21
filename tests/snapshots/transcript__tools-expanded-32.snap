@@ -44,14 +44,16 @@ expression: "expanded(TOOLS, 32)"
 ▎   ┃ prompt         What is th…
 ▎   ┃ url            https://ho…
 ▎   ┃
-▎   ┃ The spec puts the maximum…
+▎   ┃ The spec puts the maximum
+▎   ┃ coil gain at 1.8.
 ▎
 ▎ ▾ jeffries · beam_status
 ▎   └ {"deck":9,"verbose":true}
 ▎   ┃ deck           9
 ▎   ┃ verbose        true
 ▎   ┃
-▎   ┃ Deck 9 emitter array nomi…
+▎   ┃ Deck 9 emitter array
+▎   ┃ nominal.
 ▎
 ▎ ▾ Replicator
 ▎   └ tea, earl grey, hot
@@ -64,7 +66,8 @@ expression: "expanded(TOOLS, 32)"
 ▎   └ src/engine/grid.rs · 212 …
 ▎   ┃ file_path      /Users/fix…
 ▎   ┃
-▎   ┃ //! The holodeck grid sca…
+▎   ┃ //! The holodeck grid
+▎   ┃ scanner.
 ▎
 ▎ ▾ Read
 ▎   └ src/engine/coil.rs · 64 l…
@@ -82,21 +85,35 @@ expression: "expanded(TOOLS, 32)"
 ▎   └ {"file_path": "/Users/fix…
 ▎   ┃ __unparsedToo… {"file_pat…
 ▎   ┃
-▎   ┃ <tool_use_error>InputVali…
+▎   ┃ <tool_use_error>InputValid
+▎   ┃ ationError: Read was
+▎   ┃ called with input that
+▎   ┃ could not be
+▎   ┃ parsed.</tool_use_error>
 ▎
 ▎ ▾ Bash                  denied
 ▎   └ rm -rf target
 ▎   ┃ command        rm -rf tar…
 ▎   ┃ description    Clear the …
 ▎   ┃
-▎   ┃ The user doesn't want to …
+▎   ┃ The user doesn't want to
+▎   ┃ proceed with this tool
+▎   ┃ use. The tool use was
+▎   ┃ rejected (e.g. if it was a
+▎   ┃ file edit, the new_string
+▎   ┃ was not written to the
+▎   ┃ file). STOP what you are
+▎   ┃ doing and wait for the
+▎   ┃ user to tell you how to
+▎   ┃ proceed.
 ▎
 ▎ ▾ Bash             interrupted
 ▎   └ cargo test -- --nocapture
 ▎   ┃ command        cargo test…
 ▎   ┃ description    Run the de…
 ▎   ┃
-▎   ┃ [Request interrupted by u…
+▎   ┃ [Request interrupted by
+▎   ┃ user for tool use]
 ▎
 ▎ Stopping there. One call was
 ▎ still in flight when the

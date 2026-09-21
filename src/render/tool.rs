@@ -12,7 +12,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::domain::subagent::Agent;
 use crate::domain::thread::Conversation;
 use crate::domain::tool::{self, Hunk, Label, Outcome, Status};
-use crate::render::line::{RenderedLine, StyledSpan, normalise, truncate};
+use crate::render::line::{RenderedLine, StyledSpan, normalise, truncate, wrap};
 use crate::render::{Ctx, Overflow};
 
 pub(super) const COLLAPSED: &str = "▸ ";
@@ -20,6 +20,7 @@ pub(super) const EXPANDED: &str = "▾ ";
 const SEPARATOR: &str = " · ";
 const TAIL_GAP: usize = 1;
 const LEAST_DIGEST: usize = 8;
+const LEAST_VALUE: usize = 24;
 const ENTER: &str = "⏎";
 const RULE: &str = "─";
 const MARK_GAP: &str = "   ";
@@ -169,26 +170,42 @@ pub(super) fn detrail(line: &mut RenderedLine) {
 
 fn fields(input: &Value, width: usize, styles: &Styles) -> Vec<RenderedLine> {
     let Some(fields) = input.as_object() else { return Vec::new() };
-    fields.iter().map(|(key, value)| field(key, value, width, styles)).collect()
+    fields.iter().flat_map(|(key, value)| field(key, value, width, styles)).collect()
 }
 
-fn field(key: &str, value: &Value, width: usize, styles: &Styles) -> RenderedLine {
-    let mut line = RenderedLine::blank();
+fn field(key: &str, value: &Value, width: usize, styles: &Styles) -> Vec<RenderedLine> {
     let column = KEY_COLUMN.min(width.saturating_sub(2));
     if column == 0 {
+        let mut line = RenderedLine::blank();
         line.push(StyledSpan::new(truncate(key, width), styles.muted));
-        return line;
+        return vec![line];
     }
-    let key = truncate(key, column);
-    let pad = column.saturating_sub(key.width()).saturating_add(1);
-    line.push(StyledSpan::new(format!("{key}{}", " ".repeat(pad)), styles.muted));
-    let room = width.saturating_sub(column).saturating_sub(1);
-    line.push(StyledSpan::new(truncate(&flattened(value), room), styles.body));
-    line
+    let label = truncate(key, column);
+    let pad = column.saturating_sub(label.width()).saturating_add(1);
+    let gutter = format!("{label}{}", " ".repeat(pad));
+    let indent = " ".repeat(gutter.width());
+    let room = width.saturating_sub(column).saturating_sub(1).max(1);
+    let mut lines =
+        if room < LEAST_VALUE { vec![cut(&flattened(value), room, styles.body)] } else { value_lines(value, room, styles.body) };
+    if lines.is_empty() {
+        lines.push(RenderedLine::blank());
+    }
+    for (index, line) in lines.iter_mut().enumerate() {
+        let head = if index == 0 { gutter.clone() } else { indent.clone() };
+        line.prefix(StyledSpan::new(head, styles.muted));
+    }
+    lines
 }
 
 fn flattened(value: &Value) -> String {
     value.as_str().map_or_else(|| serde_json::to_string(value).unwrap_or_default(), normalise).replace('\n', " ")
+}
+
+fn value_lines(value: &Value, width: usize, style: Style) -> Vec<RenderedLine> {
+    value.as_str().map_or_else(
+        || vec![cut(&serde_json::to_string(value).unwrap_or_default(), width, style)],
+        |text| wrap(text.trim_end(), style, width),
+    )
 }
 
 fn output(
@@ -219,7 +236,13 @@ fn output(
     let body = outcome.body();
     let body = tool::without_preamble(&body);
     let style = if outcome.status().is_error() { styles.error } else { styles.body };
-    folded(normalise(body).lines().map(|text| cut(text, width, style)).collect(), width, styles.muted)
+    let normalised = normalise(body);
+    let (kept, hidden) = fold_source(normalised.lines());
+    let mut lines: Vec<RenderedLine> = kept.into_iter().flat_map(|text| wrap(text, style, width)).collect();
+    if let Some(hidden) = hidden {
+        lines.push(more(hidden, width, styles.muted));
+    }
+    lines
 }
 
 fn diff(hunks: &[Hunk], width: usize, styles: &Styles) -> Vec<RenderedLine> {
@@ -242,9 +265,22 @@ fn diff(hunks: &[Hunk], width: usize, styles: &Styles) -> Vec<RenderedLine> {
 pub(super) fn folded(mut lines: Vec<RenderedLine>, width: usize, muted: Style) -> Vec<RenderedLine> {
     let Some(hidden) = lines.len().checked_sub(FOLD).filter(|hidden| *hidden > 0) else { return lines };
     lines.truncate(FOLD);
-    let plural = if hidden == 1 { "line" } else { "lines" };
-    lines.push(cut(&format!("… {hidden} more {plural}"), width, muted));
+    lines.push(more(hidden, width, muted));
     lines
+}
+
+fn fold_source<'a>(lines: impl Iterator<Item = &'a str>) -> (Vec<&'a str>, Option<usize>) {
+    let mut kept: Vec<&str> = lines.collect();
+    let hidden = kept.len().checked_sub(FOLD).filter(|hidden| *hidden > 0);
+    if hidden.is_some() {
+        kept.truncate(FOLD);
+    }
+    (kept, hidden)
+}
+
+fn more(hidden: usize, width: usize, muted: Style) -> RenderedLine {
+    let plural = if hidden == 1 { "line" } else { "lines" };
+    cut(&format!("… {hidden} more {plural}"), width, muted)
 }
 
 pub(super) fn cut(text: &str, width: usize, style: Style) -> RenderedLine {
@@ -380,6 +416,65 @@ mod tests {
             enter: Style::new().add_modifier(Modifier::BOLD),
             ok: Style::new().fg(Color::DarkGray),
         }
+    }
+
+    fn field_rows(key: &str, value: &Value, width: usize) -> Vec<String> {
+        field(key, value, width, &styles()).iter().map(RenderedLine::text).collect()
+    }
+
+    #[test]
+    fn a_multi_line_input_value_keeps_every_row_under_the_key_column() {
+        let value = Value::String("//! One coil.\n\npub struct Coil {\n    pub gain: f32,\n}".to_owned());
+        let rows = field_rows("content", &value, 60);
+        assert_eq!(rows.first().map(String::as_str), Some("content        //! One coil."));
+        assert_eq!(rows.get(2).map(String::as_str), Some("               pub struct Coil {"));
+        assert!(rows.iter().all(|row| !row.contains('…')), "a wrapped value is never cut: {rows:?}");
+    }
+
+    #[test]
+    fn a_long_input_value_continues_rather_than_ending_in_an_ellipsis() {
+        let value = Value::String("the deflector coil gain is nominal across every emitter on deck nine".to_owned());
+        let rows = field_rows("note", &value, 40);
+        assert!(rows.len() > 1, "{rows:?}");
+        assert!(rows.iter().all(|row| row.width() <= 40), "{rows:?}");
+        assert!(!rows.concat().contains('…'), "{rows:?}");
+    }
+
+    #[test]
+    fn an_input_value_too_narrow_to_wrap_is_cut_on_one_row_instead_of_shredded() {
+        let value = Value::String("/Users/fixture/Developer/holodeck/src/engine/deflector.rs".to_owned());
+        let rows = field_rows("file_path", &value, 32);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(rows[0].ends_with('…'), "{:?}", rows[0]);
+    }
+
+    #[test]
+    fn a_structured_input_value_stays_on_one_row() {
+        let value = serde_json::json!({"deck": 9, "verbose": true});
+        let rows = field_rows("filter", &value, 60);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+    }
+
+    #[test]
+    fn the_fold_counts_the_lines_the_output_actually_has_not_the_rows_it_wraps_to() {
+        let source = "a line that is long enough to need wrapping at this width\n".repeat(FOLD + 3);
+        let (kept, hidden) = fold_source(source.lines());
+        assert_eq!(kept.len(), FOLD);
+        assert_eq!(hidden, Some(3));
+    }
+
+    #[test]
+    fn a_diff_line_is_still_cut_rather_than_wrapped() {
+        let hunks = vec![Hunk {
+            old_start: 1,
+            old_lines: 1,
+            new_start: 1,
+            new_lines: 1,
+            lines: vec!["+const COILS: usize = 12; // enough to hold the deflector array steady".to_owned()],
+        }];
+        let rows: Vec<String> = diff(&hunks, 40, &styles()).iter().map(RenderedLine::text).collect();
+        assert_eq!(rows.len(), 2, "one header and one cut line: {rows:?}");
+        assert!(rows[1].ends_with('…'), "{:?}", rows[1]);
     }
 
     fn rendered(name: &str, detail: &str, status: Status, width: usize) -> Vec<String> {
