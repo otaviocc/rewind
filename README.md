@@ -16,9 +16,9 @@ never writes to `~/.claude`.
 
 ![rewind](docs/screenshot.jpg)
 
-The column with the keyboard names itself twice: its heading takes the accent color, and
-its selected row takes a solid band while the other columns keep a faint one. `Tab` moves
-both.
+Two things mark the focused column: its title is in the accent color, and its selected row
+carries a solid band. The other columns keep a fainter band on their own selection, so you
+can still see where you left each one. `Tab` moves the focus.
 
 The status line names the selected session, then the focused column's position and
 percentage through its rows (nothing worth reading if it only has one), then `focus` when
