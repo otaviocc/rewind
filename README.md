@@ -243,7 +243,7 @@ The element keys are `body`, `muted`, `label`, `human_gutter`, `assistant_gutter
 `project_missing`, `session_live`, `heading`, `strong`, `emphasis`, `strikethrough`,
 `inline_code`, `code_block`, `code_block_lang`, `link`, `quote`, `quote_gutter`,
 `list_bullet`, `table_header`, `table_border`, `rule`, `html`, `header_title`, `status`,
-`status_notice`, `status_error`, `cursor_line`, `search_match`, `search_current`, `selection`,
+`status_notice`, `status_error`, `cursor_line`, `search_match`, `selection`,
 `help_window`, `scroll_progress`, `hint`, `column_title` and `column_title_active`.
 
 ### Inheriting
