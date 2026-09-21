@@ -31,6 +31,8 @@ pub const CHROME_ROWS: u16 = 5;
 pub const DEBOUNCE: Duration = Duration::from_millis(80);
 const LANDING_LEAD_IN: usize = 2;
 const LIVE_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const SESSION_GONE: &str = "that session is gone";
+const PROJECT_GONE: &str = "that project is gone";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Column {
@@ -177,6 +179,22 @@ struct Frame {
     label: Option<Box<str>>,
 }
 
+#[derive(Debug, Clone)]
+struct Wanted {
+    id: String,
+    required: bool,
+}
+
+impl Wanted {
+    const fn preferred(id: String) -> Self {
+        Self { id, required: false }
+    }
+
+    const fn required(id: String) -> Self {
+        Self { id, required: true }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 struct Anchored {
     position: Option<Position>,
@@ -202,7 +220,7 @@ pub struct App {
     generation: Gate,
     conversation_generation: Gate,
     pending_project: Option<String>,
-    pending_session: Option<String>,
+    pending_session: Option<Wanted>,
     pending_session_load: Option<(PathBuf, u64)>,
     pending_conversation_load: Option<(PathBuf, u64)>,
     pending_tool_output: VecDeque<(Box<str>, PathBuf, u64)>,
@@ -338,7 +356,7 @@ impl App {
             generation: Gate::default(),
             conversation_generation: Gate::default(),
             pending_project: options.project.clone(),
-            pending_session: options.session.clone(),
+            pending_session: options.session.clone().map(Wanted::preferred),
             pending_session_load: None,
             pending_conversation_load: None,
             pending_tool_output: VecDeque::new(),
@@ -770,7 +788,7 @@ impl App {
 
     fn rescan(&mut self) {
         self.pending_project = self.selected_project().map(|project| project.directory.clone());
-        self.pending_session = self.selected_session().map(|session| session.id.clone());
+        self.pending_session = self.selected_session().map(|session| Wanted::preferred(session.id.clone()));
         self.generation.bump();
         self.projects = Loadable::Loading;
         self.pending_projects_reload = true;
@@ -812,10 +830,12 @@ impl App {
             return;
         }
         self.sessions_pane = Pane::default();
-        if let Some(wanted) = self.pending_session.take()
-            && let Some(index) = sessions.iter().position(|session| session.id == wanted)
-        {
-            self.sessions_pane.selected = index;
+        if let Some(wanted) = self.pending_session.take() {
+            match sessions.iter().position(|session| session.id == wanted.id) {
+                Some(index) => self.sessions_pane.selected = index,
+                None if wanted.required => self.notice = Some(SESSION_GONE.to_owned()),
+                None => {}
+            }
         }
         self.drift = sessions
             .iter()
@@ -1942,9 +1962,12 @@ impl App {
         self.search_open = false;
         self.filter = None;
         let Loadable::Ready(projects) = &self.projects else { return };
-        let Some(index) = projects.iter().position(|project| project.directory == target.project_directory) else { return };
+        let Some(index) = projects.iter().position(|project| project.directory == target.project_directory) else {
+            self.notice = Some(PROJECT_GONE.to_owned());
+            return;
+        };
         self.projects_pane.selected = index;
-        self.pending_session = Some(target.session_id);
+        self.pending_session = Some(Wanted::required(target.session_id));
         self.pending_scroll_uuid = target.uuid;
         self.pending_hit_agent = target.agent_id;
         self.focused = Column::Conversation;
@@ -2304,6 +2327,70 @@ mod tests {
         let (_, generation) = app.take_conversation_load(elapsed()).expect("a conversation load was requested");
         app.set_conversation(generation, Ok(Arc::new(conversation)), Agents::default());
         app
+    }
+
+    fn hit_awaiting_sessions(target: Opened) -> App {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("a")]));
+        let _ = app.take_session_load();
+        app.apply(Action::ToggleSearch);
+        for character in "grid".chars() {
+            app.apply(Action::Type(character));
+        }
+        app.set_hit_resolved(app.search_hit_generation(), Some(target));
+        app
+    }
+
+    #[test]
+    fn a_hit_whose_session_is_gone_says_so_rather_than_opening_another_one() {
+        let mut app = hit_awaiting_sessions(opened("a1"));
+        let _ = app.take_session_load();
+
+        app.set_sessions(app.generation(), vec![session("s7"), session("s8")]);
+
+        assert_eq!(app.notice(), Some(SESSION_GONE), "a pruned session opened the newest one without a word");
+        assert_eq!(app.sessions_pane.selected, 0);
+    }
+
+    #[test]
+    fn a_hit_whose_project_is_gone_says_so_rather_than_swallowing_the_keypress() {
+        let app = hit_awaiting_sessions(Opened {
+            project_directory: "gone".to_owned(),
+            session_id: "s1".to_owned(),
+            uuid: None,
+            agent_id: None,
+        });
+
+        assert_eq!(app.notice(), Some(PROJECT_GONE));
+        assert!(!app.search_open(), "the overlay stayed open on a hit that cannot be reached");
+    }
+
+    #[test]
+    fn a_hit_that_opens_leaves_no_notice() {
+        let mut app = hit_awaiting_sessions(opened("a1"));
+        let _ = app.take_session_load();
+
+        app.set_sessions(app.generation(), vec![session("s1")]);
+
+        assert_eq!(app.notice(), None, "{:?}", app.notice());
+        assert_eq!(app.sessions_pane.selected, 0);
+    }
+
+    #[test]
+    fn a_rescan_that_loses_the_selected_session_falls_back_without_a_complaint() {
+        let mut app = app(Size::new(120, 30));
+        app.set_projects(app.generation(), Ok(vec![project("a")]));
+        let _ = app.take_session_load();
+        app.set_sessions(app.generation(), vec![session("s1"), session("s2")]);
+        app.apply(Action::Focus { forward: true });
+        app.apply(Action::Move(Motion::Line(1)));
+        app.apply(Action::Rescan);
+        app.set_projects(app.generation(), Ok(vec![project("a")]));
+        let _ = app.take_session_load();
+
+        app.set_sessions(app.generation(), vec![session("s1")]);
+
+        assert_ne!(app.notice(), Some(SESSION_GONE), "a session lost to a rescan is not a failure to report");
     }
 
     #[test]
