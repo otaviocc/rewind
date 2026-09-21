@@ -2,7 +2,7 @@
 
 `rewind` ships fourteen themes and reads one file if you want something else. This page is
 the whole of it: the file, the colors, the surfaces they land on, and what happens when you
-get it wrong. [`README.md`](../README.md#themes) has the short version — the names, the
+get it wrong. [`README.md`](../README.md#themes) has the short version: the names, the
 flags, and where the file lives.
 
 ## The file
@@ -26,7 +26,7 @@ a complete and valid file:
 accent = "#89b4fa"
 ```
 
-A theme of your own in `themes/` shadows a built-in of the same name — including `spool`,
+A theme of your own in `themes/` shadows a built-in of the same name, including `spool`,
 which replaces the default without a flag, and `ansi`, which every other theme inherits from.
 
 ## Colors
@@ -49,14 +49,14 @@ The fifteen slots, and what each drives when nothing more specific overrides it:
 | `foreground` | body text |
 | `muted` | thinking blocks, context injections, the branch marker, the compact-boundary divider, tool summaries and their ok mark, a missing project, a code fence's language tag, quote gutters, list bullets, table borders, rules, raw HTML, hints, an unfocused column's title |
 | `muted_text` | block quotes and the status line |
-| `subtle` | nothing on its own — `cursor` falls back to it when a theme sets neither |
+| `subtle` | nothing on its own; `cursor` falls back to it when a theme sets neither |
 | `cursor` | the cursor-line band |
 | `selection_background` `selection_foreground` | a dragged mouse selection |
 | `error` | tool errors, removed diff lines, status errors |
 | `success` | added diff lines, the live-session badge |
 | `warning` | status notices, the marked terms in a message a search opened |
 | `accent` | tool names, the human gutter, a focused column's title, the header title, inline code, the scroll percentage |
-| `chrome` | nothing by default — free for a theme to point an element at |
+| `chrome` | nothing by default; free for a theme to point an element at |
 | `highlight` | links |
 | `notice` | the assistant gutter |
 
@@ -108,7 +108,7 @@ A theme may also name the syntax highlighting its code blocks use, with
 
 ## A whole theme
 
-Everything above, together — `base`, a palette, and a few elements:
+Everything above, together: `base`, a palette, and a few elements:
 
 ```toml
 base          = "nord"
@@ -132,7 +132,7 @@ bg = "none"
 
 ## When you get it wrong
 
-A key you misspell — a palette slot, an element name, or a top-level field like `base` — is
-reported on stderr and otherwise ignored, so one typo costs you that one line and nothing
-else. A color or modifier that is not one fails the run outright, naming the key that
+A key you misspell, whether a palette slot, an element name, or a top-level field like
+`base`, is reported on stderr and otherwise ignored, so one typo costs you that one line and
+nothing else. A color or modifier that is not one fails the run outright, naming the key that
 carried it. A `base` chain that loops on itself is also an error.

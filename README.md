@@ -8,15 +8,15 @@ A terminal browser for your Claude Code conversation history.
 
 Claude Code keeps every conversation on disk, but the only way back into one is to remember
 which repository you were in, `cd` there, and `--resume` your way through a picker. And if
-the working copy is gone, so is the path back — even though the transcript is still there.
+the working copy is gone, so is the path back, even though the transcript is still there.
 
 `rewind` opens all of it: every project Claude Code has ever seen, the sessions inside each,
 and the conversation rendered as something worth reading. It makes no network requests and
 never writes to `~/.claude`.
 
-![rewind](docs/screenshot.png)
+![rewind](docs/screenshot.jpg)
 
-The column with the keyboard names itself twice: its heading takes the accent colour, and
+The column with the keyboard names itself twice: its heading takes the accent color, and
 its selected row takes a solid band while the other columns keep a faint one. `Tab` moves
 both.
 
@@ -25,7 +25,7 @@ percentage through its rows (nothing worth reading if it only has one), then `fo
 `f` is on.
 
 Below 50 columns there is no room for three side by side, so rewind shows **one pane at a
-time** — whichever is focused, full width. `Enter` descends into it, `Esc` goes back, and a
+time**, whichever is focused, full width. `Enter` descends into it, `Esc` goes back, and a
 pane with something behind it carries a `‹` before its name.
 
 ## Install
@@ -38,7 +38,7 @@ brew install otaviocc/apps/rewind
 
 It builds from source, so Homebrew pulls in a Rust toolchain as a build dependency.
 
-From crates.io — the crate is `rewind-cli`, because `rewind` was taken; the binary it
+From crates.io. The crate is `rewind-cli`, because `rewind` was taken, and the binary it
 installs is `rewind`:
 
 ```
@@ -57,7 +57,7 @@ cd rewind
 cargo install --locked --path .
 ```
 
-*Nothing is published yet — the tap, the crate and the archives all arrive with the first
+*Nothing is published yet. The tap, the crate, and the archives all arrive with the first
 tagged release. Until then, build from source.*
 
 ## Quick start
@@ -69,7 +69,7 @@ rewind --session <id>      open one conversation directly
 ```
 
 `Tab` walks Projects → Sessions → Conversation, `Enter` descends into the selected row, and
-`q` leaves. A project whose working copy is gone still reads — it shows as `⊘` in the
+`q` leaves. A project whose working copy is gone still reads. It shows as `⊘` in the
 Projects column, because the transcript survives even when the directory does not. On a
 narrow terminal `Enter` and `Esc` do the same walking, one pane at a time.
 
@@ -97,7 +97,7 @@ narrow terminal `Enter` and `Esc` do the same walking, one pane at a time.
 | `D` | what could not be read · `Esc` or `q` closes it |
 | `?` `F1` | every key and what it does · `Esc` or `q` closes it |
 | `r` | rescan `~/.claude` for new and changed projects |
-| `q` `Ctrl-C` | quit — with a window open, `q` closes the window and `Ctrl-C` still quits |
+| `q` `Ctrl-C` | quit; with a window open, `q` closes the window and `Ctrl-C` still quits |
 
 The `/` filter and the `e` export prompt take typing: letters type instead of acting,
 `Backspace` deletes, `↑`/`↓` still move, `Enter` accepts, and `Esc` cancels. In the export
@@ -131,22 +131,22 @@ out, so you reach it by asking: `is:tool` for tool parameters and output, `is:th
 the model's reasoning, `is:history` for the prompt log, or `is:any` for all of it at once.
 
 `is:history` searches `~/.claude/history.jsonl`, which is every prompt you have ever typed.
-It outlives the transcripts — most of its entries belong to sessions that have since been
-cleaned up — so a hit there often has no conversation left to open. That is also why it is
+It outlives the transcripts, since most of its entries belong to sessions that have since
+been cleaned up, so a hit there often has no conversation left to open. That is also why it is
 worth searching when nothing else turns your prompt up.
 
 Search is backed by a corpus rewind keeps under `$XDG_CACHE_HOME/rewind`, or
 `~/.cache/rewind` if that variable is unset. It builds in the background and is searchable
-while it is still filling — the overlay shows `indexing…`, then marks results `(partial)`
+while it is still filling. The overlay shows `indexing…`, then marks results `(partial)`
 until the corpus is complete. The project and session lists never wait on it.
 `--no-cache` ignores the cache and does not write it; `--rebuild-cache` discards it and
 rebuilds from scratch, then exits.
 
 ## Themes
 
-Fourteen themes are built in. `spool` is the default — written for `rewind` rather than
+Fourteen themes are built in. `spool` is the default, written for `rewind` rather than
 borrowed from an editor, and it leaves the background and foreground alone so a transcript
-sits on your own terminal ground. `ansi` is the other end: it asserts no colour at all and
+sits on your own terminal ground. `ansi` is the other end: it asserts no color at all and
 takes everything from your terminal's scheme.
 
 ```
@@ -161,7 +161,7 @@ tokyo-night-day   vesper
 
 To change anything, `rewind` reads one file. On every platform, including macOS, it lives at
 `$XDG_CONFIG_HOME/rewind/theme.toml`, or `~/.config/rewind/theme.toml` if that variable is
-unset — on Windows, `%APPDATA%\rewind\theme.toml` if neither is set. Named themes go beside
+unset, or `%APPDATA%\rewind\theme.toml` on Windows if neither is set. Named themes go beside
 it in `themes/<name>.toml` and are selected with `--theme`.
 
 Everything is optional. A theme states what it wants moved and inherits the rest, so this is
