@@ -8,8 +8,9 @@ use std::fs::File;
 use std::io::{BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use crate::domain::cache::shard::Kind;
+use crate::domain::cache::shard::{Field, Kind};
 use crate::domain::lines::Lines;
+use crate::domain::project;
 use crate::domain::scan;
 use crate::domain::search::engine::Hit;
 use crate::domain::text;
@@ -107,12 +108,35 @@ pub fn resolve_transcript(claude_dir: &Path, hit: &Hit) -> Option<Opened> {
     Some(Opened { project_directory: directory, session_id, uuid, agent_id })
 }
 
-pub fn resolve_history(claude_dir: &Path, hit: &Hit) -> Option<(String, String)> {
+pub fn resolve_history(claude_dir: &Path, hit: &Hit) -> Option<Opened> {
     let path = file_path(claude_dir, hit);
     let line = read_line_at(&path, hit.byte_off)?;
     let session_id = scan::top_level_str(&line, "sessionId")?.to_owned();
-    let project_cwd = scan::top_level_str(&line, "project")?.to_owned();
-    Some((session_id, project_cwd))
+    let project_directory = project::encode(scan::top_level_str(&line, "project")?);
+    let prompt = prompt_of(text::extract_history(&line));
+    let transcript = claude_dir.join(PROJECTS_DIR_NAME).join(&project_directory).join(format!("{session_id}.jsonl"));
+    let uuid = prompt.and_then(|prompt| uuid_of_prompt(&transcript, &prompt));
+    Some(Opened { project_directory, session_id, uuid, agent_id: None })
+}
+
+fn prompt_of(extracted: Vec<text::Extracted>) -> Option<String> {
+    let text = extracted.into_iter().find(|item| item.field == Field::UserPrompt)?.text;
+    let trimmed = text.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+fn uuid_of_prompt(path: &Path, prompt: &str) -> Option<String> {
+    let mut lines = Lines::open(path).ok()?;
+    while let Ok(Some(line)) = lines.next_line() {
+        if scan::top_level_str(line, "type") != Some("user") {
+            continue;
+        }
+        let Some(uuid) = scan::top_level_str(line, "uuid").map(str::to_owned) else { continue };
+        if prompt_of(text::extract(line)).is_some_and(|found| found == prompt) {
+            return Some(uuid);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -122,7 +146,6 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::domain::cache::shard::Field;
 
     fn hit(directory: Option<&str>, file_name: &str, byte_off: u64, kind: Kind, field: Field) -> Hit {
         Hit {
@@ -173,16 +196,85 @@ mod tests {
         assert_eq!(opened.uuid.as_deref(), Some("u2"));
     }
 
-    #[test]
-    fn a_history_hit_resolves_the_session_id_and_project_cwd() {
+    fn history_store(display: &str, transcript: Option<&str>) -> TempDir {
         let claude = TempDir::new().expect("a temporary directory");
-        let line = br#"{"display":"read the grid","sessionId":"s9","project":"/Users/fixture/holodeck"}"#;
-        fs::write(claude.path().join("history.jsonl"), [line.as_slice(), b"\n"].concat()).expect("a written history line");
+        let line = format!(r#"{{"display":"{display}","sessionId":"s9","project":"/Users/fixture/holodeck"}}"#);
+        fs::write(claude.path().join("history.jsonl"), format!("{line}\n")).expect("a written history line");
+        if let Some(transcript) = transcript {
+            let project_dir = claude.path().join("projects").join("-Users-fixture-holodeck");
+            fs::create_dir_all(&project_dir).expect("a project directory");
+            fs::write(project_dir.join("s9.jsonl"), transcript).expect("a written session file");
+        }
+        claude
+    }
+
+    fn human(uuid: &str, text: &str) -> String {
+        format!(
+            r#"{{"type":"user","uuid":"{uuid}","message":{{"role":"user","content":"{text}"}},"origin":{{"kind":"human"}}}}
+"#
+        )
+    }
+
+    #[test]
+    fn a_history_hit_resolves_the_session_id_and_the_encoded_project_directory() {
+        let claude = history_store("read the grid", None);
 
         let hit = hit(None, "history.jsonl", 0, Kind::History, Field::UserPrompt);
-        let (session_id, project) = resolve_history(claude.path(), &hit).expect("a resolved history hit");
-        assert_eq!(session_id, "s9");
-        assert_eq!(project, "/Users/fixture/holodeck");
+        let opened = resolve_history(claude.path(), &hit).expect("a resolved history hit");
+        assert_eq!(opened.session_id, "s9");
+        assert_eq!(opened.project_directory, "-Users-fixture-holodeck");
+    }
+
+    #[test]
+    fn a_history_hit_lands_on_the_record_that_carries_the_prompt() {
+        let transcript = format!("{}{}", human("u1", "trim the sails"), human("u2", "read the grid"));
+        let claude = history_store("read the grid", Some(&transcript));
+
+        let hit = hit(None, "history.jsonl", 0, Kind::History, Field::UserPrompt);
+        let opened = resolve_history(claude.path(), &hit).expect("a resolved history hit");
+        assert_eq!(opened.uuid.as_deref(), Some("u2"));
+    }
+
+    #[test]
+    fn a_prompt_typed_twice_in_one_session_resolves_the_first_rather_than_guessing() {
+        let transcript = format!("{}{}", human("u1", "read the grid"), human("u2", "read the grid"));
+        let claude = history_store("read the grid", Some(&transcript));
+
+        let hit = hit(None, "history.jsonl", 0, Kind::History, Field::UserPrompt);
+        let opened = resolve_history(claude.path(), &hit).expect("a resolved history hit");
+        assert_eq!(opened.uuid.as_deref(), Some("u1"));
+    }
+
+    #[test]
+    fn a_history_hit_whose_transcript_is_gone_still_resolves_the_session_it_names() {
+        let claude = history_store("read the grid", None);
+
+        let hit = hit(None, "history.jsonl", 0, Kind::History, Field::UserPrompt);
+        let opened = resolve_history(claude.path(), &hit).expect("a resolved history hit");
+        assert_eq!(opened.session_id, "s9");
+        assert_eq!(opened.uuid, None, "a pruned transcript cannot be landed on and must not claim a record");
+    }
+
+    #[test]
+    fn a_slash_command_pairs_across_the_envelope_the_transcript_wraps_it_in() {
+        let envelope = "<command-name>/plan</command-name><command-args>read the grid</command-args>";
+        let transcript = human("u1", envelope);
+        let claude = history_store("/plan read the grid", Some(&transcript));
+
+        let hit = hit(None, "history.jsonl", 0, Kind::History, Field::UserPrompt);
+        let opened = resolve_history(claude.path(), &hit).expect("a resolved history hit");
+        assert_eq!(opened.uuid.as_deref(), Some("u1"), "the typed line and the wrapped record are the same prompt");
+    }
+
+    #[test]
+    fn a_record_that_is_not_a_human_turn_is_not_a_landing_place() {
+        let tool = r#"{"type":"user","uuid":"u1","message":{"role":"user","content":"read the grid"},"toolUseResult":{"ok":true}}
+"#;
+        let claude = history_store("read the grid", Some(tool));
+
+        let hit = hit(None, "history.jsonl", 0, Kind::History, Field::UserPrompt);
+        let opened = resolve_history(claude.path(), &hit).expect("a resolved history hit");
+        assert_eq!(opened.uuid, None);
     }
 
     #[test]
