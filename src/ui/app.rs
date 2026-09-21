@@ -10,6 +10,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use ratatui::layout::Size;
 
 use crate::ctx::Ctx;
+use crate::domain::block::{Block, Content};
 use crate::domain::cancel::{Cancel, Gate};
 use crate::domain::diagnostics::Diagnostics;
 use crate::domain::live::Live;
@@ -1987,6 +1988,13 @@ impl App {
             self.view.bump();
             self.rerender();
         }
+        if let Some(id) = self.call_for(node) {
+            self.view.expanded.insert(id.clone());
+            self.queue_tool_output(&id);
+            self.view.bump();
+            self.anchor_at(&id, None);
+            return;
+        }
         let Some((line, first)) = self.landing_line(uuid) else { return };
         self.conversation_pane.top = line.saturating_sub(LANDING_LEAD_IN).max(first).min(self.last(Column::Conversation));
         self.call_cursor = None;
@@ -2001,6 +2009,29 @@ impl App {
         let mut rows = transcript.rows(position.node).unwrap_or_else(|| first..first.saturating_add(1));
         let marked = rows.find(|at| transcript.lines.get(*at).is_some_and(|found| !line::highlights(found, terms).is_empty()));
         Some((marked.unwrap_or(first), first))
+    }
+
+    fn call_for(&self, node: NodeId) -> Option<Box<str>> {
+        let Loadable::Ready(rendered) = &self.conversation else { return None };
+        let node = rendered.conversation().node(node)?;
+        match &node.kind {
+            NodeKind::User(record) => {
+                let Content::Blocks(blocks) = &record.message.content else { return None };
+                blocks.iter().find_map(|block| match block {
+                    Block::ToolResult { tool_use_id: Some(id), .. } => Some(Box::from(id.as_str())),
+                    _ => None,
+                })
+            }
+            NodeKind::Assistant(turn) => {
+                let mut calls = turn.content.iter().filter_map(|block| match block {
+                    Block::ToolUse { id, .. } => Some(Box::from(id.as_str())),
+                    _ => None,
+                });
+                let only = calls.next()?;
+                calls.next().is_none().then_some(only)
+            }
+            NodeKind::System(_) | NodeKind::Attachment(_) => None,
+        }
     }
 
     fn select_branch_to(&mut self, node: NodeId) -> bool {
@@ -2243,6 +2274,17 @@ mod tests {
         (conversation, path)
     }
 
+    fn two_call_conversation() -> Conversation {
+        let dir = tempfile::TempDir::new().expect("a temporary directory");
+        let path = dir.path().join("session.jsonl");
+        let human = r#"{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:00Z","origin":{"kind":"human"},"message":{"role":"user","content":"do two things"}}"#;
+        let turn = r#"{"type":"assistant","uuid":"a0","parentUuid":"u1","sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:01Z","requestId":"q0","message":{"model":"opus-5","id":"m0","role":"assistant","content":[{"type":"tool_use","id":"t0","name":"Bash","input":{"command":"step one","description":"a step"}},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"step two","description":"a step"}}]}}"#;
+        std::fs::write(&path, format!("{human}\n{turn}\n")).expect("a written transcript");
+        let conversation = crate::domain::thread::build(&path).expect("a built conversation");
+        let _ = dir.keep();
+        conversation
+    }
+
     fn rewound_conversation() -> Conversation {
         let dir = tempfile::TempDir::new().expect("a temporary directory");
         let path = dir.path().join("session.jsonl");
@@ -2446,16 +2488,45 @@ mod tests {
         rendered.conversation().id_of(uuid).expect("the conversation holds that uuid")
     }
 
+    fn call_under_cursor(app: &App) -> Option<Box<str>> {
+        let cursor = app.call_cursor?;
+        app.anchors().get(cursor).map(|anchor| anchor.id.clone())
+    }
+
     #[test]
-    fn a_hit_in_tool_output_lands_on_the_turn_that_made_the_call() {
+    fn a_hit_in_tool_output_lands_on_the_call_that_produced_it() {
         let app = landed_on("r1");
 
-        assert_ne!(app.conversation_pane.top, 0, "the viewport never moved off the first line");
-        assert_eq!(
-            node_at_top(&app).map(|position| position.node),
-            Some(node_named(&app, "a1")),
-            "the landing is not the turn that made the call"
+        assert_eq!(call_under_cursor(&app).as_deref(), Some("t1"), "the landing is not the call the output belongs to");
+        let height = columns::conversation_height(app.area);
+        let line = app.cursor_line().expect("the call cursor is on a line");
+        assert!(
+            line >= app.conversation_pane.top && line < app.conversation_pane.top.saturating_add(height),
+            "the call it landed on is off screen"
         );
+    }
+
+    #[test]
+    fn a_hit_in_tool_output_unfolds_the_call_so_the_output_is_on_a_line() {
+        let app = landed_on("r1");
+
+        assert!(app.view.expanded.contains("t1"), "the call the term is inside stayed collapsed");
+        assert!(app.lines().iter().any(|line| line.text().contains("line two")), "the matched output is on no rendered line");
+    }
+
+    #[test]
+    fn a_hit_on_a_turn_with_several_calls_expands_none_of_them() {
+        let app = landed_on_in("a0", two_call_conversation());
+
+        assert!(app.view.expanded.is_empty(), "an ambiguous turn guessed which of its calls the term was in");
+    }
+
+    #[test]
+    fn a_hit_on_a_turn_with_one_call_expands_that_call() {
+        let app = landed_on("a1");
+
+        assert_eq!(call_under_cursor(&app).as_deref(), Some("t1"));
+        assert!(app.view.expanded.contains("t1"));
     }
 
     #[test]
