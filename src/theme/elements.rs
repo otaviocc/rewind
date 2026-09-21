@@ -49,7 +49,6 @@ pub enum Element {
     StatusError,
     CursorLine,
     SearchMatch,
-    SearchCurrent,
     Selection,
     HelpWindow,
     ScrollProgress,
@@ -59,7 +58,7 @@ pub enum Element {
 }
 
 impl Element {
-    pub const ALL: [Self; 47] = [
+    pub const ALL: [Self; 46] = [
         Self::Body,
         Self::Muted,
         Self::Label,
@@ -100,7 +99,6 @@ impl Element {
         Self::StatusError,
         Self::CursorLine,
         Self::SearchMatch,
-        Self::SearchCurrent,
         Self::Selection,
         Self::HelpWindow,
         Self::ScrollProgress,
@@ -159,7 +157,6 @@ impl Element {
             Self::StatusError => "status_error",
             Self::CursorLine => "cursor_line",
             Self::SearchMatch => "search_match",
-            Self::SearchCurrent => "search_current",
             Self::Selection => "selection",
             Self::HelpWindow => "help_window",
             Self::ScrollProgress => "scroll_progress",
@@ -212,7 +209,6 @@ pub fn default_style(element: Element, palette: &Palette) -> Style {
         Element::StatusNotice => style.fg(palette.warning),
         Element::CursorLine => style.bg(palette.cursor),
         Element::SearchMatch => style.fg(Color::Black).bg(palette.warning),
-        Element::SearchCurrent => style.fg(Color::Black).bg(palette.notice).add_modifier(Modifier::BOLD),
         Element::Selection => style.fg(palette.selection_foreground).bg(palette.selection_background),
         Element::HelpWindow => style.fg(palette.foreground).bg(palette.background),
     }

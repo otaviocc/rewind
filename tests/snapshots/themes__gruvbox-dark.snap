@@ -44,7 +44,6 @@ status_notice         fg #fabd2f       bg -
 status_error          fg #fb4934       bg -
 cursor_line           fg -             bg #3c3836
 search_match          fg black         bg #fabd2f
-search_current        fg black         bg #d3869b       bold
 selection             fg #fbf1c7       bg #504945
 help_window           fg #ebdbb2       bg #282828
 scroll_progress       fg #fabd2f       bg -

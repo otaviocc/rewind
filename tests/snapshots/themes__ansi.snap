@@ -44,7 +44,6 @@ status_notice         fg yellow        bg -
 status_error          fg red           bg -
 cursor_line           fg -             bg darkgray
 search_match          fg black         bg yellow
-search_current        fg black         bg magenta       bold
 selection             fg white         bg blue
 help_window           fg reset         bg reset
 scroll_progress       fg cyan          bg -
