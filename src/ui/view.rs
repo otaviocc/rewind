@@ -1215,13 +1215,13 @@ mod tests {
         for character in query.chars() {
             app.apply(Action::Type(character));
         }
-        let opened = crate::domain::search::resolve::Opened {
+        let target = crate::domain::search::resolve::Opened {
             project_directory: "a".to_owned(),
             session_id: "s".to_owned(),
             uuid: Some("u1".to_owned()),
             agent_id: None,
         };
-        app.set_hit_resolved(app.search_hit_generation(), Some(opened));
+        app.set_hit_resolved(app.search_hit_generation(), Some(target));
         with_conversation(&mut app, text);
         app
     }

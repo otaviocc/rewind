@@ -1993,11 +1993,18 @@ impl App {
             self.queue_tool_output(&id);
             self.view.bump();
             self.anchor_at(&id, None);
+            self.land_on(uuid);
             return;
         }
-        let Some((line, first)) = self.landing_line(uuid) else { return };
+        if self.land_on(uuid) {
+            self.call_cursor = None;
+        }
+    }
+
+    fn land_on(&mut self, uuid: &str) -> bool {
+        let Some((line, first)) = self.landing_line(uuid) else { return false };
         self.conversation_pane.top = line.saturating_sub(LANDING_LEAD_IN).max(first).min(self.last(Column::Conversation));
-        self.call_cursor = None;
+        true
     }
 
     fn landing_line(&self, uuid: &str) -> Option<(usize, usize)> {
