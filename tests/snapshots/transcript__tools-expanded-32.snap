@@ -11,6 +11,52 @@ expression: "expanded(TOOLS, 32)"
 ▎ then writing the new module,
 ▎ then the spec.
 ▎
+▎ ▾ ExitPlanMode
+▎   └ Retune the deflector arra…
+▎   ┃ planFilePath   /Users/fix…
+▎   ┃
+▎   ┃ Retune the deflector array
+▎   ┃
+▎   ┃ Context
+▎   ┃
+▎   ┃ The coil table still names
+▎   ┃ eight coils, but the grid
+▎   ┃ scanner has been reading
+▎   ┃ twelve since the emitter
+▎   ┃ refit, so every gain
+▎   ┃ calculation runs against a
+▎   ┃ table that is four coils
+▎   ┃ short.
+▎   ┃
+▎   ┃ Work
+▎   ┃
+▎   ┃ • Raise COILS in
+▎   ┃   src/engine/deflector.rs
+▎   ┃   from 8 to 12.
+▎   ┃ • Add src/engine/coil.rs
+▎   ┃   holding the per-coil
+▎   ┃   gain.
+▎   ┃ • Check the published
+▎   ┃   maximum gain against the
+▎   ┃   spec before landing.
+▎   ┃
+▎   ┃ Verification
+▎   ┃
+▎   ┃ Run the deflector tests
+▎   ┃ and confirm the grid
+▎   ┃ scanner reports deck nine
+▎   ┃ nominal.
+▎   ┃
+▎   ┃ User has approved your
+▎   ┃ plan. You can now start
+▎   ┃ coding.
+▎   ┃
+▎   ┃ Your plan has been saved
+▎   ┃ to:
+▎   ┃ /Users/fixture/.claude/pla
+▎   ┃ ns/deflector-array-amber-l
+▎   ┃ antern.md
+▎
 ▎ ▾ Edit
 ▎   └ src/engine/deflector.rs ·…
 ▎   ┃ file_path      /Users/fix…

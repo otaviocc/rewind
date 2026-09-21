@@ -248,7 +248,7 @@ tool names and the `toolUseResult` payloads, which are polymorphic per tool, so 
 that reads only `input` passes every other file in this tree and says nothing about what
 happened in this one.
 
-All ten shapes were **observed** against a real store on 2026-09-18, in a survey that found
+All eleven shapes were **observed** against a real store on 2026-09-18, in a survey that found
 62 distinct tool names — `Bash` 11 362 of them, then `Read`, `Edit`, `ToolSearch`, `Agent`,
 `Write`, and a long tail ending in singletons. `Task`, `Grep`, `Glob` and `TodoWrite` appear
 nowhere in a current store; they live in `44444444-….jsonl` and `33333333-….jsonl` as the
@@ -256,6 +256,7 @@ legacy names they are.
 
 | Call | |
 | --- | --- |
+| `ExitPlanMode` | the plan itself, as Markdown in `input.plan`, with `input.planFilePath` pointing at a copy under `~/.claude/plans/` that is **absolute** and so does not resolve under `--claude-dir`. `toolUseResult` repeats the plan verbatim alongside `isAgent` and `filePath`. The transcript is the source of truth; the file is not read |
 | `Edit` | one `structuredPatch` hunk, already unified-diff prefixed, and `originalFile: null` |
 | `Write` | **two** hunks and `type: "create"`, so multi-hunk rendering has a case. `originalFile` is `""` here and `null` above: it is empty either way, and neither spelling can be relied on |
 | `WebFetch` | `{bytes, code, codeText, result, durationMs, url}` |
@@ -273,6 +274,16 @@ nothing between, because a run of one tool is a rendering case rather than a sch
 the corpus survey says it is the common one — 74% of adjacent call pairs share a tool name.
 
 `structuredPatch` exists in no other file in the tree, so this is its only specification.
+
+The `ExitPlanMode` call is what says a plan renders as a document. Its `input` holds two
+string keys, and `serde_json`'s default map ordering puts `plan` before `planFilePath`, so a
+digest that falls through to "first string field" reaches for the whole plan — this fixture
+is what pins the digest to the plan's title and line count instead. Its plan is deliberately
+shorter than the fold, so the fixture shows a whole plan; the fold itself is covered by a
+unit test rather than by lengthening this one. A plan folds on its **non-blank** lines,
+unlike every other body, which folds on raw ones — Markdown needs a blank line between
+blocks, so counting raw lines would spend nearly half the budget on separators and would
+disagree with the line count the digest row reports beside it.
 Both `Edit` and `Write` carry one, which is why rendering a diff needs no diff algorithm.
 
 The three error cases are three *different* outcomes wearing the same `is_error: true`, and

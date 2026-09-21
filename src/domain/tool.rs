@@ -124,6 +124,9 @@ pub fn digest<'a>(name: &str, input: &'a Value, detail: Option<&'a Value>) -> Di
     if name == "TodoWrite" {
         return todos(input);
     }
+    if name == "ExitPlanMode" {
+        return plan(input);
+    }
     let primary = keyed(input, primary_key(name)).map(Cow::Borrowed).or_else(|| generic(input));
     let secondary = computed(name, detail)
         .or_else(|| keyed(input, secondary_key(name)).map(Cow::Borrowed))
@@ -189,6 +192,14 @@ fn computed<'a>(name: &str, detail: Option<&'a Value>) -> Option<Cow<'a, str>> {
         }
         _ => None,
     }
+}
+
+fn plan(input: &Value) -> Digest<'static> {
+    let Some(text) = input.get("plan").and_then(Value::as_str) else { return Digest::default() };
+    let mut lines = text.lines().map(str::trim).filter(|line| !line.is_empty());
+    let title = lines.next().map(|line| line.trim_start_matches('#').trim().to_owned()).filter(|title| !title.is_empty());
+    let count = u64::try_from(lines.count().saturating_add(usize::from(title.is_some()))).unwrap_or(u64::MAX);
+    Digest { primary: title.map(Cow::Owned), secondary: Some(Cow::Owned(format!("{count} {}", plural(count, "line", "lines")))) }
 }
 
 fn todos(input: &Value) -> Digest<'static> {
@@ -536,5 +547,28 @@ mod tests {
     fn a_body_that_is_not_a_persisted_output_is_left_exactly_as_it_is() {
         assert_eq!(without_preamble("     212 src/engine/grid.rs"), "     212 src/engine/grid.rs");
         assert_eq!(without_preamble("<persisted-output>\nno preview marker here"), "<persisted-output>\nno preview marker here");
+    }
+
+    #[test]
+    fn a_plan_digests_to_its_title_and_its_length_rather_than_to_the_plan_itself() {
+        let input = serde_json::json!({
+            "plan": "# Retune the deflector array\n\n## Context\n\nThe coil table names eight.\n",
+            "planFilePath": "/Users/fixture/.claude/plans/deflector.md",
+        });
+        let digest = digest("ExitPlanMode", &input, None);
+        assert_eq!(digest.primary.as_deref(), Some("Retune the deflector array"));
+        assert_eq!(digest.secondary.as_deref(), Some("3 lines"));
+    }
+
+    #[test]
+    fn a_plan_with_no_heading_falls_back_to_its_first_line() {
+        let input = serde_json::json!({ "plan": "\n\nraise the coil count to twelve\nthen land it\n" });
+        assert_eq!(digest("ExitPlanMode", &input, None).primary.as_deref(), Some("raise the coil count to twelve"));
+    }
+
+    #[test]
+    fn an_exit_plan_mode_call_with_no_plan_digests_to_nothing() {
+        let input = serde_json::json!({ "planFilePath": "/Users/fixture/.claude/plans/deflector.md" });
+        assert_eq!(digest("ExitPlanMode", &input, None), Digest::default());
     }
 }

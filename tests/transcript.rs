@@ -386,7 +386,7 @@ fn every_expanded_call_is_anchored_to_the_line_its_header_is_on() {
     let path = session_path(TOOLS);
     let view = View::expanding(&path);
     let transcript = built(&path, 80, &view);
-    assert_eq!(transcript.anchors.len(), 12, "twelve calls in the tool surface");
+    assert_eq!(transcript.anchors.len(), 13, "thirteen calls in the tool surface");
     for anchor in &transcript.anchors {
         let line = transcript.lines.get(anchor.line).map(RenderedLine::text).unwrap_or_default();
         assert!(line.contains("▾ "), "anchor {} does not point at an expanded header: {line:?}", anchor.line);
@@ -506,6 +506,7 @@ fn every_tool_call_in_the_fixture_tree_that_was_given_an_input_digests_to_someth
             "Agent",
             "Bash",
             "Edit",
+            "ExitPlanMode",
             "Glob",
             "Grep",
             "Read",

@@ -13,7 +13,9 @@ use crate::domain::subagent::Agent;
 use crate::domain::thread::Conversation;
 use crate::domain::tool::{self, Hunk, Label, Outcome, Status};
 use crate::render::line::{RenderedLine, StyledSpan, normalise, truncate, wrap};
+use crate::render::prose;
 use crate::render::{Ctx, Overflow};
+use crate::theme::Theme;
 
 pub(super) const COLLAPSED: &str = "▸ ";
 pub(super) const EXPANDED: &str = "▾ ";
@@ -30,6 +32,8 @@ pub(super) const GUTTER_BLANK: &str = "  ┃";
 pub(super) const FOLD: usize = 20;
 const KEY_COLUMN: usize = 14;
 const DIFF_TOOLS: [&str; 2] = ["Edit", "Write"];
+const PLAN_TOOL: &str = "ExitPlanMode";
+const PLAN_KEY: &str = "plan";
 const DIGEST_INDENT: &str = "  └ ";
 
 pub struct Styles {
@@ -139,7 +143,15 @@ pub fn unreached_line(agent: &Agent, width: usize, styles: &Styles) -> Vec<Rende
 
 fn body(ctx: &Ctx<'_>, id: &str, name: &str, input: &Value, outcome: Option<&Outcome<'_>>, styles: &Styles) -> Vec<RenderedLine> {
     let inner = ctx.width.saturating_sub(GUTTER.width()).max(1);
-    let mut lines = fields(input, inner, styles);
+    let plan = (name == PLAN_TOOL).then(|| input.get(PLAN_KEY).and_then(Value::as_str)).flatten();
+    let mut lines = fields(input, if plan.is_some() { PLAN_KEY } else { "" }, inner, styles);
+    if let Some(plan) = plan {
+        let document = document(plan, inner, ctx.theme, styles.muted);
+        if !lines.is_empty() && !document.is_empty() {
+            lines.push(RenderedLine::blank());
+        }
+        lines.extend(document);
+    }
     let tail = output(ctx, id, name, outcome, inner, styles);
     if !lines.is_empty() && !tail.is_empty() {
         lines.push(RenderedLine::blank());
@@ -168,9 +180,18 @@ pub(super) fn detrail(line: &mut RenderedLine) {
     }
 }
 
-fn fields(input: &Value, width: usize, styles: &Styles) -> Vec<RenderedLine> {
+fn fields(input: &Value, skip: &str, width: usize, styles: &Styles) -> Vec<RenderedLine> {
     let Some(fields) = input.as_object() else { return Vec::new() };
-    fields.iter().flat_map(|(key, value)| field(key, value, width, styles)).collect()
+    fields.iter().filter(|(key, _)| key.as_str() != skip).flat_map(|(key, value)| field(key, value, width, styles)).collect()
+}
+
+fn document(text: &str, width: usize, theme: &Theme, muted: Style) -> Vec<RenderedLine> {
+    let (kept, hidden) = fold_prose(text);
+    let mut lines = prose::render(&crate::markdown::parse(&kept.join("\n")), width, theme);
+    if let Some(hidden) = hidden {
+        lines.push(more(hidden, width, muted));
+    }
+    lines
 }
 
 fn field(key: &str, value: &Value, width: usize, styles: &Styles) -> Vec<RenderedLine> {
@@ -267,6 +288,26 @@ pub(super) fn folded(mut lines: Vec<RenderedLine>, width: usize, muted: Style) -
     lines.truncate(FOLD);
     lines.push(more(hidden, width, muted));
     lines
+}
+
+fn fold_prose(text: &str) -> (Vec<&str>, Option<usize>) {
+    let mut kept = Vec::new();
+    let mut taken = 0usize;
+    let mut hidden = 0usize;
+    for line in text.lines() {
+        let blank = line.trim().is_empty();
+        if taken >= FOLD {
+            if !blank {
+                hidden = hidden.saturating_add(1);
+            }
+            continue;
+        }
+        if !blank {
+            taken = taken.saturating_add(1);
+        }
+        kept.push(line);
+    }
+    (kept, (hidden > 0).then_some(hidden))
 }
 
 fn fold_source<'a>(lines: impl Iterator<Item = &'a str>) -> (Vec<&'a str>, Option<usize>) {
@@ -475,6 +516,40 @@ mod tests {
         let rows: Vec<String> = diff(&hunks, 40, &styles()).iter().map(RenderedLine::text).collect();
         assert_eq!(rows.len(), 2, "one header and one cut line: {rows:?}");
         assert!(rows[1].ends_with('…'), "{:?}", rows[1]);
+    }
+
+    fn plan_rows(text: &str, width: usize) -> Vec<String> {
+        document(text, width, &Theme::default(), styles().muted).iter().map(RenderedLine::text).collect()
+    }
+
+    #[test]
+    fn a_plan_renders_as_a_document_rather_than_as_one_squashed_field() {
+        let rows = plan_rows("# Retune the array\n\n- Raise the coil count\n- Land it\n", 40);
+        assert_eq!(rows.first().map(String::as_str), Some("Retune the array"));
+        assert!(rows.iter().any(|row| row.starts_with("• Raise the coil count")), "{rows:?}");
+        assert!(rows.iter().any(|row| row.starts_with("• Land it")), "{rows:?}");
+    }
+
+    #[test]
+    fn a_plan_longer_than_the_fold_says_how_much_it_is_holding_back() {
+        let text = "a line of the plan\n".repeat(FOLD + 5);
+        let rows = plan_rows(&text, 60);
+        assert_eq!(rows.last().map(String::as_str), Some("… 5 more lines"));
+    }
+
+    #[test]
+    fn the_blank_lines_markdown_needs_between_blocks_do_not_count_against_a_plans_fold() {
+        let text = "a line of the plan\n\n".repeat(FOLD);
+        let (kept, hidden) = fold_prose(&text);
+        assert_eq!(kept.iter().filter(|line| !line.trim().is_empty()).count(), FOLD);
+        assert_eq!(hidden, None, "a plan of exactly FOLD content lines is shown whole");
+    }
+
+    #[test]
+    fn a_folded_plan_counts_the_same_lines_its_digest_does() {
+        let text = "# Retune the array\n\n".to_owned() + &"a line of the plan\n\n".repeat(FOLD + 3);
+        let (_, hidden) = fold_prose(&text);
+        assert_eq!(hidden, Some(4), "the title and FOLD content lines are shown, four content lines are not");
     }
 
     fn rendered(name: &str, detail: &str, status: Status, width: usize) -> Vec<String> {
