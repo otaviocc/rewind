@@ -42,8 +42,7 @@ brew install otaviocc/apps/rewind
 
 It builds from source, so Homebrew pulls in a Rust toolchain as a build dependency.
 
-From crates.io. The crate is `rewind-cli`, because `rewind` was taken, and the binary it
-installs is `rewind`:
+From crates.io. The crate is `rewind-cli` and the binary it installs is `rewind`:
 
 ```
 cargo install rewind-cli --locked
