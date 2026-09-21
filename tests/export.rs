@@ -1,4 +1,4 @@
-//! Exporting a whole session to Markdown: the exit criteria in #23.
+//! Exporting a whole session to Markdown.
 
 #![allow(clippy::expect_used)]
 

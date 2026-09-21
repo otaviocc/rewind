@@ -97,7 +97,7 @@ fn a_custom_title_record_parses_as_the_dedicated_latch_and_a_telemetry_latch_doe
 fn the_new_queue_operation_pr_link_and_file_history_delta_latches_are_known_not_drift() {
     let outcomes = parse_all(&find("11111111-1111-4111-8111-111111111111.jsonl"));
     let known = outcomes.iter().filter(|outcome| matches!(outcome, Ok(Record::Latch(Latch::Known { .. })))).count();
-    assert!(known >= 6, "expected the six generic latches from #29 (3 queue-operation, pr-link, 2 file-history-delta)");
+    assert!(known >= 6, "expected the six generic latches (3 queue-operation, pr-link, 2 file-history-delta)");
 
     let unexpected_failures =
         outcomes.iter().filter(|outcome| matches!(outcome, Err(error) if !matches!(error, ParseError::UnknownType(_)))).count();

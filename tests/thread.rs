@@ -1,4 +1,4 @@
-//! Conversation forest assembly against the fixture tree: the exit criteria in #5.
+//! Conversation forest assembly against the fixture tree.
 
 #![allow(clippy::expect_used)]
 

@@ -1,10 +1,10 @@
 //! Building a corpus shard from the fixture tree: an end-to-end round trip through
 //! `domain::text` extraction and the `domain::cache::shard` format.
 //!
-//! The `~22% of input size` exit criterion needs the real `~/.claude`, which tests must
+//! The `~22% of input size` target needs the real `~/.claude`, which tests must
 //! never read (see `tests/common/mod.rs`). `a_shard_built_from_the_real_corpus_is_roughly_a_fifth_of_its_input_size`
 //! is `#[ignore]`d and only runs by hand, with `REWIND_CORPUS` naming a real directory; the
-//! measured ratio is quoted in the closing comment on #19, and `make check` never touches it.
+//! measured ratio is recorded in that commit's message, and `make check` never touches it.
 
 #![allow(clippy::expect_used)]
 

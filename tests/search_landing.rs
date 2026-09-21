@@ -1,4 +1,4 @@
-//! #110: a hit whose match is inside tool output opens with that call unfolded, so the term
+//! A hit whose match is inside tool output opens with that call unfolded, so the term
 //! the reader searched for is on a line they can see — the whole point of asking for `is:tool`.
 
 #![allow(clippy::expect_used)]

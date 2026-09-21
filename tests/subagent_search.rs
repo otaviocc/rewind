@@ -1,6 +1,6 @@
 //! A subagent transcript is now part of the corpus: a term found nowhere but a subagent
 //! transcript is searchable, and the hit resolves back to the right project, session and
-//! agent — the exit criteria for #84.
+//! agent.
 
 #![allow(clippy::expect_used)]
 

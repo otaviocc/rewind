@@ -1,4 +1,4 @@
-//! Rendering a real fixture session to plain text: the exit criteria in #9.
+//! Rendering a real fixture session to plain text.
 
 #![allow(clippy::expect_used)]
 

@@ -3,7 +3,7 @@
 # every job here failed before running a single step. Verification is local via
 # `make check` until then — see CLAUDE.md.
 #
-# The file is kept, and kept working, because re-enabling it is part of #26:
+# The file is kept, and kept working, so that re-enabling it is one command:
 #
 #     gh workflow enable ci.yml
 #
