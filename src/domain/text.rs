@@ -1,7 +1,7 @@
 //! Metadata-tier text extraction: turn one transcript line, or one `history.jsonl` line,
 //! into zero or more `(field, flags, text)` pairs bound for a corpus shard.
 //!
-//! `scan::entries`/`scan::array_values` only, never `serde_json` — #20 must cold-build the
+//! `scan::entries`/`scan::array_values` only, never `serde_json` — the cache must cold-build the
 //! real corpus in under a second, and the reason `domain::scan` exists at all applies with
 //! full force here. Excluded on purpose: `attachment` (the context injections — nearly as
 //! numerous as `assistant` records and none of it is searched for), `system` (hook chatter),

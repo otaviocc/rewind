@@ -10,7 +10,7 @@
 //!
 //! Every failure mode — bad magic, wrong version, a truncated file, a record pointing
 //! outside the blob, header lengths that disagree with the file length — rejects the whole
-//! shard. #20 treats that uniformly as cold: rebuild.
+//! shard. The cache treats that uniformly as cold: rebuild.
 
 use thiserror::Error;
 

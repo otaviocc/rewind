@@ -406,7 +406,7 @@ mod tests {
         assert_eq!(meta.cumulative_dropped_tokens, Some(824_472));
         assert_eq!(meta.duration_ms, Some(211_043));
         let preserved = meta.preserved_messages.expect("preserved messages");
-        assert_eq!((preserved.uuids.len(), preserved.all_uuids.len()), (2, 3), "which messages survived, for #15");
+        assert_eq!((preserved.uuids.len(), preserved.all_uuids.len()), (2, 3), "which messages survived");
     }
 
     #[test]
