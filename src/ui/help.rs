@@ -29,8 +29,8 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
     (
         "Reading",
         &[
-            ("Enter", "descend · expand the selected tool call · enter a subagent"),
-            ("Esc", "leave a subagent · back out"),
+            ("Enter", "descend · expand the selected tool call · enter a subagent · read a plan"),
+            ("Esc", "leave a subagent · close a plan · back out"),
             ("[ ]", "previous · next message"),
             ("n p N", "next · previous tool call, or step through a locked / filter"),
             ("Space t", "expand one tool call · all of them"),

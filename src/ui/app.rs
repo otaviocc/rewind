@@ -26,7 +26,7 @@ use crate::render::message::{self, Anchor, Position, Transcript};
 use crate::render::{Branches, Ctx as RenderCtx, Expanded, Outputs, Overflow};
 use crate::theme::Theme;
 use crate::ui::input::{Action, CopyTarget, Motion};
-use crate::ui::{OVERLAY_ROWS, Options, columns, diagnostics, help, listing, search as ui_search};
+use crate::ui::{OVERLAY_ROWS, Options, columns, diagnostics, help, listing, plan, search as ui_search};
 
 pub const CHROME_ROWS: u16 = 5;
 pub const DEBOUNCE: Duration = Duration::from_millis(80);
@@ -235,6 +235,8 @@ pub struct App {
     drift: BTreeMap<PathBuf, Diagnostics>,
     diagnostics_open: bool,
     diagnostics_pane: Pane,
+    plan: Option<Box<str>>,
+    plan_pane: Pane,
     help_open: bool,
     help_pane: Pane,
     theme: Theme,
@@ -371,6 +373,8 @@ impl App {
             drift: BTreeMap::new(),
             diagnostics_open: false,
             diagnostics_pane: Pane::default(),
+            plan: None,
+            plan_pane: Pane::default(),
             help_open: false,
             help_pane: Pane::default(),
             cache_root: options.cache_root.clone(),
@@ -874,7 +878,48 @@ impl App {
     }
 
     pub const fn overlay_open(&self) -> bool {
-        self.help_open || self.diagnostics_open
+        self.help_open || self.diagnostics_open || self.plan.is_some()
+    }
+
+    pub fn plan_text(&self) -> Option<&str> {
+        self.plan.as_deref()
+    }
+
+    pub const fn plan_top(&self) -> usize {
+        self.plan_pane.top
+    }
+
+    pub fn plan_lines(&self) -> Vec<RenderedLine> {
+        self.plan
+            .as_deref()
+            .map(|text| plan::lines(text, usize::from(plan::inner(self.overlay_area()).width), &self.theme))
+            .unwrap_or_default()
+    }
+
+    fn selected_plan(&self) -> Option<Box<str>> {
+        let cursor = self.call_cursor?;
+        let id = self.anchors().get(cursor)?.id.clone();
+        let Loadable::Ready(rendered) = &self.conversation else { return None };
+        let (name, input) = rendered.conversation().call_of(&id)?;
+        tool::plan_text(name, input).map(Box::from)
+    }
+
+    fn open_plan(&mut self) -> bool {
+        let Some(text) = self.selected_plan() else { return false };
+        self.plan = Some(text);
+        self.plan_pane = Pane::default();
+        true
+    }
+
+    fn close_plan(&mut self) {
+        self.plan = None;
+        self.plan_pane = Pane::default();
+    }
+
+    fn scroll_plan(&mut self, motion: Motion) {
+        let last = self.plan_lines().len().saturating_sub(1);
+        let height = usize::from(plan::inner(self.overlay_area()).height);
+        self.plan_pane.top = listing::scroll_target(motion, self.plan_pane.top, last, height);
     }
 
     pub const fn help_top(&self) -> usize {
@@ -923,6 +968,10 @@ impl App {
         }
         if self.search_open {
             self.apply_search(action);
+            return;
+        }
+        if self.plan.is_some() {
+            self.apply_plan(action);
             return;
         }
         if self.help_open {
@@ -1019,6 +1068,38 @@ impl App {
             | Action::ToggleExport
             | Action::CycleExportFormat
             | Action::Scroll { .. }
+            | Action::Click { .. }
+            | Action::Drag { .. }
+            | Action::Release => {}
+        }
+    }
+
+    fn apply_plan(&mut self, action: Action) {
+        match action {
+            Action::Quit => self.quit(),
+            Action::Resize(size) => self.area = size,
+            Action::Ascend => self.close_plan(),
+            Action::Move(motion) => self.scroll_plan(motion),
+            Action::Scroll { delta, .. } => self.scroll_plan(Motion::Line(delta)),
+            Action::Focus { .. }
+            | Action::Descend
+            | Action::ToggleFocusMode
+            | Action::NextCall { .. }
+            | Action::NextTurn { .. }
+            | Action::ToggleCall
+            | Action::ToggleAllCalls
+            | Action::CycleBranch
+            | Action::ToggleInjections
+            | Action::ToggleDiagnostics
+            | Action::ToggleSearch
+            | Action::ToggleHelp
+            | Action::ToggleFilter
+            | Action::Rescan
+            | Action::Copy(_)
+            | Action::ToggleExport
+            | Action::CycleExportFormat
+            | Action::Type(_)
+            | Action::Untype
             | Action::Click { .. }
             | Action::Drag { .. }
             | Action::Release => {}
@@ -1484,6 +1565,9 @@ impl App {
             return;
         }
         if self.enter_subagent() {
+            return;
+        }
+        if self.open_plan() {
             return;
         }
         self.toggle_call();
@@ -2279,6 +2363,89 @@ mod tests {
         let conversation = crate::domain::thread::build(&path).expect("a built conversation");
         let _ = dir.keep();
         (conversation, path)
+    }
+
+    fn plan_conversation() -> Conversation {
+        let dir = tempfile::TempDir::new().expect("a temporary directory");
+        let path = dir.path().join("session.jsonl");
+        let human = r#"{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:00Z","origin":{"kind":"human"},"message":{"role":"user","content":"plan the refit"}}"#;
+        let mut plan = String::from("# Retune the array\n\n");
+        for index in 0..60u32 {
+            use std::fmt::Write as _;
+            let _ = writeln!(plan, "- step {index} of the refit\n");
+        }
+        let escaped = plan.replace('\n', "\\n");
+        let call = format!(
+            r#"{{"type":"assistant","uuid":"a0","parentUuid":"u1","sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:01Z","requestId":"q0","message":{{"model":"opus-5","id":"m0","role":"assistant","content":[{{"type":"tool_use","id":"t0","name":"ExitPlanMode","input":{{"plan":"{escaped}","planFilePath":"/Users/fixture/.claude/plans/refit.md"}}}}]}}}}"#
+        );
+        std::fs::write(&path, format!("{human}\n{call}\n")).expect("a written transcript");
+        let conversation = crate::domain::thread::build(&path).expect("a built conversation");
+        let _ = dir.keep();
+        conversation
+    }
+
+    fn on_the_plan_call() -> App {
+        let mut app = landed_on_in("a0", plan_conversation());
+        app.focused = Column::Conversation;
+        app.apply(Action::NextCall { forward: true });
+        app
+    }
+
+    #[test]
+    fn enter_on_a_plan_call_opens_the_plan_window_rather_than_expanding_the_call() {
+        let mut app = on_the_plan_call();
+        let expanded = app.view.expanded.clone();
+        app.apply(Action::Descend);
+
+        assert!(app.plan_text().is_some(), "the plan window did not open");
+        assert!(app.overlay_open(), "the plan window does not count as an overlay, so q would quit");
+        assert_eq!(app.view.expanded, expanded, "the call was expanded as well as opened");
+    }
+
+    #[test]
+    fn the_plan_window_shows_the_whole_plan_rather_than_the_folded_preview() {
+        let mut app = on_the_plan_call();
+        app.apply(Action::Descend);
+
+        let lines = app.plan_lines();
+        assert!(lines.len() > 60, "the window folded the 60-step plan: {} lines", lines.len());
+        assert!(!lines.iter().any(|line| line.text().contains("more lines")), "the window kept the fold tail");
+    }
+
+    #[test]
+    fn escape_closes_the_plan_window_and_leaves_the_conversation_where_it_was() {
+        let mut app = on_the_plan_call();
+        let cursor = app.call_cursor;
+        app.apply(Action::Descend);
+        app.apply(Action::Ascend);
+
+        assert!(app.plan_text().is_none(), "the plan window did not close");
+        assert_eq!(app.call_cursor, cursor, "closing the window moved the call cursor");
+        assert!(app.stack.is_empty(), "the plan pushed a frame it should not have");
+    }
+
+    #[test]
+    fn the_plan_window_scrolls_and_reopens_at_the_top() {
+        let mut app = on_the_plan_call();
+        app.apply(Action::Descend);
+        app.apply(Action::Move(Motion::Line(3)));
+        assert_eq!(app.plan_top(), 3);
+
+        app.apply(Action::Ascend);
+        app.apply(Action::Descend);
+        assert_eq!(app.plan_top(), 0, "the window reopened where it was left");
+    }
+
+    #[test]
+    fn enter_on_a_call_that_is_not_a_plan_still_expands_it() {
+        let mut app = landed_on("a0");
+        app.focused = Column::Conversation;
+        app.apply(Action::NextCall { forward: true });
+        let expanded = app.view.expanded.clone();
+        app.apply(Action::Descend);
+
+        assert!(app.plan_text().is_none(), "a Bash call opened a plan window");
+        assert_ne!(app.view.expanded, expanded, "the call was not expanded");
     }
 
     fn two_call_conversation() -> Conversation {

@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
+use serde_json::Value;
 use thiserror::Error;
 
 use crate::domain::block::{Block, Content, Usage};
@@ -164,6 +165,16 @@ impl Conversation {
 
     pub fn result_of(&self, tool_use_id: &str) -> Option<&Node> {
         self.node(*self.results.get(tool_use_id)?)
+    }
+
+    pub fn call_of(&self, tool_use_id: &str) -> Option<(&str, &Value)> {
+        self.nodes.iter().find_map(|node| match &node.kind {
+            NodeKind::Assistant(turn) => turn.content.iter().find_map(|block| match block {
+                Block::ToolUse { id, name, input } if id.as_str() == tool_use_id => Some((name.as_str(), input)),
+                _ => None,
+            }),
+            NodeKind::User(_) | NodeKind::System(_) | NodeKind::Attachment(_) => None,
+        })
     }
 
     pub fn inline_agent(&self, tool_use_id: &str) -> Option<NodeId> {

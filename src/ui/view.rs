@@ -20,6 +20,7 @@ use crate::ui::diagnostics;
 use crate::ui::empty;
 use crate::ui::export_prompt;
 use crate::ui::help;
+use crate::ui::plan;
 use crate::ui::search;
 
 const TITLE_PREFIX: &str = "rewind";
@@ -204,6 +205,10 @@ fn overlay(area: Rect, buf: &mut Buffer, app: &App) {
         search_overlay(area, buf, app);
         return;
     }
+    if app.plan_text().is_some() {
+        plan_overlay(area, buf, app);
+        return;
+    }
     if app.help_open() {
         help_overlay(area, buf, app);
         return;
@@ -216,6 +221,20 @@ fn overlay(area: Rect, buf: &mut Buffer, app: &App) {
 
     let lines = app.diagnostics_lines();
     let top = app.diagnostics_top();
+    let last = lines.len().min(top.saturating_add(usize::from(inner.height)));
+    for (row_index, index) in (top..last).enumerate() {
+        let Some(line) = lines.get(index) else { continue };
+        let y = inner.y.saturating_add(u16::try_from(row_index).unwrap_or(u16::MAX));
+        painted(Rect { y, height: 1, ..inner }, buf, line);
+    }
+}
+
+fn plan_overlay(area: Rect, buf: &mut Buffer, app: &App) {
+    let outer = plan::outer(Size::new(area.width, area.height));
+    let Some(inner) = overlay_frame(area, outer, buf, app, plan::TITLE) else { return };
+
+    let lines = app.plan_lines();
+    let top = app.plan_top();
     let last = lines.len().min(top.saturating_add(usize::from(inner.height)));
     for (row_index, index) in (top..last).enumerate() {
         let Some(line) = lines.get(index) else { continue };

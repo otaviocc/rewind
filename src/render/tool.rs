@@ -32,8 +32,6 @@ pub(super) const GUTTER_BLANK: &str = "  ┃";
 pub(super) const FOLD: usize = 20;
 const KEY_COLUMN: usize = 14;
 const DIFF_TOOLS: [&str; 2] = ["Edit", "Write"];
-const PLAN_TOOL: &str = "ExitPlanMode";
-const PLAN_KEY: &str = "plan";
 const DIGEST_INDENT: &str = "  └ ";
 
 pub struct Styles {
@@ -105,7 +103,8 @@ pub fn call(
     let expanded = ctx.is_expanded(id);
     let glyph = if expanded { EXPANDED } else { COLLAPSED };
     let inline = AGENT_TOOLS.contains(&name) && conversation.inline_agent(id).is_some();
-    let mark = (agent.is_some_and(Agent::enterable) || inline).then_some(ENTER);
+    let readable = tool::plan_text(name, input).is_some();
+    let mark = (agent.is_some_and(Agent::enterable) || inline || readable).then_some(ENTER);
     let word = label_of(status);
     let outcome_mark = Some((word, if status.is_error() { styles.error } else { styles.ok }));
     let rows = styles.rows();
@@ -143,8 +142,8 @@ pub fn unreached_line(agent: &Agent, width: usize, styles: &Styles) -> Vec<Rende
 
 fn body(ctx: &Ctx<'_>, id: &str, name: &str, input: &Value, outcome: Option<&Outcome<'_>>, styles: &Styles) -> Vec<RenderedLine> {
     let inner = ctx.width.saturating_sub(GUTTER.width()).max(1);
-    let plan = (name == PLAN_TOOL).then(|| input.get(PLAN_KEY).and_then(Value::as_str)).flatten();
-    let mut lines = fields(input, if plan.is_some() { PLAN_KEY } else { "" }, inner, styles);
+    let plan = tool::plan_text(name, input);
+    let mut lines = fields(input, if plan.is_some() { tool::PLAN_KEY } else { "" }, inner, styles);
     if let Some(plan) = plan {
         let document = document(plan, inner, ctx.theme, styles.muted);
         if !lines.is_empty() && !document.is_empty() {

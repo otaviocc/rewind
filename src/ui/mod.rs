@@ -11,6 +11,7 @@ pub mod help;
 pub mod input;
 pub mod listing;
 mod lru;
+pub mod plan;
 pub mod save;
 pub mod search;
 pub mod view;

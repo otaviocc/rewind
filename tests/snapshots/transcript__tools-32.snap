@@ -11,7 +11,7 @@ expression: "rendered(TOOLS, 32)"
 ▎ then writing the new module,
 ▎ then the spec.
 ▎
-▎ ▸ ExitPlanMode
+▎ ▸ ExitPlanMode               ⏎
 ▎   └ Retune the deflector arra…
 ▎ ▸ Edit
 ▎   └ src/engine/deflector.rs ·…

@@ -8,7 +8,7 @@ expression: "rendered(TOOLS, 80)"
 ▎ claude · opus-5
 ▎ Editing the coil table first, then writing the new module, then the spec.
 ▎
-▎ ▸ ExitPlanMode
+▎ ▸ ExitPlanMode                                                               ⏎
 ▎   └ Retune the deflector array · 11 lines
 ▎ ▸ Edit
 ▎   └ src/engine/deflector.rs · 1 hunk

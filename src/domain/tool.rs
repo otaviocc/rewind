@@ -124,7 +124,7 @@ pub fn digest<'a>(name: &str, input: &'a Value, detail: Option<&'a Value>) -> Di
     if name == "TodoWrite" {
         return todos(input);
     }
-    if name == "ExitPlanMode" {
+    if name == PLAN_TOOL {
         return plan(input);
     }
     let primary = keyed(input, primary_key(name)).map(Cow::Borrowed).or_else(|| generic(input));
@@ -194,8 +194,18 @@ fn computed<'a>(name: &str, detail: Option<&'a Value>) -> Option<Cow<'a, str>> {
     }
 }
 
+pub const PLAN_TOOL: &str = "ExitPlanMode";
+pub const PLAN_KEY: &str = "plan";
+
+pub fn plan_text<'a>(name: &str, input: &'a Value) -> Option<&'a str> {
+    if name != PLAN_TOOL {
+        return None;
+    }
+    input.get(PLAN_KEY).and_then(Value::as_str).filter(|text| !text.trim().is_empty())
+}
+
 fn plan(input: &Value) -> Digest<'static> {
-    let Some(text) = input.get("plan").and_then(Value::as_str) else { return Digest::default() };
+    let Some(text) = input.get(PLAN_KEY).and_then(Value::as_str) else { return Digest::default() };
     let mut lines = text.lines().map(str::trim).filter(|line| !line.is_empty());
     let title = lines.next().map(|line| line.trim_start_matches('#').trim().to_owned()).filter(|title| !title.is_empty());
     let count = u64::try_from(lines.count().saturating_add(usize::from(title.is_some()))).unwrap_or(u64::MAX);
