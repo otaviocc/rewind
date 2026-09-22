@@ -219,6 +219,12 @@ fn cap(text: String, limit: usize) -> (String, bool) {
     (text.get(..end).unwrap_or_default().to_owned(), true)
 }
 
+pub(crate) fn unescape(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    unescape_into(raw, &mut out);
+    out
+}
+
 fn unescape_into(raw: &str, out: &mut String) {
     let bytes = raw.as_bytes();
     let mut index = 0_usize;

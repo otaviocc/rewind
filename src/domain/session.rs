@@ -12,6 +12,7 @@ use crate::domain::diagnostics::{Defect, Diagnostics};
 use crate::domain::project;
 use crate::domain::record;
 use crate::domain::scan;
+use crate::domain::title;
 
 #[derive(Debug, Error)]
 pub enum SessionError {
@@ -164,7 +165,7 @@ fn load_session(path: &Path, id: &str, project_dir: &Path) -> Result<Session, Se
                 if is_human_turn(&fields) {
                     human_turns = human_turns.saturating_add(1);
                     if first_human_message.is_none() {
-                        first_human_message = human_message_text(&fields).map(str::to_owned);
+                        first_human_message = human_message_text(&fields).and_then(title::from_prompt);
                     }
                 }
             }
@@ -174,12 +175,12 @@ fn load_session(path: &Path, id: &str, project_dir: &Path) -> Result<Session, Se
                     assistant_pairs.insert((message_id.as_bytes(), request_id.as_bytes()));
                 }
             }
-            Some("custom-title") => latches.custom_title = fields.custom_title.map(str::to_owned),
-            Some("ai-title") => latches.ai_title = fields.ai_title.map(str::to_owned),
-            Some("agent-name") => latches.agent_name = fields.agent_name.map(str::to_owned),
+            Some("custom-title") => latches.custom_title = fields.custom_title.and_then(title::from_latch),
+            Some("ai-title") => latches.ai_title = fields.ai_title.and_then(title::from_latch),
+            Some("agent-name") => latches.agent_name = fields.agent_name.and_then(title::from_latch),
             Some("last-prompt") => {
-                if let Some(prompt) = fields.last_prompt {
-                    latches.last_prompt = Some(prompt.to_owned());
+                if let Some(prompt) = fields.last_prompt.and_then(title::from_prompt) {
+                    latches.last_prompt = Some(prompt);
                 }
             }
             Some("continued-in") => latches.continued_in = fields.continued_in.map(str::to_owned),
@@ -226,7 +227,7 @@ fn human_message_text<'a>(fields: &Fields<'a>) -> Option<&'a str> {
 fn custom_title_file(project_dir: &Path, id: &str) -> Option<String> {
     let text = fs::read_to_string(project_dir.join(id).join("custom-title.json")).ok()?;
     let value: serde_json::Value = serde_json::from_str(&text).ok()?;
-    value.get("customTitle")?.as_str().map(str::to_owned)
+    title::from_latch(value.get("customTitle")?.as_str()?)
 }
 
 fn resolve_title(
@@ -330,6 +331,21 @@ mod tests {
         assert_eq!(session.title_source, TitleSource::FirstMessage);
         assert_eq!(session.records, 1);
         assert_eq!(session.messages, 1);
+    }
+
+    #[test]
+    fn a_session_that_opens_on_a_slash_command_is_titled_by_the_command_and_not_its_envelope() {
+        let project = one_session(
+            "s9",
+            &[
+                r#"{"parentUuid":null,"isSidechain":false,"message":{"role":"user","content":"<command-name>/clear</command-name>\n<command-message>clear</command-message>\n<command-args></command-args>"},"type":"user","origin":{"kind":"human"},"uuid":"u1","timestamp":"2026-01-01T00:00:00Z","sessionId":"s9"}"#,
+            ],
+        );
+
+        let sessions = discover(project.path());
+        let session = sessions.first().expect("one session was discovered");
+        assert_eq!(session.title, "/clear");
+        assert_eq!(session.title_source, TitleSource::FirstMessage);
     }
 
     #[test]

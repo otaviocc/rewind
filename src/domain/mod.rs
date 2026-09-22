@@ -17,4 +17,5 @@ pub mod session;
 pub mod subagent;
 pub mod text;
 pub mod thread;
+pub mod title;
 pub mod tool;
