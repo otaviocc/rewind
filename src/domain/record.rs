@@ -379,7 +379,7 @@ mod tests {
 
     #[test]
     fn a_known_but_unmodelled_latch_never_becomes_drift() {
-        for kind in ["frame-link", "artifact-autoreact-ledger", "artifact-comment-monitor"] {
+        for kind in ["frame-link", "bridge-session", "artifact-autoreact-ledger", "artifact-comment-monitor"] {
             let line = format!(r#"{{"type":"{kind}","sessionId":"s1"}}"#);
             let record = parse(line.as_bytes()).unwrap_or_else(|error| panic!("{kind} must parse as a known latch: {error}"));
             assert!(matches!(record, Record::Latch(Latch::Known { .. })), "{kind} did not parse as a known latch");

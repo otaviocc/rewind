@@ -6,7 +6,7 @@ use serde::Deserialize;
 
 use crate::domain::record::lenient_timestamp;
 
-pub const KNOWN_LATCHES: [&str; 12] = [
+pub const KNOWN_LATCHES: [&str; 13] = [
     "mode",
     "permission-mode",
     "atis-latch",
@@ -17,6 +17,7 @@ pub const KNOWN_LATCHES: [&str; 12] = [
     "fork-context-ref",
     "file-history-snapshot",
     "file-history-delta",
+    "bridge-session",
     "artifact-autoreact-ledger",
     "artifact-comment-monitor",
 ];
@@ -193,5 +194,17 @@ mod tests {
     #[test]
     fn an_unrecognized_kind_is_not_a_known_latch() {
         assert!(!is_known_latch("telemetry-latch"));
+    }
+
+    #[test]
+    fn a_bridge_session_kind_is_a_known_latch() {
+        assert!(is_known_latch("bridge-session"));
+        let latch = parse_generic(
+            "bridge-session",
+            br#"{"type":"bridge-session","sessionId":"s1","bridgeSessionId":"cse_1","lastSequenceNum":0,"ownerAccountUuid":"a1","ownerOrganizationUuid":"o1"}"#,
+        )
+        .expect("a generic latch");
+        let Latch::Known { session_id, .. } = latch else { panic!("expected a known latch") };
+        assert_eq!(session_id.as_deref(), Some("s1"));
     }
 }
