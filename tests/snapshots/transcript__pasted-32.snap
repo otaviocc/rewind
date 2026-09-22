@@ -1,0 +1,49 @@
+---
+source: tests/transcript.rs
+expression: "rendered(PASTED, 32)"
+---
+▎ you
+▎ the emitter schedule needs a
+▎ second look
+▎
+▎ https://holodeck.example/deck-
+▎ 9/emitters
+▎
+▎ under the milestone
+▎
+▎ HOLO-1701
+▎
+▎ keep the deck number in the
+▎ title.
+
+▎ claude · opus-5
+▎ Reading both links now.
+
+▎ you
+▎ and here is what the console
+▎ printed
+▎
+▎ Deck 9 emitter log
+▎
+▎ • emitter 01 nominal
+▎ • emitter 02 nominal
+▎ • emitter 03 drifting 0.4%
+▎ • emitter 04 nominal
+▎ • emitter 05 nominal
+▎ • emitter 06 offline since
+▎   14:02
+▎ • emitter 07 nominal
+▎ • emitter 08 nominal
+▎
+▎ plasma flow 0.93 nominal,
+▎ interlock armed, last reseat
+▎ 2026-01-01
+▎
+▎ ┃ the drift on 03 tracks the
+▎ ┃ reseat, not the flow
+▎
+▎ which emitter do I pull first?
+
+▎ claude · opus-5
+▎ Emitter 06 first: it is the
+▎ one that is down.

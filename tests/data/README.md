@@ -49,7 +49,7 @@ mirroring the ratio in a real map.
 
 | Directory | Real path | What it is for |
 | --- | --- | --- |
-| `-Users-fixture-Developer-holodeck` | `/Users/fixture/Developer/holodeck` | the nine interesting sessions |
+| `-Users-fixture-Developer-holodeck` | `/Users/fixture/Developer/holodeck` | the ten interesting sessions |
 | `-Users-fixture-Developer-warp-core` | three colliding keys | **ambiguity.** `warp-core`, `warp.core` and `warp core` all encode to this one name. Only the `cwd` on a transcript record says which owns it |
 | `-Users-fixture--tricorder` | `/Users/fixture/.tricorder` | a leading dot in the path |
 | `-Users-fixture-Music-Red-Alert---Live-(2019)` | `/Users/fixture/Music/Red Alert - Live (2019)` | ` - ` collapsing to `---`, and parentheses surviving verbatim |
@@ -313,6 +313,31 @@ merging into one block or piling up blank lines between them:
   reason args are never discarded even though most commands leave them blank.
 - Its result is 26 lines, so it exercises the same fold-at-20 the tool surface's overflowed
   output does.
+
+### `ffffffff-….jsonl` — pasted content
+
+The `<pasted_content>` wrapper Claude Code puts around text pasted into a prompt, **observed**
+against a real store on 2026-09-22 — 138 blocks in it, and every one of them closed with
+`</pasted_content id="…">` rather than the well-formed `</pasted_content>`. The id in the
+closing tag is what makes a naive close-tag search fail, and it is why the fixture never
+spells the closing tag the obvious way. The wrapper comes off and the text stays, so nothing
+in this session may render a `<` at all.
+
+Two turns, and the difference between them is the point:
+
+- The first is `content` as a **string**, with two pastes **sharing one id** — `4f2a` twice,
+  which is what a real prompt does, since the id is per paste rather than per block. Each sits
+  on a line of its own with a blank line either side, so taking the wrapper off has to leave
+  those blank lines behind: the paste is a paragraph, and gluing it to the prose around it
+  would be a different message.
+- The second is `content` as **blocks**, carrying one paste whose body is Markdown — a
+  heading, a list and a quote. It renders as Markdown, because a human turn's prose does, and
+  the wrapper coming off does not make the text inside it a quotation. `emitter 01  nominal`
+  therefore reads as `emitter 01 nominal`: the double space is Markdown's to collapse, not
+  this fixture's to keep, and it is in the file so the snapshot records it.
+
+The timestamps are `2026-01-02`, older than every other session in `holodeck`, so adding this
+file cannot move the project's mtime or the ordering that depends on it.
 
 ### `aaaaaaaa-….jsonl` — a severed cycle
 

@@ -8,6 +8,7 @@ use ratatui::style::Style;
 
 use crate::domain::block::{Block, Content, ImageSource};
 use crate::domain::command::Command as SlashCommand;
+use crate::domain::paste;
 use crate::domain::record::CompactMetadata;
 use crate::domain::thread::{AssistantTurn, Conversation, Node, NodeId, NodeKind};
 use crate::render::line::{RenderedLine, StyledSpan, truncate};
@@ -178,7 +179,7 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
                     let mut lines = Vec::from_iter(seam);
                     lines.push(header(human, None, inner, ctx.theme));
                     let mut anchors = Vec::new();
-                    content(conversation, ctx, &record.message.content, &mut lines, &mut anchors);
+                    content(conversation, ctx, true, &record.message.content, &mut lines, &mut anchors);
                     let spans = vec![Span { node: id, line: 0 }];
                     groups.push(Group {
                         rail: Rail::Human,
@@ -194,7 +195,7 @@ pub fn transcript(conversation: &Conversation, ctx: &Ctx<'_>) -> Transcript {
                     let mut lines = Vec::from_iter(seam);
                     lines.push(header(SUMMARY_LABEL, None, inner, ctx.theme));
                     let mut anchors = Vec::new();
-                    content(conversation, ctx, &record.message.content, &mut lines, &mut anchors);
+                    content(conversation, ctx, false, &record.message.content, &mut lines, &mut anchors);
                     let spans = vec![Span { node: id, line: 0 }];
                     groups.push(Group {
                         rail: Rail::Seam,
@@ -248,7 +249,7 @@ fn push_assistant(
     let mut run = if merging && seam.is_none() { groups.last().and_then(|group| group.run.clone()) } else { None };
     let mut body = Vec::new();
     let mut anchors = Vec::new();
-    blocks(conversation, ctx, &turn.content, &mut body, &mut anchors, &mut run);
+    blocks(conversation, ctx, false, &turn.content, &mut body, &mut anchors, &mut run);
     if body.is_empty() {
         return;
     }
@@ -457,19 +458,26 @@ fn header(label: &str, detail: Option<&str>, width: usize, theme: &Theme) -> Ren
 fn content(
     conversation: &Conversation,
     ctx: &Ctx<'_>,
+    pasted: bool,
     content: &Content,
     lines: &mut Vec<RenderedLine>,
     anchors: &mut Vec<Anchor>,
 ) {
     match content {
-        Content::Text(text) => lines.extend(markdown(text, ctx.width, ctx.theme)),
-        Content::Blocks(blocks_of) => blocks(conversation, ctx, blocks_of, lines, anchors, &mut None),
+        Content::Text(text) => lines.extend(prose_of(text, pasted, ctx)),
+        Content::Blocks(blocks_of) => blocks(conversation, ctx, pasted, blocks_of, lines, anchors, &mut None),
     }
+}
+
+fn prose_of(text: &str, pasted: bool, ctx: &Ctx<'_>) -> Vec<RenderedLine> {
+    let text = if pasted { paste::unwrapped(text) } else { std::borrow::Cow::Borrowed(text) };
+    markdown(&text, ctx.width, ctx.theme)
 }
 
 fn blocks(
     conversation: &Conversation,
     ctx: &Ctx<'_>,
+    pasted: bool,
     blocks: &[Block],
     lines: &mut Vec<RenderedLine>,
     anchors: &mut Vec<Anchor>,
@@ -479,7 +487,7 @@ fn blocks(
     for block in blocks {
         match block {
             Block::Text { text } => {
-                let prose = markdown(text, ctx.width, ctx.theme);
+                let prose = prose_of(text, pasted, ctx);
                 if !prose.is_empty() {
                     *run = None;
                 }
@@ -684,6 +692,10 @@ mod tests {
     const PARAGRAPHS: &str = r#"[{"type":"text","text":"one\n\ntwo"}]"#;
 
     const HUMAN: &str = r#"{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:00Z","origin":{"kind":"human"},"message":{"role":"user","content":"read the grid scanner back to me"}}"#;
+
+    const PASTING: &str = r#"{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:00Z","origin":{"kind":"human"},"message":{"role":"user","content":"look at\n\n<pasted_content id=\"7a1f\">\nthe interlock falls back\n</pasted_content id=\"7a1f\">\n\nand say why"}}"#;
+
+    const QUOTING: &str = r#"{"type":"assistant","uuid":"a1","parentUuid":null,"sessionId":"s","isSidechain":false,"timestamp":"2026-01-01T00:00:01Z","message":{"role":"assistant","id":"m1","model":"claude-opus-5","content":[{"type":"text","text":"a prompt carries a <pasted_content id=\"7a1f\">block</pasted_content id=\"7a1f\"> of its own"}]}}"#;
 
     fn assistant(uuid: &str, parent: &str, content: &str) -> String {
         format!(
@@ -1239,6 +1251,28 @@ mod tests {
     fn an_image_with_no_media_type_drops_that_segment_rather_than_leaving_a_gap() {
         assert_eq!(image_summary(&ImageSource { media_type: None, bytes: 400 }), "[image · 300 B]");
         assert_eq!(image_summary(&ImageSource { media_type: Some("image/jpeg".to_owned()), bytes: 0 }), "[image · jpeg]");
+    }
+
+    #[test]
+    fn a_prompt_that_pasted_text_into_it_shows_the_text_and_not_the_wrapper() {
+        let lines = rendered(&[PASTING]);
+        assert!(lines.iter().all(|line| !line.contains("pasted_content")), "{lines:?}");
+        assert!(lines.iter().any(|line| line.contains("the interlock falls back")), "{lines:?}");
+        assert!(lines.iter().any(|line| line.contains("and say why")), "{lines:?}");
+    }
+
+    #[test]
+    fn a_paste_on_a_line_of_its_own_stays_its_own_paragraph() {
+        let lines = rendered(&[PASTING]);
+        let at = |needle: &str| lines.iter().position(|line| line.contains(needle)).expect("the line");
+        assert_eq!(at("the interlock falls back").saturating_sub(at("look at")), 2, "{lines:?}");
+        assert_eq!(at("and say why").saturating_sub(at("the interlock falls back")), 2, "{lines:?}");
+    }
+
+    #[test]
+    fn the_wrapper_in_an_assistant_reply_is_left_alone() {
+        let lines = rendered(&[QUOTING]);
+        assert!(lines.iter().any(|line| line.contains("pasted_content")), "{lines:?}");
     }
 
     #[test]

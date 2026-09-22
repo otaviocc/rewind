@@ -27,6 +27,7 @@ const IMAGES: &str = "33333333-3333-4333-8333-333333333333";
 const MARKDOWN: &str = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const TOOLS: &str = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 const COMMANDS: &str = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+const PASTED: &str = "ffffffff-ffff-4fff-8fff-ffffffffffff";
 const COMPACTED: &str = "22222222-2222-4222-8222-222222222222";
 const SEVERED: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const FORKED: &str = "33333333-3333-4333-8333-333333333333";
@@ -275,6 +276,25 @@ fn two_consecutive_local_commands_get_exactly_one_blank_line_between_them() {
     let is_rail_blank = |line: &str| line.trim_end() == "▎";
     assert_eq!(between.iter().filter(|line| is_rail_blank(line)).count(), 1, "{between:?}");
     assert!(between.iter().all(|line| line.contains("Using custom theme") || is_rail_blank(line)), "{between:?}");
+}
+
+#[test]
+fn a_prompt_that_pasted_text_into_it_renders_as_the_text_and_not_the_wrapper() {
+    insta::assert_snapshot!("pasted-80", rendered(PASTED, 80));
+}
+
+#[test]
+fn a_prompt_that_pasted_text_into_it_stays_readable_at_a_narrow_column() {
+    insta::assert_snapshot!("pasted-32", rendered(PASTED, 32));
+}
+
+#[test]
+fn no_pasted_content_tag_reaches_the_transcript() {
+    let text = rendered(PASTED, 80);
+    assert!(!text.contains("pasted_content"), "the wrapper leaked into the transcript:\n{text}");
+    assert!(text.contains("https://holodeck.example/deck-9/emitters"), "{text}");
+    assert!(text.contains("HOLO-1701"), "{text}");
+    assert!(text.contains("emitter 06 offline since 14:02"), "{text}");
 }
 
 #[test]
